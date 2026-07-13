@@ -1,0 +1,24 @@
+Qubit Native State Engine v0.1.0 validation results
+Date: 2026-07-13
+
+Native tests:
+100% tests passed, 0 tests failed out of 1
+
+Sanitizers:
+AddressSanitizer + UndefinedBehaviorSanitizer passed
+
+Differential validation:
+120 circuits x 120 random gates passed against independent NumPy statevector reference
+
+Structured-state benchmark:
+10,000 independent qubits    components=10000  engine-memory=1.03 MiB
+50-qubit exact GHZ           components=1      engine-memory=5.60 KiB
+100 independent Bell pairs   components=100    engine-memory=25.88 KiB
+
+GHZ memory comparison:
+20 qubits: QSA 2.32 KiB vs dense complex128 16.00 MiB
+30 qubits: QSA 3.41 KiB vs dense complex128 16.00 GiB
+40 qubits: QSA 4.51 KiB vs dense complex128 16.00 TiB
+50 qubits: QSA 5.60 KiB vs dense complex128 16.00 PiB
+
+Boundary: these results apply to mathematically structured states. Arbitrary highly entangled states can still require exponential storage.
