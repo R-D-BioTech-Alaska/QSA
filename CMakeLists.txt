@@ -41,10 +41,11 @@ endif()
 
 
 include(GNUInstallDirs)
-install(TARGETS qstate qstate_core
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+install(TARGETS qstate
+    LIBRARY DESTINATION qsa
+    RUNTIME DESTINATION qsa
+)
+install(TARGETS qstate_core
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(FILES python/qubit_native.py DESTINATION ${CMAKE_INSTALL_DATADIR}/qubit/python)

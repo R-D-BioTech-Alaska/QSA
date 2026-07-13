@@ -1,0 +1,44 @@
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "qubit-state-algebra"
+version = "0.1.0"
+description = "Qubit State Algebra: a native adaptive qubit-state engine for Qubit and QELM"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+  { name = "R&D BioTech Alaska" }
+]
+keywords = ["quantum", "qubit", "qelm", "simulation", "state-engine"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Topic :: Scientific/Engineering :: Physics"
+]
+
+[project.urls]
+Repository = "https://github.com/R-D-BioTech-Alaska/QSA"
+
+[tool.scikit-build]
+cmake.source-dir = "."
+cmake.build-type = "Release"
+wheel.packages = ["python/qsa"]
+wheel.install-dir = ""
+sdist.include = [
+  "CMakeLists.txt",
+  "include/**",
+  "src/**",
+  "python/qsa/**",
+  "README.md",
+  "LICENSE",
+  "VERSION"
+]
