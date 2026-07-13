@@ -1,0 +1,58 @@
+name: QSA Build and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpp-validation:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  differential-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install validation dependency
+        run: python -m pip install numpy
+      - name: Build native library
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+      - name: Random-circuit differential test
+        env:
+          QSA_NATIVE_LIB: ${{ github.workspace }}/build/libqstate.so
+        run: PYTHONPATH=python python tests/differential_numpy.py
+
+  python-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install QSA package
+        run: python -m pip install .
+      - name: Import and Bell-state test
+        run: python -c "from qsa import QubitRegister; s=QubitRegister(2); s.h(0).cnot(0,1); assert abs(abs(s.amplitude(0))-2**-0.5)<1e-12; assert abs(abs(s.amplitude(3))-2**-0.5)<1e-12; print(s.describe()); s.close()"
