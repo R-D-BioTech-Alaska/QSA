@@ -3,7 +3,6 @@
 This does not claim universal superiority. It demonstrates the states the QSA
 representation is specifically designed not to inflate into one global array.
 """
-
 from __future__ import annotations
 
 import math
@@ -20,7 +19,6 @@ try:
 except ImportError:
     np = None
 
-
 def human_bytes(value: int) -> str:
     units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB")
     number = float(value)
@@ -30,7 +28,6 @@ def human_bytes(value: int) -> str:
         unit += 1
     return f"{number:,.2f} {units[unit]}"
 
-
 def build_ghz(qubits: int) -> tuple[QubitRegister, float]:
     start = time.perf_counter()
     state = QubitRegister(qubits)
@@ -38,7 +35,6 @@ def build_ghz(qubits: int) -> tuple[QubitRegister, float]:
     for target in range(1, qubits):
         state.cnot(0, target)
     return state, (time.perf_counter() - start) * 1_000.0
-
 
 print("Qubit State Algebra vs. mandatory dense complex128 allocation")
 print("-" * 79)
