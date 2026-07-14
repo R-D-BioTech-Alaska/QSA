@@ -9,6 +9,8 @@
 
 # Qubit State Algebra
 
+[![DOI](https://img.shields.io/badge/DOI-10.13140%2FRG.2.2.19653.20965-blue)](https://doi.org/10.13140/RG.2.2.19653.20965)
+
 ### A from-scratch, qubit-native mathematical runtime for ordinary computers
 
 **QSA builds, evolves, compresses, measures, and transports quantum states without relying on NumPy as its underlying state engine.**
