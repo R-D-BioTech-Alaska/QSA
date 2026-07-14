@@ -1,5 +1,4 @@
 #include "qubit/qstate.hpp"
-
 #include <chrono>
 #include <iomanip>
 #include <iostream>
