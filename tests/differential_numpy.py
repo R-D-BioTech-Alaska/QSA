@@ -12,7 +12,6 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from qubit_native import QubitRegister
 
-
 I = np.eye(2, dtype=np.complex128)
 X = np.array([[0, 1], [1, 0]], dtype=np.complex128)
 Y = np.array([[0, -1j], [1j, 0]], dtype=np.complex128)
@@ -42,10 +41,8 @@ def ry(theta: float) -> np.ndarray:
     s = math.sin(theta / 2)
     return np.array([[c, -s], [s, c]], dtype=np.complex128)
 
-
 def rz(theta: float) -> np.ndarray:
     return np.diag([np.exp(-1j * theta / 2), np.exp(1j * theta / 2)]).astype(np.complex128)
-
 
 def apply_one(state: np.ndarray, qubit: int, gate: np.ndarray) -> None:
     mask = 1 << qubit
@@ -57,7 +54,6 @@ def apply_one(state: np.ndarray, qubit: int, gate: np.ndarray) -> None:
         state[base] = gate[0, 0] * a0 + gate[0, 1] * a1
         state[one] = gate[1, 0] * a0 + gate[1, 1] * a1
 
-
 def apply_two(state: np.ndarray, first: int, second: int, gate: np.ndarray) -> None:
     first_mask = 1 << first
     second_mask = 1 << second
@@ -67,7 +63,6 @@ def apply_two(state: np.ndarray, first: int, second: int, gate: np.ndarray) -> N
         indices = [base, base | second_mask, base | first_mask, base | first_mask | second_mask]
         state[indices] = gate @ state[indices]
 
-
 def compare(reference: np.ndarray, engine: QubitRegister, label: str) -> None:
     candidate = np.array([engine.amplitude(i) for i in range(len(reference))], dtype=np.complex128)
     overlap = np.vdot(reference, candidate)
@@ -75,7 +70,6 @@ def compare(reference: np.ndarray, engine: QubitRegister, label: str) -> None:
     if not math.isclose(float(fidelity), 1.0, rel_tol=0.0, abs_tol=2e-10):
         difference = np.max(np.abs(reference - candidate))
         raise AssertionError(f"{label}: fidelity={fidelity}, raw max difference={difference}")
-
 
 def run(seed: int = 6142026, circuits: int = 120, depth: int = 120) -> None:
     rng = random.Random(seed)
@@ -135,6 +129,18 @@ def run(seed: int = 6142026, circuits: int = 120, depth: int = 120) -> None:
 
     print(f"Differential validation passed: {circuits} circuits x {depth} random gates.")
 
-
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+
+        if sys.stdin.isatty():
+            input("\nValidation failed. Press Enter to close...")
+
+        raise SystemExit(1)
+    else:
+        if sys.platform == "win32" and sys.stdin.isatty():
+            input("\nValidation complete. Press Enter to close...")
