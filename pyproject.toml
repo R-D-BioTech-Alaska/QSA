@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "qubit-state-algebra"
-version = "0.1.0"
+version = "0.1.6"
 description = "Qubit State Algebra: a native adaptive qubit-state engine for Qubit and QELM"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -27,18 +27,44 @@ classifiers = [
 
 [project.urls]
 Repository = "https://github.com/R-D-BioTech-Alaska/QSA"
+Documentation = "https://github.com/R-D-BioTech-Alaska/QSA/tree/main/docs"
+Issues = "https://github.com/R-D-BioTech-Alaska/QSA/issues"
+Changelog = "https://github.com/R-D-BioTech-Alaska/QSA/blob/main/CHANGELOG.md"
+DOI = "https://doi.org/10.13140/RG.2.2.19653.20965"
+
+[project.optional-dependencies]
+validation = ["numpy>=1.24"]
 
 [tool.scikit-build]
 cmake.source-dir = "."
 cmake.build-type = "Release"
-wheel.packages = ["python/qsa"]
+wheel.packages = ["python/qsa", "python/qubit_native"]
 wheel.install-dir = ""
 sdist.include = [
   "CMakeLists.txt",
+  "cmake/**",
   "include/**",
   "src/**",
   "python/qsa/**",
+  "python/qubit_native/**",
+  "tests/**",
+  "benchmarks/**",
+  "examples/**",
+  "docs/**",
+  "compatibility/**",
+  "tools/**",
   "README.md",
+  "CHANGELOG.md",
+  "CONTRIBUTING.md",
+  "SECURITY.md",
+  "CITATION.cff",
   "LICENSE",
   "VERSION"
 ]
+
+[tool.scikit-build.cmake.define]
+QSTATE_BUILD_TESTS = "OFF"
+QSTATE_BUILD_EXAMPLES = "OFF"
+QSTATE_BUILD_BENCHMARKS = "OFF"
+QSTATE_BUILD_PYTHON_TESTS = "OFF"
+QSTATE_INSTALL_DEVELOPMENT = "OFF"
