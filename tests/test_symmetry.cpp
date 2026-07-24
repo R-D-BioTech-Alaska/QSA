@@ -1,5 +1,6 @@
 #include "qubit/qsymmetry.hpp"
 
+#include <bit>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
