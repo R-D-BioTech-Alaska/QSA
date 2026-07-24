@@ -136,6 +136,14 @@ void GroverSearch::iterate(std::uint64_t count) {
         }
     }
 
+    const long double rotation_norm = std::hypot(result_cos, result_sin);
+    if (!std::isfinite(rotation_norm) ||
+        rotation_norm <= std::numeric_limits<long double>::min()) {
+        throw QStateError("Grover rotation normalization failed");
+    }
+    result_cos /= rotation_norm;
+    result_sin /= rotation_norm;
+
     const double sqrt_marked = std::sqrt(static_cast<double>(marked_count_));
     const double sqrt_unmarked = std::sqrt(static_cast<double>(unmarked_count()));
     const QComplex marked_coefficient = marked_amplitude_ * sqrt_marked;
