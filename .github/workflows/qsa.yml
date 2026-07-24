@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cpp-validation:
     strategy:
@@ -13,46 +20,120 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: >-
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DQSTATE_BUILD_EXAMPLES=OFF
+          -DQSTATE_BUILD_BENCHMARKS=OFF
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install CMake package
+        if: matrix.os == 'ubuntu-latest'
+        run: cmake --install build --config Release --prefix install
+      - name: Build independent C and C++ consumers
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cmake -S tests/consumer -B consumer-build -DCMAKE_PREFIX_PATH="${{ github.workspace }}/install"
+          cmake --build consumer-build --parallel
+          ./consumer-build/qsa_consumer_cpp
+          LD_LIBRARY_PATH="${{ github.workspace }}/install/qsa:${LD_LIBRARY_PATH:-}" ./consumer-build/qsa_consumer_c
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure ASan and UBSan
+        env:
+          CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer
+          LDFLAGS: -fsanitize=address,undefined
+        run: >-
+          cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug
+          -DQSTATE_BUILD_EXAMPLES=OFF
+          -DQSTATE_BUILD_BENCHMARKS=OFF
+          -DQSTATE_BUILD_PYTHON_TESTS=OFF
+          -DQSTATE_ENABLE_IPO=OFF
+      - name: Build
+        run: cmake --build build-sanitize --parallel
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build-sanitize --output-on-failure
 
   differential-validation:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install validation dependency
-        run: python -m pip install numpy
+        run: python -m pip install --upgrade pip numpy
       - name: Build native library
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DQSTATE_BUILD_TESTS=OFF -DQSTATE_BUILD_EXAMPLES=OFF -DQSTATE_BUILD_BENCHMARKS=OFF
           cmake --build build --parallel
-      - name: Random-circuit differential test
+      - name: Random-circuit differential tests
         env:
           QSA_NATIVE_LIB: ${{ github.workspace }}/build/libqstate.so
-        run: PYTHONPATH=python python tests/differential_numpy.py
+          PYTHONPATH: python
+        run: |
+          python tests/differential_numpy.py
+          python tests/differential_grover.py
+          python tests/differential_symmetry.py
 
   python-package:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.9", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install QSA package
-        run: python -m pip install .
-      - name: Import and Bell-state test
-        run: python -c "from qsa import QubitRegister; s=QubitRegister(2); s.h(0).cnot(0,1); assert abs(abs(s.amplitude(0))-2**-0.5)<1e-12; assert abs(abs(s.amplitude(3))-2**-0.5)<1e-12; print(s.describe()); s.close()"
+        run: python -m pip install --upgrade pip .
+      - name: Import and compatibility test
+        run: >-
+          python -c "from qsa import QubitRegister, SymmetryState;
+          from qubit_native import QubitRegister as Legacy, SymmetryState as LegacySymmetry;
+          assert Legacy is QubitRegister and LegacySymmetry is SymmetryState;
+          s=QubitRegister(2); s.apply_batch([('h',0),('cnot',0,1)]);
+          assert abs(abs(s.amplitude(0))-2**-0.5)<1e-12;
+          assert s.qubit_count==2 and s.qubit_count()==2;
+          p=s.encode_qsc(); s.close(); r=QubitRegister.decode_qsc(p);
+          assert abs(abs(r.amplitude(3))-2**-0.5)<1e-12; r.close();
+          y=SymmetryState.hamming_weight(8); assert y.class_count==9; y.close()"
+
+  package-artifacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+      - name: Install wheel and smoke test
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          python -c "from qsa import QubitRegister, GroverSearch, SymmetryState; q=QubitRegister(2); q.h(0).cnot(0,1); assert q.validate(); q.close(); g=GroverSearch(12,[7]); g.run_optimal(); assert g.success_probability>0.99; g.close(); s=SymmetryState.hamming_weight(32); assert s.class_count==33; s.close()"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-python-distributions
+          path: dist/*
