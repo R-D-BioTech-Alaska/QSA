@@ -1,7 +1,6 @@
 #pragma once
 
 #include "qubit/qcomplex.hpp"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +47,12 @@ struct QMatrix4 {
     }
 };
 
+struct QDiagonalPhase {
+    QubitId qubit{0};
+    QComplex zero{1.0, 0.0};
+    QComplex one{1.0, 0.0};
+};
+
 namespace gates {
 [[nodiscard]] QMatrix2 identity();
 [[nodiscard]] QMatrix2 x();
@@ -64,10 +69,8 @@ namespace gates {
 [[nodiscard]] QMatrix4 cnot();
 [[nodiscard]] QMatrix4 cz();
 [[nodiscard]] QMatrix4 swap();
-}  // namespace gates
+} 
 
-// A pure, unentangled qubit is represented geometrically rather than as a
-// two-element generic array.  x^2 + y^2 + z^2 == 1 within tolerance.
 struct BlochCell {
     double x{0.0};
     double y{0.0};
@@ -91,6 +94,12 @@ struct BlochCell {
 };
 
 enum class StorageMode : std::uint8_t {
+    Sparse = 1,
+    Dense = 2,
+};
+
+enum class ComponentKind : std::uint8_t {
+    Cell = 0,
     Sparse = 1,
     Dense = 2,
 };
@@ -133,6 +142,14 @@ public:
         const QStateConfig& config,
         bool renormalize = true);
 
+    void apply_x(std::size_t bit_position);
+    void apply_y(std::size_t bit_position);
+    void apply_z(std::size_t bit_position);
+    void apply_phase(std::size_t bit_position, QComplex phase_zero, QComplex phase_one);
+    void apply_cnot(std::size_t control_bit, std::size_t target_bit);
+    void apply_cz(std::size_t first_bit, std::size_t second_bit);
+    void apply_swap(std::size_t first_bit, std::size_t second_bit);
+
 private:
     BasisIndex dimension_{0};
     StorageMode mode_{StorageMode::Sparse};
@@ -144,7 +161,15 @@ private:
         std::vector<SparseEntry> entries,
         const QStateConfig& config,
         bool normalize_values);
+    void assign_sorted_entries(
+        BasisIndex dimension,
+        std::vector<SparseEntry> entries,
+        const QStateConfig& config,
+        bool normalize_values);
     void rebalance(const QStateConfig& config);
+    void sort_sparse();
+
+    friend class QRegister;
 };
 
 struct StateComponent {
@@ -161,6 +186,9 @@ class QStateCodec;
 class QRegister {
 public:
     explicit QRegister(std::size_t qubit_count, QStateConfig config = {});
+    [[nodiscard]] static QRegister from_amplitudes(
+        std::vector<QComplex> amplitudes,
+        QStateConfig config = {});
 
     [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
     [[nodiscard]] std::size_t component_count() const noexcept { return components_.size(); }
@@ -178,20 +206,26 @@ public:
     void apply_ry(QubitId qubit, double theta);
     void apply_rz(QubitId qubit, double theta);
     void apply_single(QubitId qubit, const QMatrix2& matrix);
+    void apply_diagonal(std::span<const QDiagonalPhase> phases);
 
     void apply_cnot(QubitId control, QubitId target);
     void apply_cz(QubitId first, QubitId second);
     void apply_swap(QubitId first, QubitId second);
     void apply_two(QubitId first, QubitId second, const QMatrix4& matrix);
 
-    // Pure-state quantum trajectory noise.  Repeated trajectories reproduce
-    // the corresponding mixed channel without storing a 4^n density matrix.
+    void apply_grover_oracle(std::span<const BasisIndex> marked_indices);
+    void apply_grover_diffusion();
+    void apply_grover_iterations(
+        std::span<const BasisIndex> marked_indices,
+        std::uint64_t iteration_count = 1);
+
     void apply_bit_flip_trajectory(QubitId qubit, double probability, double sample);
     void apply_phase_flip_trajectory(QubitId qubit, double probability, double sample);
     void apply_depolarizing_trajectory(QubitId qubit, double probability, double sample);
     void apply_amplitude_damping_trajectory(QubitId qubit, double gamma, double sample);
 
     [[nodiscard]] double probability_one(QubitId qubit) const;
+    [[nodiscard]] std::vector<double> probabilities_one() const;
     [[nodiscard]] int measure(QubitId qubit, double sample);
     [[nodiscard]] std::vector<int> measure_all(std::uint64_t seed);
 
@@ -201,6 +235,7 @@ public:
 
     [[nodiscard]] std::size_t component_size(QubitId qubit) const;
     [[nodiscard]] StorageMode component_storage_mode(QubitId qubit) const;
+    [[nodiscard]] ComponentKind component_kind(QubitId qubit) const;
     [[nodiscard]] std::size_t component_nonzero_count(QubitId qubit) const;
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
     [[nodiscard]] std::string describe() const;
@@ -213,19 +248,29 @@ private:
     std::size_t qubit_count_{0};
     QStateConfig config_{};
     std::vector<StateComponent> components_{};
+    std::vector<std::uint32_t> component_order_{};
+    std::uint64_t next_component_order_{0};
     std::vector<std::size_t> qubit_component_{};
 
     void validate_qubit(QubitId qubit) const;
     void reindex_components();
+    [[nodiscard]] std::vector<std::size_t> ordered_component_indices() const;
+    void renumber_component_order();
+    [[nodiscard]] std::size_t append_component(StateComponent component);
+    void remove_component(std::size_t component_index);
     [[nodiscard]] std::size_t component_index(QubitId qubit) const;
     [[nodiscard]] std::size_t local_position(const StateComponent& component, QubitId qubit) const;
     void apply_cell_matrix(BlochCell& cell, const QMatrix2& matrix);
     [[nodiscard]] std::size_t merge_components(std::size_t first, std::size_t second);
     void compact_component(std::size_t component_index);
+    void compact_component_targets(
+        std::size_t component_index,
+        std::span<const QubitId> candidate_qubits);
     [[nodiscard]] std::optional<std::pair<StateComponent, StateComponent>>
     factor_singleton(const StateComponent& component, std::size_t local_position) const;
     void collapse_patch(std::size_t component_index, std::size_t local_position, int outcome);
     void apply_nonunitary_single(QubitId qubit, const QMatrix2& matrix);
+    [[nodiscard]] std::size_t promote_global_dense();
 
     friend class QStateCodec;
 };
@@ -236,4 +281,4 @@ public:
     [[nodiscard]] static QRegister decode(std::span<const std::uint8_t> bytes);
 };
 
-}  // namespace qubit
+} 
