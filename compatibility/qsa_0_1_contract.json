@@ -1,0 +1,97 @@
+{
+  "contract_version": "1.0",
+  "frozen_release": "0.1.0",
+  "cxx_names": [
+    "QComplex",
+    "QStateConfig",
+    "QMatrix2",
+    "QMatrix4",
+    "BlochCell",
+    "StorageMode",
+    "AmplitudeStore",
+    "StateComponent",
+    "QRegister",
+    "QStateCodec"
+  ],
+  "c_symbols": [
+    "qstate_create",
+    "qstate_destroy",
+    "qstate_last_error",
+    "qstate_apply_x",
+    "qstate_apply_y",
+    "qstate_apply_z",
+    "qstate_apply_h",
+    "qstate_apply_s",
+    "qstate_apply_t",
+    "qstate_apply_rx",
+    "qstate_apply_ry",
+    "qstate_apply_rz",
+    "qstate_apply_cnot",
+    "qstate_apply_cz",
+    "qstate_apply_swap",
+    "qstate_probability_one",
+    "qstate_measure",
+    "qstate_amplitude",
+    "qstate_qubit_count",
+    "qstate_component_count",
+    "qstate_component_size",
+    "qstate_component_nonzero_count",
+    "qstate_estimated_bytes",
+    "qstate_description_size",
+    "qstate_description_write",
+    "qstate_qsc_size",
+    "qstate_qsc_write",
+    "qstate_qsc_read"
+  ],
+  "python_modules": [
+    "qsa",
+    "qubit_native"
+  ],
+  "python_class": "QubitRegister",
+  "python_methods": [
+    "close",
+    "x",
+    "y",
+    "z",
+    "h",
+    "s",
+    "t",
+    "rx",
+    "ry",
+    "rz",
+    "cnot",
+    "cz",
+    "swap",
+    "probability_one",
+    "measure",
+    "amplitude",
+    "component_size",
+    "component_nonzero_count",
+    "describe",
+    "encode_qsc",
+    "save_qsc",
+    "decode_qsc",
+    "load_qsc"
+  ],
+  "python_query_names": [
+    "qubit_count",
+    "component_count",
+    "estimated_bytes"
+  ],
+  "environment_variables": [
+    "QSA_NATIVE_LIB",
+    "QUBIT_NATIVE_LIB"
+  ],
+  "qsc_v1_fixture": "tests/fixtures/qsc_v1_sparse_exact.bin",
+  "qsc_v1_fixture_sha256": "8124e23759588a5a6248707acb4bf1a3d83ee12686c20d31f705f100c404c4d5",
+  "qsc_v1_fixtures": [
+    {
+      "path": "tests/fixtures/qsc_v1_sparse_exact.bin",
+      "sha256": "8124e23759588a5a6248707acb4bf1a3d83ee12686c20d31f705f100c404c4d5"
+    },
+    {
+      "path": "tests/fixtures/qsc_v1_component_order_exact.bin",
+      "sha256": "41064d8aaa979a32f37bd7e27361135e338f0e120e3dad9a555a11f27b2e3378"
+    }
+  ]
+}
