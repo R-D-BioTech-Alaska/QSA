@@ -154,6 +154,17 @@ void GroverSearch::iterate(std::uint64_t count) {
     const QComplex next_unmarked = -marked_coefficient * s + unmarked_coefficient * c;
     marked_amplitude_ = next_marked / sqrt_marked;
     unmarked_amplitude_ = next_unmarked / sqrt_unmarked;
+
+    const long double state_norm =
+        static_cast<long double>(marked_count_) * marked_amplitude_.norm2() +
+        static_cast<long double>(unmarked_count()) * unmarked_amplitude_.norm2();
+    if (!std::isfinite(state_norm) ||
+        state_norm <= std::numeric_limits<long double>::min()) {
+        throw QStateError("Grover state normalization failed");
+    }
+    const double state_scale = static_cast<double>(1.0L / std::sqrt(state_norm));
+    marked_amplitude_ *= state_scale;
+    unmarked_amplitude_ *= state_scale;
     iteration_count_ += count;
 }
 
