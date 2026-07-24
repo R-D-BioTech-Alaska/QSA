@@ -1,5 +1,4 @@
 #include "qubit/qstate.hpp"
-
 #include <array>
 #include <bit>
 #include <cstring>
@@ -107,7 +106,7 @@ private:
     }
 };
 
-}  // namespace
+} 
 
 std::vector<std::uint8_t> QStateCodec::encode(const QRegister& state) {
     std::string reason;
@@ -128,7 +127,8 @@ std::vector<std::uint8_t> QStateCodec::encode(const QRegister& state) {
     append_u64(output, static_cast<std::uint64_t>(state.config_.max_sparse_entries));
     append_u32(output, static_cast<std::uint32_t>(state.components_.size()));
 
-    for (const StateComponent& component : state.components_) {
+    for (std::size_t component_index : state.ordered_component_indices()) {
+        const StateComponent& component = state.components_[component_index];
         std::uint8_t kind = 0;
         if (!component.is_cell()) {
             kind = std::get<AmplitudeStore>(component.state).mode() == StorageMode::Sparse ? 1U : 2U;
@@ -216,7 +216,10 @@ QRegister QStateCodec::decode(std::span<const std::uint8_t> bytes) {
 
     QRegister state(qubit_count, config);
     state.components_.clear();
+    state.component_order_.clear();
     state.components_.reserve(component_count);
+    state.component_order_.reserve(component_count);
+    state.next_component_order_ = 0;
 
     for (std::uint32_t component_index = 0; component_index < component_count; ++component_index) {
         const std::uint8_t kind = reader.u8();
@@ -239,7 +242,10 @@ QRegister QStateCodec::decode(std::span<const std::uint8_t> bytes) {
             if (member_count != 1U) {
                 throw QStateError("QSC geometric cell must contain one qubit");
             }
-            BlochCell cell{reader.f64(), reader.f64(), reader.f64()};
+            const double cell_x = reader.f64();
+            const double cell_y = reader.f64();
+            const double cell_z = reader.f64();
+            BlochCell cell{cell_x, cell_y, cell_z};
             cell.normalize(config.epsilon);
             component.state = cell;
         } else {
@@ -260,7 +266,9 @@ QRegister QStateCodec::decode(std::span<const std::uint8_t> bytes) {
                 entries.reserve(static_cast<std::size_t>(value_count));
                 for (std::uint64_t entry = 0; entry < value_count; ++entry) {
                     const BasisIndex index = reader.u64();
-                    entries.emplace_back(index, QComplex{reader.f64(), reader.f64()});
+                    const double real = reader.f64();
+                    const double imag = reader.f64();
+                    entries.emplace_back(index, QComplex{real, imag});
                 }
                 component.state = AmplitudeStore::from_entries(
                     dimension, std::move(entries), config, true);
@@ -275,12 +283,16 @@ QRegister QStateCodec::decode(std::span<const std::uint8_t> bytes) {
                 std::vector<QComplex> dense;
                 dense.reserve(static_cast<std::size_t>(value_count));
                 for (std::uint64_t entry = 0; entry < value_count; ++entry) {
-                    dense.emplace_back(reader.f64(), reader.f64());
+                    const double real = reader.f64();
+                    const double imag = reader.f64();
+                    dense.emplace_back(real, imag);
                 }
                 component.state = AmplitudeStore::from_dense(std::move(dense), config, true);
             }
         }
         state.components_.push_back(std::move(component));
+        state.component_order_.push_back(
+            static_cast<std::uint32_t>(state.next_component_order_++));
     }
 
     if (reader.remaining() != 0U) {
@@ -294,4 +306,4 @@ QRegister QStateCodec::decode(std::span<const std::uint8_t> bytes) {
     return state;
 }
 
-}  // namespace qubit
+} 
