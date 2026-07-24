@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use Qubit State Algebra in research, please cite the software and the accompanying preprint."
+title: "Qubit State Algebra"
+version: "0.1.6"
+date-released: "2026-07-24"
+license: MIT
+type: software
+authors:
+  - name: "R&D BioTech Alaska"
+repository-code: "https://github.com/R-D-BioTech-Alaska/QSA"
+url: "https://github.com/R-D-BioTech-Alaska/QSA"
+doi: "10.13140/RG.2.2.19653.20965"
+keywords:
+  - quantum simulation
+  - qubit state algebra
+  - structured state representation
+  - quantum computing
+  - QELM
