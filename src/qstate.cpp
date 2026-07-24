@@ -1,9 +1,9 @@
 #include "qubit/qstate.hpp"
-
 #include <algorithm>
 #include <bit>
 #include <cmath>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <numeric>
 #include <sstream>
@@ -38,14 +38,20 @@ void validate_probability(double value, const char* label) {
     return lower | (upper << position);
 }
 
+[[nodiscard]] BasisIndex insert_zero_bit(BasisIndex value, std::size_t position) noexcept {
+    const BasisIndex lower_mask = position == 0 ? 0 : ((BasisIndex{1} << position) - 1U);
+    const BasisIndex lower = value & lower_mask;
+    const BasisIndex upper = value >> position;
+    return lower | (upper << (position + 1U));
+}
+
 [[nodiscard]] BasisIndex remap_index(
     BasisIndex index,
-    const std::vector<QubitId>& source_qubits,
-    const std::vector<std::size_t>& merged_positions) noexcept {
+    std::span<const std::size_t> local_to_merged) noexcept {
     BasisIndex result = 0;
-    for (std::size_t local = 0; local < source_qubits.size(); ++local) {
+    for (std::size_t local = 0; local < local_to_merged.size(); ++local) {
         if (((index >> local) & 1U) != 0U) {
-            result |= BasisIndex{1} << merged_positions[source_qubits[local]];
+            result |= BasisIndex{1} << local_to_merged[local];
         }
     }
     return result;
@@ -70,7 +76,7 @@ struct SplitMix64 {
     }
 };
 
-}  // namespace
+} 
 
 namespace gates {
 
@@ -157,7 +163,7 @@ QMatrix4 swap() {
     return matrix;
 }
 
-}  // namespace gates
+} 
 
 void BlochCell::normalize(double epsilon) {
     const double length = std::sqrt(x * x + y * y + z * z);
@@ -405,30 +411,65 @@ void AmplitudeStore::apply_single(
         return;
     }
 
-    std::unordered_map<BasisIndex, QComplex> output;
-    const std::size_t reserve_size = std::min(
-        config.max_sparse_entries,
-        sparse_.size() > config.max_sparse_entries / 2U
-            ? config.max_sparse_entries
-            : sparse_.size() * 2U + 1U);
-    output.reserve(reserve_size);
+    struct ReducedEntry {
+        BasisIndex index;
+        QComplex amplitude;
+    };
+    std::vector<ReducedEntry> zeros;
+    std::vector<ReducedEntry> ones;
+    zeros.reserve(sparse_.size());
+    ones.reserve(sparse_.size());
     for (const auto& [index, amplitude] : sparse_) {
-        const std::size_t input_bit = (index & mask) == 0U ? 0U : 1U;
-        for (std::size_t output_bit = 0; output_bit < 2; ++output_bit) {
-            const QComplex coefficient = matrix(output_bit, input_bit);
-            if (coefficient.norm2() <= config.epsilon * config.epsilon) {
-                continue;
-            }
-            const BasisIndex output_index = output_bit == 0 ? (index & ~mask) : (index | mask);
-            output[output_index] += coefficient * amplitude;
+        const ReducedEntry reduced{remove_bit(index, bit_position), amplitude};
+        ((index & mask) == 0U ? zeros : ones).push_back(reduced);
+    }
+
+    std::vector<SparseEntry> output_zero;
+    std::vector<SparseEntry> output_one;
+    output_zero.reserve(zeros.size() + ones.size());
+    output_one.reserve(zeros.size() + ones.size());
+    const double threshold = config.epsilon * config.epsilon;
+    std::size_t zero_index = 0;
+    std::size_t one_index = 0;
+    while (zero_index < zeros.size() || one_index < ones.size()) {
+        const BasisIndex reduced_index = one_index >= ones.size()
+                                             ? zeros[zero_index].index
+                                             : zero_index >= zeros.size()
+                                                   ? ones[one_index].index
+                                                   : std::min(
+                                                         zeros[zero_index].index,
+                                                         ones[one_index].index);
+        QComplex zero{};
+        QComplex one{};
+        if (zero_index < zeros.size() && zeros[zero_index].index == reduced_index) {
+            zero = zeros[zero_index++].amplitude;
+        }
+        if (one_index < ones.size() && ones[one_index].index == reduced_index) {
+            one = ones[one_index++].amplitude;
+        }
+        const QComplex next_zero = matrix(0, 0) * zero + matrix(0, 1) * one;
+        const QComplex next_one = matrix(1, 0) * zero + matrix(1, 1) * one;
+        const BasisIndex base = insert_zero_bit(reduced_index, bit_position);
+        if (next_zero.norm2() > threshold) {
+            output_zero.emplace_back(base, next_zero);
+        }
+        if (next_one.norm2() > threshold) {
+            output_one.emplace_back(base | mask, next_one);
         }
     }
+
     std::vector<SparseEntry> entries_out;
-    entries_out.reserve(output.size());
-    for (const auto& entry : output) {
-        entries_out.push_back(entry);
-    }
-    assign_entries(dimension_, std::move(entries_out), config, renormalize);
+    entries_out.reserve(output_zero.size() + output_one.size());
+    std::merge(
+        output_zero.begin(),
+        output_zero.end(),
+        output_one.begin(),
+        output_one.end(),
+        std::back_inserter(entries_out),
+        [](const SparseEntry& lhs, const SparseEntry& rhs) {
+            return lhs.first < rhs.first;
+        });
+    assign_sorted_entries(dimension_, std::move(entries_out), config, renormalize);
 }
 
 void AmplitudeStore::apply_two(
@@ -505,6 +546,169 @@ void AmplitudeStore::apply_two(
     assign_entries(dimension_, std::move(entries_out), config, renormalize);
 }
 
+void AmplitudeStore::sort_sparse() {
+    std::sort(sparse_.begin(), sparse_.end(), [](const SparseEntry& lhs, const SparseEntry& rhs) {
+        return lhs.first < rhs.first;
+    });
+}
+
+void AmplitudeStore::apply_x(std::size_t bit_position) {
+    const std::size_t bits = bit_count_for_dimension(dimension_);
+    if (bit_position >= bits) {
+        throw QStateError("X gate bit position is out of range");
+    }
+    const BasisIndex mask = BasisIndex{1} << bit_position;
+    if (mode_ == StorageMode::Dense) {
+        for (BasisIndex base = 0; base < dimension_; ++base) {
+            if ((base & mask) == 0U) {
+                std::swap(
+                    dense_[static_cast<std::size_t>(base)],
+                    dense_[static_cast<std::size_t>(base | mask)]);
+            }
+        }
+        return;
+    }
+    for (auto& entry : sparse_) {
+        entry.first ^= mask;
+    }
+    sort_sparse();
+}
+
+void AmplitudeStore::apply_y(std::size_t bit_position) {
+    const std::size_t bits = bit_count_for_dimension(dimension_);
+    if (bit_position >= bits) {
+        throw QStateError("Y gate bit position is out of range");
+    }
+    const BasisIndex mask = BasisIndex{1} << bit_position;
+    if (mode_ == StorageMode::Dense) {
+        for (BasisIndex base = 0; base < dimension_; ++base) {
+            if ((base & mask) != 0U) {
+                continue;
+            }
+            const BasisIndex one_index = base | mask;
+            const QComplex zero = dense_[static_cast<std::size_t>(base)];
+            const QComplex one = dense_[static_cast<std::size_t>(one_index)];
+            dense_[static_cast<std::size_t>(base)] = -QI * one;
+            dense_[static_cast<std::size_t>(one_index)] = QI * zero;
+        }
+        return;
+    }
+    for (auto& [index, amplitude] : sparse_) {
+        const bool one = (index & mask) != 0U;
+        amplitude = one ? -QI * amplitude : QI * amplitude;
+        index ^= mask;
+    }
+    sort_sparse();
+}
+
+void AmplitudeStore::apply_phase(
+    std::size_t bit_position,
+    QComplex phase_zero,
+    QComplex phase_one) {
+    const std::size_t bits = bit_count_for_dimension(dimension_);
+    if (bit_position >= bits) {
+        throw QStateError("Phase gate bit position is out of range");
+    }
+    const BasisIndex mask = BasisIndex{1} << bit_position;
+    if (mode_ == StorageMode::Dense) {
+        for (BasisIndex index = 0; index < dimension_; ++index) {
+            dense_[static_cast<std::size_t>(index)] *=
+                (index & mask) == 0U ? phase_zero : phase_one;
+        }
+        return;
+    }
+    for (auto& [index, amplitude] : sparse_) {
+        amplitude *= (index & mask) == 0U ? phase_zero : phase_one;
+    }
+}
+
+void AmplitudeStore::apply_z(std::size_t bit_position) {
+    apply_phase(bit_position, QComplex{1.0, 0.0}, QComplex{-1.0, 0.0});
+}
+
+void AmplitudeStore::apply_cnot(std::size_t control_bit, std::size_t target_bit) {
+    const std::size_t bits = bit_count_for_dimension(dimension_);
+    if (control_bit >= bits || target_bit >= bits || control_bit == target_bit) {
+        throw QStateError("CNOT bit positions are invalid");
+    }
+    const BasisIndex control_mask = BasisIndex{1} << control_bit;
+    const BasisIndex target_mask = BasisIndex{1} << target_bit;
+    if (mode_ == StorageMode::Dense) {
+        for (BasisIndex index = 0; index < dimension_; ++index) {
+            if ((index & control_mask) != 0U && (index & target_mask) == 0U) {
+                std::swap(
+                    dense_[static_cast<std::size_t>(index)],
+                    dense_[static_cast<std::size_t>(index | target_mask)]);
+            }
+        }
+        return;
+    }
+    bool reordered = false;
+    for (auto& entry : sparse_) {
+        if ((entry.first & control_mask) != 0U) {
+            entry.first ^= target_mask;
+            reordered = true;
+        }
+    }
+    if (reordered) {
+        sort_sparse();
+    }
+}
+
+void AmplitudeStore::apply_cz(std::size_t first_bit, std::size_t second_bit) {
+    const std::size_t bits = bit_count_for_dimension(dimension_);
+    if (first_bit >= bits || second_bit >= bits || first_bit == second_bit) {
+        throw QStateError("CZ bit positions are invalid");
+    }
+    const BasisIndex mask = (BasisIndex{1} << first_bit) | (BasisIndex{1} << second_bit);
+    if (mode_ == StorageMode::Dense) {
+        for (BasisIndex index = 0; index < dimension_; ++index) {
+            if ((index & mask) == mask) {
+                dense_[static_cast<std::size_t>(index)] =
+                    -dense_[static_cast<std::size_t>(index)];
+            }
+        }
+        return;
+    }
+    for (auto& [index, amplitude] : sparse_) {
+        if ((index & mask) == mask) {
+            amplitude = -amplitude;
+        }
+    }
+}
+
+void AmplitudeStore::apply_swap(std::size_t first_bit, std::size_t second_bit) {
+    const std::size_t bits = bit_count_for_dimension(dimension_);
+    if (first_bit >= bits || second_bit >= bits || first_bit == second_bit) {
+        throw QStateError("SWAP bit positions are invalid");
+    }
+    const BasisIndex first_mask = BasisIndex{1} << first_bit;
+    const BasisIndex second_mask = BasisIndex{1} << second_bit;
+    const BasisIndex both = first_mask | second_mask;
+    if (mode_ == StorageMode::Dense) {
+        for (BasisIndex index = 0; index < dimension_; ++index) {
+            if ((index & first_mask) == 0U && (index & second_mask) != 0U) {
+                std::swap(
+                    dense_[static_cast<std::size_t>(index)],
+                    dense_[static_cast<std::size_t>(index ^ both)]);
+            }
+        }
+        return;
+    }
+    bool reordered = false;
+    for (auto& entry : sparse_) {
+        const bool first = (entry.first & first_mask) != 0U;
+        const bool second = (entry.first & second_mask) != 0U;
+        if (first != second) {
+            entry.first ^= both;
+            reordered = true;
+        }
+    }
+    if (reordered) {
+        sort_sparse();
+    }
+}
+
 void AmplitudeStore::assign_entries(
     BasisIndex dimension,
     std::vector<SparseEntry> entries_in,
@@ -528,6 +732,28 @@ void AmplitudeStore::assign_entries(
         } else {
             combined.emplace_back(index, value);
         }
+    }
+    assign_sorted_entries(dimension, std::move(combined), config, normalize_values);
+}
+
+void AmplitudeStore::assign_sorted_entries(
+    BasisIndex dimension,
+    std::vector<SparseEntry> combined,
+    const QStateConfig& config,
+    bool normalize_values) {
+    if (!is_power_of_two(dimension)) {
+        throw QStateError("Amplitude dimension must be a power of two");
+    }
+    if (!std::is_sorted(
+            combined.begin(),
+            combined.end(),
+            [](const SparseEntry& lhs, const SparseEntry& rhs) {
+                return lhs.first < rhs.first;
+            })) {
+        throw QStateError("Sorted sparse assignment received unordered entries");
+    }
+    if (!combined.empty() && combined.back().first >= dimension) {
+        throw QStateError("Sparse amplitude index exceeds its dimension");
     }
     std::erase_if(combined, [&config](const SparseEntry& entry) {
         return entry.second.norm2() <= config.epsilon * config.epsilon;
@@ -569,15 +795,20 @@ void AmplitudeStore::assign_entries(
 
 void AmplitudeStore::rebalance(const QStateConfig& config) {
     if (mode_ == StorageMode::Dense) {
-        std::vector<SparseEntry> nonzero;
-        nonzero.reserve(dense_.size() / 4U + 1U);
-        for (std::size_t index = 0; index < dense_.size(); ++index) {
-            if (dense_[index].norm2() > config.epsilon * config.epsilon) {
-                nonzero.emplace_back(static_cast<BasisIndex>(index), dense_[index]);
+        const double threshold = config.epsilon * config.epsilon;
+        const std::size_t nonzero_count = static_cast<std::size_t>(std::count_if(
+            dense_.begin(), dense_.end(), [threshold](const QComplex& value) {
+                return value.norm2() > threshold;
+            }));
+        if (nonzero_count <= config.max_sparse_entries &&
+            static_cast<long double>(nonzero_count) * 4.0L < static_cast<long double>(dimension_)) {
+            std::vector<SparseEntry> nonzero;
+            nonzero.reserve(nonzero_count);
+            for (std::size_t index = 0; index < dense_.size(); ++index) {
+                if (dense_[index].norm2() > threshold) {
+                    nonzero.emplace_back(static_cast<BasisIndex>(index), dense_[index]);
+                }
             }
-        }
-        if (nonzero.size() <= config.max_sparse_entries &&
-            static_cast<long double>(nonzero.size()) * 4.0L < static_cast<long double>(dimension_)) {
             mode_ = StorageMode::Sparse;
             sparse_ = std::move(nonzero);
             dense_.clear();
@@ -612,10 +843,47 @@ QRegister::QRegister(std::size_t qubit_count, QStateConfig config)
         throw QStateError("max_component_qubits must be between 1 and 62");
     }
     components_.reserve(qubit_count);
+    component_order_.reserve(qubit_count);
     for (std::size_t qubit = 0; qubit < qubit_count; ++qubit) {
         components_.push_back(StateComponent{{static_cast<QubitId>(qubit)}, BlochCell{}});
+        component_order_.push_back(static_cast<std::uint32_t>(next_component_order_++));
     }
     reindex_components();
+}
+
+
+QRegister QRegister::from_amplitudes(
+    std::vector<QComplex> amplitudes,
+    QStateConfig config) {
+    if (amplitudes.size() < 2U ||
+        !is_power_of_two(static_cast<BasisIndex>(amplitudes.size()))) {
+        throw QStateError("QRegister amplitude initialization requires a power-of-two size of at least two");
+    }
+    const std::size_t qubits = bit_count_for_dimension(
+        static_cast<BasisIndex>(amplitudes.size()));
+    if (qubits > config.max_component_qubits) {
+        throw QStateError("QRegister amplitude initialization exceeds the configured component limit");
+    }
+    QRegister state(qubits, config);
+    AmplitudeStore store = AmplitudeStore::from_dense(
+        std::move(amplitudes), state.config_, true);
+    state.components_.clear();
+    state.component_order_.clear();
+    state.next_component_order_ = 0;
+    std::vector<QubitId> members(qubits);
+    std::iota(members.begin(), members.end(), QubitId{0});
+    if (qubits == 1U) {
+        state.components_.push_back(StateComponent{
+            std::move(members),
+            BlochCell::from_amplitudes(store.at(0U), store.at(1U), state.config_.epsilon),
+        });
+    } else {
+        state.components_.push_back(StateComponent{std::move(members), std::move(store)});
+    }
+    state.component_order_.push_back(0U);
+    state.next_component_order_ = 1U;
+    state.reindex_components();
+    return state;
 }
 
 void QRegister::validate_qubit(QubitId qubit) const {
@@ -625,6 +893,9 @@ void QRegister::validate_qubit(QubitId qubit) const {
 }
 
 void QRegister::reindex_components() {
+    if (component_order_.size() != components_.size()) {
+        throw QStateError("Internal component-order table is inconsistent");
+    }
     qubit_component_.assign(qubit_count_, std::numeric_limits<std::size_t>::max());
     for (std::size_t component = 0; component < components_.size(); ++component) {
         for (QubitId qubit : components_[component].qubits) {
@@ -637,6 +908,58 @@ void QRegister::reindex_components() {
             qubit_component_[qubit] = component;
         }
     }
+}
+
+std::vector<std::size_t> QRegister::ordered_component_indices() const {
+    if (component_order_.size() != components_.size()) {
+        throw QStateError("Internal component-order table is inconsistent");
+    }
+    std::vector<std::size_t> indices(components_.size());
+    std::iota(indices.begin(), indices.end(), std::size_t{0});
+    std::sort(indices.begin(), indices.end(), [this](std::size_t lhs, std::size_t rhs) {
+        return component_order_[lhs] < component_order_[rhs];
+    });
+    return indices;
+}
+
+void QRegister::renumber_component_order() {
+    const auto ordered = ordered_component_indices();
+    for (std::size_t logical = 0; logical < ordered.size(); ++logical) {
+        component_order_[ordered[logical]] = static_cast<std::uint32_t>(logical);
+    }
+    next_component_order_ = ordered.size();
+}
+
+std::size_t QRegister::append_component(StateComponent component) {
+    if (next_component_order_ > std::numeric_limits<std::uint32_t>::max()) {
+        renumber_component_order();
+    }
+    const std::size_t index = components_.size();
+    components_.push_back(std::move(component));
+    component_order_.push_back(static_cast<std::uint32_t>(next_component_order_++));
+    for (QubitId qubit : components_.back().qubits) {
+        if (static_cast<std::size_t>(qubit) >= qubit_count_) {
+            throw QStateError("Component contains an out-of-range qubit");
+        }
+        qubit_component_[qubit] = index;
+    }
+    return index;
+}
+
+void QRegister::remove_component(std::size_t component_index_value) {
+    if (component_index_value >= components_.size()) {
+        throw QStateError("Cannot remove an invalid state component");
+    }
+    const std::size_t last = components_.size() - 1U;
+    if (component_index_value != last) {
+        components_[component_index_value] = std::move(components_[last]);
+        component_order_[component_index_value] = component_order_[last];
+        for (QubitId qubit : components_[component_index_value].qubits) {
+            qubit_component_[qubit] = component_index_value;
+        }
+    }
+    components_.pop_back();
+    component_order_.pop_back();
 }
 
 std::size_t QRegister::component_index(QubitId qubit) const {
@@ -669,7 +992,7 @@ void QRegister::apply_x(QubitId qubit) {
         std::get<BlochCell>(components_[index].state).apply_x();
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::x(), config_);
+            .apply_x(local_position(components_[index], qubit));
     }
 }
 
@@ -679,7 +1002,7 @@ void QRegister::apply_y(QubitId qubit) {
         std::get<BlochCell>(components_[index].state).apply_y();
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::y(), config_);
+            .apply_y(local_position(components_[index], qubit));
     }
 }
 
@@ -689,7 +1012,7 @@ void QRegister::apply_z(QubitId qubit) {
         std::get<BlochCell>(components_[index].state).apply_z();
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::z(), config_);
+            .apply_z(local_position(components_[index], qubit));
     }
 }
 
@@ -699,7 +1022,7 @@ void QRegister::apply_h(QubitId qubit) {
         std::get<BlochCell>(components_[index].state).apply_h();
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::h(), config_);
+            .apply_single(local_position(components_[index], qubit), gates::h(), config_, false);
     }
 }
 
@@ -709,7 +1032,7 @@ void QRegister::apply_s(QubitId qubit) {
         std::get<BlochCell>(components_[index].state).rotate_z(kPi / 2.0);
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::s(), config_);
+            .apply_phase(local_position(components_[index], qubit), QComplex{1.0, 0.0}, QI);
     }
 }
 
@@ -719,7 +1042,7 @@ void QRegister::apply_sdg(QubitId qubit) {
         std::get<BlochCell>(components_[index].state).rotate_z(-kPi / 2.0);
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::sdg(), config_);
+            .apply_phase(local_position(components_[index], qubit), QComplex{1.0, 0.0}, -QI);
     }
 }
 
@@ -729,7 +1052,10 @@ void QRegister::apply_t(QubitId qubit) {
         std::get<BlochCell>(components_[index].state).rotate_z(kPi / 4.0);
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::t(), config_);
+            .apply_phase(
+                local_position(components_[index], qubit),
+                QComplex{1.0, 0.0},
+                QComplex::from_polar(1.0, kPi / 4.0));
     }
 }
 
@@ -739,7 +1065,10 @@ void QRegister::apply_tdg(QubitId qubit) {
         std::get<BlochCell>(components_[index].state).rotate_z(-kPi / 4.0);
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::tdg(), config_);
+            .apply_phase(
+                local_position(components_[index], qubit),
+                QComplex{1.0, 0.0},
+                QComplex::from_polar(1.0, -kPi / 4.0));
     }
 }
 
@@ -752,7 +1081,7 @@ void QRegister::apply_rx(QubitId qubit, double theta) {
         std::get<BlochCell>(components_[index].state).rotate_x(theta);
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::rx(theta), config_);
+            .apply_single(local_position(components_[index], qubit), gates::rx(theta), config_, false);
     }
 }
 
@@ -765,7 +1094,7 @@ void QRegister::apply_ry(QubitId qubit, double theta) {
         std::get<BlochCell>(components_[index].state).rotate_y(theta);
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::ry(theta), config_);
+            .apply_single(local_position(components_[index], qubit), gates::ry(theta), config_, false);
     }
 }
 
@@ -778,7 +1107,10 @@ void QRegister::apply_rz(QubitId qubit, double theta) {
         std::get<BlochCell>(components_[index].state).rotate_z(theta);
     } else {
         std::get<AmplitudeStore>(components_[index].state)
-            .apply_single(local_position(components_[index], qubit), gates::rz(theta), config_);
+            .apply_phase(
+                local_position(components_[index], qubit),
+                QComplex::from_polar(1.0, -theta / 2.0),
+                QComplex::from_polar(1.0, theta / 2.0));
     }
 }
 
@@ -792,6 +1124,58 @@ void QRegister::apply_single(QubitId qubit, const QMatrix2& matrix) {
     }
 }
 
+void QRegister::apply_diagonal(std::span<const QDiagonalPhase> phases) {
+    using LocalPhase = std::pair<std::size_t, std::array<QComplex, 2>>;
+    std::vector<std::vector<LocalPhase>> grouped(components_.size());
+
+    for (const QDiagonalPhase& phase : phases) {
+        validate_qubit(phase.qubit);
+        const double zero_norm = phase.zero.norm2();
+        const double one_norm = phase.one.norm2();
+        if (!std::isfinite(zero_norm) || !std::isfinite(one_norm) ||
+            std::abs(zero_norm - 1.0) > 1e-10 || std::abs(one_norm - 1.0) > 1e-10) {
+            throw QStateError("Diagonal phase entries must be finite unit-magnitude values");
+        }
+
+        const std::size_t index = component_index(phase.qubit);
+        StateComponent& component = components_[index];
+        if (component.is_cell()) {
+            QMatrix2 matrix{};
+            matrix.values[0] = phase.zero;
+            matrix.values[3] = phase.one;
+            apply_cell_matrix(std::get<BlochCell>(component.state), matrix);
+        } else {
+            grouped[index].push_back(LocalPhase{
+                local_position(component, phase.qubit),
+                std::array<QComplex, 2>{phase.zero, phase.one},
+            });
+        }
+    }
+
+    for (std::size_t index = 0; index < grouped.size(); ++index) {
+        if (grouped[index].empty()) {
+            continue;
+        }
+        AmplitudeStore& store = std::get<AmplitudeStore>(components_[index].state);
+        const auto apply_to_value = [&grouped, index](BasisIndex basis, QComplex& value) {
+            QComplex coefficient{1.0, 0.0};
+            for (const auto& [position, values] : grouped[index]) {
+                coefficient *= values[(basis >> position) & 1U];
+            }
+            value *= coefficient;
+        };
+        if (store.mode_ == StorageMode::Sparse) {
+            for (auto& [basis, value] : store.sparse_) {
+                apply_to_value(basis, value);
+            }
+        } else {
+            for (std::size_t basis = 0; basis < store.dense_.size(); ++basis) {
+                apply_to_value(static_cast<BasisIndex>(basis), store.dense_[basis]);
+            }
+        }
+    }
+}
+
 std::size_t QRegister::merge_components(std::size_t first, std::size_t second) {
     if (first == second) {
         return first;
@@ -800,8 +1184,8 @@ std::size_t QRegister::merge_components(std::size_t first, std::size_t second) {
         throw QStateError("Cannot merge an invalid state component");
     }
 
-    StateComponent left = components_[first];
-    StateComponent right = components_[second];
+    StateComponent left = std::move(components_[first]);
+    StateComponent right = std::move(components_[second]);
     std::vector<QubitId> merged_qubits = left.qubits;
     merged_qubits.insert(merged_qubits.end(), right.qubits.begin(), right.qubits.end());
     std::sort(merged_qubits.begin(), merged_qubits.end());
@@ -809,9 +1193,19 @@ std::size_t QRegister::merge_components(std::size_t first, std::size_t second) {
         throw QStateError("Entangled component exceeds configured qubit limit");
     }
 
-    std::vector<std::size_t> merged_positions(qubit_count_, 0);
-    for (std::size_t position = 0; position < merged_qubits.size(); ++position) {
-        merged_positions[merged_qubits[position]] = position;
+    std::vector<std::size_t> left_positions(left.qubits.size());
+    std::vector<std::size_t> right_positions(right.qubits.size());
+    std::size_t left_cursor = 0;
+    std::size_t right_cursor = 0;
+    for (std::size_t merged_position = 0; merged_position < merged_qubits.size(); ++merged_position) {
+        const QubitId qubit = merged_qubits[merged_position];
+        if (left_cursor < left.qubits.size() && left.qubits[left_cursor] == qubit) {
+            left_positions[left_cursor++] = merged_position;
+        } else if (right_cursor < right.qubits.size() && right.qubits[right_cursor] == qubit) {
+            right_positions[right_cursor++] = merged_position;
+        } else {
+            throw QStateError("Internal error: component merge mapping is inconsistent");
+        }
     }
 
     const auto component_entries = [this](const StateComponent& component) {
@@ -843,9 +1237,9 @@ std::size_t QRegister::merge_components(std::size_t first, std::size_t second) {
     std::vector<AmplitudeStore::SparseEntry> merged_entries;
     merged_entries.reserve(static_cast<std::size_t>(product_size));
     for (const auto& [left_index, left_value] : left_entries) {
-        const BasisIndex remapped_left = remap_index(left_index, left.qubits, merged_positions);
+        const BasisIndex remapped_left = remap_index(left_index, left_positions);
         for (const auto& [right_index, right_value] : right_entries) {
-            const BasisIndex remapped_right = remap_index(right_index, right.qubits, merged_positions);
+            const BasisIndex remapped_right = remap_index(right_index, right_positions);
             merged_entries.emplace_back(remapped_left | remapped_right, left_value * right_value);
         }
     }
@@ -857,23 +1251,66 @@ std::size_t QRegister::merge_components(std::size_t first, std::size_t second) {
 
     const std::size_t high = std::max(first, second);
     const std::size_t low = std::min(first, second);
-    components_.erase(components_.begin() + static_cast<std::ptrdiff_t>(high));
-    components_.erase(components_.begin() + static_cast<std::ptrdiff_t>(low));
-    components_.push_back(std::move(merged));
-    reindex_components();
-    return components_.size() - 1U;
+    remove_component(high);
+    remove_component(low);
+    return append_component(std::move(merged));
 }
 
 void QRegister::apply_cnot(QubitId control, QubitId target) {
-    apply_two(control, target, gates::cnot());
+    validate_qubit(control);
+    validate_qubit(target);
+    if (control == target) {
+        throw QStateError("A two-qubit gate requires two distinct qubits");
+    }
+    std::size_t component = component_index(control);
+    const std::size_t other = component_index(target);
+    if (component != other) {
+        component = merge_components(component, other);
+    }
+    StateComponent& selected = components_[component];
+    const std::size_t control_position = local_position(selected, control);
+    const std::size_t target_position = local_position(selected, target);
+    std::get<AmplitudeStore>(selected.state).apply_cnot(control_position, target_position);
+    const std::array<QubitId, 2> candidates{control, target};
+    compact_component_targets(component, candidates);
 }
 
 void QRegister::apply_cz(QubitId first, QubitId second) {
-    apply_two(first, second, gates::cz());
+    validate_qubit(first);
+    validate_qubit(second);
+    if (first == second) {
+        throw QStateError("A two-qubit gate requires two distinct qubits");
+    }
+    std::size_t component = component_index(first);
+    const std::size_t other = component_index(second);
+    if (component != other) {
+        component = merge_components(component, other);
+    }
+    StateComponent& selected = components_[component];
+    const std::size_t first_position = local_position(selected, first);
+    const std::size_t second_position = local_position(selected, second);
+    std::get<AmplitudeStore>(selected.state).apply_cz(first_position, second_position);
+    const std::array<QubitId, 2> candidates{first, second};
+    compact_component_targets(component, candidates);
 }
 
 void QRegister::apply_swap(QubitId first, QubitId second) {
-    apply_two(first, second, gates::swap());
+    validate_qubit(first);
+    validate_qubit(second);
+    if (first == second) {
+        throw QStateError("A two-qubit gate requires two distinct qubits");
+    }
+    std::size_t component = component_index(first);
+    const std::size_t other = component_index(second);
+    if (component != other) {
+        component = merge_components(component, other);
+    }
+    StateComponent& selected = components_[component];
+    const std::size_t first_position = local_position(selected, first);
+    const std::size_t second_position = local_position(selected, second);
+    std::get<AmplitudeStore>(selected.state).apply_swap(first_position, second_position);
+    const std::array<QubitId, 2> candidates{first, second};
+    compact_component_targets(component, candidates);
 }
 
 void QRegister::apply_two(QubitId first, QubitId second, const QMatrix4& matrix) {
@@ -895,7 +1332,8 @@ void QRegister::apply_two(QubitId first, QubitId second, const QMatrix4& matrix)
     const std::size_t second_position = local_position(selected, second);
     std::get<AmplitudeStore>(selected.state)
         .apply_two(first_position, second_position, matrix, config_);
-    compact_component(component);
+    const std::array<QubitId, 2> candidates{first, second};
+    compact_component_targets(component, candidates);
 }
 
 void QRegister::apply_bit_flip_trajectory(QubitId qubit, double probability, double sample) {
@@ -957,6 +1395,99 @@ void QRegister::apply_nonunitary_single(QubitId qubit, const QMatrix2& matrix) {
     }
 }
 
+std::size_t QRegister::promote_global_dense() {
+    if (qubit_count_ >= 63 || qubit_count_ > config_.max_component_qubits) {
+        throw QStateError("Full-register Grover execution exceeds the configured component width");
+    }
+    const BasisIndex dimension = BasisIndex{1} << qubit_count_;
+    if (dimension > config_.max_dense_amplitudes ||
+        dimension > static_cast<BasisIndex>(std::numeric_limits<std::size_t>::max())) {
+        throw QStateError("Full-register Grover execution exceeds the configured dense-state limit");
+    }
+
+    if (components_.size() == 1U && !components_.front().is_cell() &&
+        components_.front().qubits.size() == qubit_count_) {
+        AmplitudeStore& existing = std::get<AmplitudeStore>(components_.front().state);
+        if (existing.mode_ != StorageMode::Dense) {
+            existing.dense_ = existing.dense_copy();
+            existing.sparse_.clear();
+            existing.sparse_.shrink_to_fit();
+            existing.mode_ = StorageMode::Dense;
+        }
+        return 0U;
+    }
+
+    std::vector<QComplex> dense = materialize(qubit_count_);
+    AmplitudeStore store;
+    store.dimension_ = dimension;
+    store.mode_ = StorageMode::Dense;
+    store.dense_ = std::move(dense);
+    store.sparse_.clear();
+
+    std::vector<QubitId> qubits(qubit_count_);
+    std::iota(qubits.begin(), qubits.end(), QubitId{0});
+    components_.clear();
+    component_order_.clear();
+    components_.push_back(StateComponent{std::move(qubits), std::move(store)});
+    component_order_.push_back(0U);
+    next_component_order_ = 1U;
+    qubit_component_.assign(qubit_count_, 0U);
+    return 0U;
+}
+
+void QRegister::apply_grover_oracle(std::span<const BasisIndex> marked_indices) {
+    if (marked_indices.empty()) {
+        throw QStateError("Grover oracle requires at least one marked basis state");
+    }
+    if (qubit_count_ >= 63) {
+        throw QStateError("Integer Grover oracle supports at most 62 qubits");
+    }
+    const BasisIndex dimension = BasisIndex{1} << qubit_count_;
+    std::vector<BasisIndex> sorted(marked_indices.begin(), marked_indices.end());
+    std::sort(sorted.begin(), sorted.end());
+    if (sorted.back() >= dimension) {
+        throw QStateError("Grover marked basis state is outside the register");
+    }
+    if (std::adjacent_find(sorted.begin(), sorted.end()) != sorted.end()) {
+        throw QStateError("Grover marked basis states must be unique");
+    }
+
+    const std::size_t component = promote_global_dense();
+    AmplitudeStore& store = std::get<AmplitudeStore>(components_[component].state);
+    for (BasisIndex index : sorted) {
+        store.dense_[static_cast<std::size_t>(index)] =
+            -store.dense_[static_cast<std::size_t>(index)];
+    }
+}
+
+void QRegister::apply_grover_diffusion() {
+    const std::size_t component = promote_global_dense();
+    AmplitudeStore& store = std::get<AmplitudeStore>(components_[component].state);
+    long double sum_re = 0.0L;
+    long double sum_im = 0.0L;
+    for (const QComplex& value : store.dense_) {
+        sum_re += static_cast<long double>(value.re);
+        sum_im += static_cast<long double>(value.im);
+    }
+    const long double inverse_dimension = 1.0L / static_cast<long double>(store.dimension_);
+    const QComplex twice_mean{
+        static_cast<double>(2.0L * sum_re * inverse_dimension),
+        static_cast<double>(2.0L * sum_im * inverse_dimension),
+    };
+    for (QComplex& value : store.dense_) {
+        value = twice_mean - value;
+    }
+}
+
+void QRegister::apply_grover_iterations(
+    std::span<const BasisIndex> marked_indices,
+    std::uint64_t iteration_count) {
+    for (std::uint64_t iteration = 0; iteration < iteration_count; ++iteration) {
+        apply_grover_oracle(marked_indices);
+        apply_grover_diffusion();
+    }
+}
+
 double QRegister::probability_one(QubitId qubit) const {
     const std::size_t index = component_index(qubit);
     const StateComponent& component = components_[index];
@@ -966,13 +1497,72 @@ double QRegister::probability_one(QubitId qubit) const {
     const std::size_t position = local_position(component, qubit);
     const BasisIndex mask = BasisIndex{1} << position;
     long double probability = 0.0L;
-    for (const auto& [basis, amplitude_value] :
-         std::get<AmplitudeStore>(component.state).entries(config_.epsilon)) {
-        if ((basis & mask) != 0U) {
-            probability += static_cast<long double>(amplitude_value.norm2());
+    const AmplitudeStore& store = std::get<AmplitudeStore>(component.state);
+    if (store.mode_ == StorageMode::Sparse) {
+        for (const auto& [basis, amplitude_value] : store.sparse_) {
+            if ((basis & mask) != 0U) {
+                probability += static_cast<long double>(amplitude_value.norm2());
+            }
+        }
+    } else {
+        const std::size_t half_block = static_cast<std::size_t>(mask);
+        const std::size_t block = half_block << 1U;
+        for (std::size_t base = 0; base < store.dense_.size(); base += block) {
+            const std::size_t end = base + block;
+            for (std::size_t basis = base + half_block; basis < end; ++basis) {
+                probability += static_cast<long double>(store.dense_[basis].norm2());
+            }
         }
     }
     return std::clamp(static_cast<double>(probability), 0.0, 1.0);
+}
+
+std::vector<double> QRegister::probabilities_one() const {
+    std::vector<double> result(qubit_count_, 0.0);
+    for (const StateComponent& component : components_) {
+        if (component.is_cell()) {
+            result[component.qubits.front()] =
+                std::get<BlochCell>(component.state).probability_one();
+            continue;
+        }
+
+        const AmplitudeStore& store = std::get<AmplitudeStore>(component.state);
+        std::vector<long double> local(component.qubits.size(), 0.0L);
+        const auto accumulate = [&local](BasisIndex basis, const QComplex& amplitude_value) {
+            const long double weight = static_cast<long double>(amplitude_value.norm2());
+            BasisIndex remaining = basis;
+            while (remaining != 0U) {
+                const std::size_t position = static_cast<std::size_t>(std::countr_zero(remaining));
+                local[position] += weight;
+                remaining &= remaining - 1U;
+            }
+        };
+
+        if (store.mode_ == StorageMode::Sparse) {
+            for (const auto& [basis, amplitude_value] : store.sparse_) {
+                accumulate(basis, amplitude_value);
+            }
+        } else {
+            for (std::size_t position = 0; position < component.qubits.size(); ++position) {
+                const std::size_t half_block = std::size_t{1} << position;
+                const std::size_t block = half_block << 1U;
+                long double probability = 0.0L;
+                for (std::size_t base = 0; base < store.dense_.size(); base += block) {
+                    const std::size_t end = base + block;
+                    for (std::size_t basis = base + half_block; basis < end; ++basis) {
+                        probability += static_cast<long double>(store.dense_[basis].norm2());
+                    }
+                }
+                local[position] = probability;
+            }
+        }
+
+        for (std::size_t position = 0; position < component.qubits.size(); ++position) {
+            result[component.qubits[position]] =
+                std::clamp(static_cast<double>(local[position]), 0.0, 1.0);
+        }
+    }
+    return result;
 }
 
 int QRegister::measure(QubitId qubit, double sample) {
@@ -1067,9 +1657,55 @@ std::vector<QComplex> QRegister::materialize(std::size_t max_qubits) const {
     }
     const BasisIndex dimension = BasisIndex{1} << qubit_count_;
     std::vector<QComplex> result(static_cast<std::size_t>(dimension));
-    for (BasisIndex index = 0; index < dimension; ++index) {
-        result[static_cast<std::size_t>(index)] = amplitude(index);
+
+    using GlobalEntry = std::pair<BasisIndex, QComplex>;
+    std::vector<std::vector<GlobalEntry>> component_entries;
+    component_entries.reserve(components_.size());
+    for (const StateComponent& component : components_) {
+        std::vector<AmplitudeStore::SparseEntry> local_entries;
+        if (component.is_cell()) {
+            const auto amplitudes = std::get<BlochCell>(component.state).amplitudes(config_.epsilon);
+            if (amplitudes[0].norm2() > config_.epsilon * config_.epsilon) {
+                local_entries.emplace_back(0U, amplitudes[0]);
+            }
+            if (amplitudes[1].norm2() > config_.epsilon * config_.epsilon) {
+                local_entries.emplace_back(1U, amplitudes[1]);
+            }
+        } else {
+            local_entries = std::get<AmplitudeStore>(component.state).entries(config_.epsilon);
+        }
+
+        std::vector<GlobalEntry> global_entries;
+        global_entries.reserve(local_entries.size());
+        for (const auto& [local_index, value] : local_entries) {
+            BasisIndex global_index = 0;
+            for (std::size_t position = 0; position < component.qubits.size(); ++position) {
+                if (((local_index >> position) & 1U) != 0U) {
+                    global_index |= BasisIndex{1} << component.qubits[position];
+                }
+            }
+            global_entries.emplace_back(global_index, value);
+        }
+        component_entries.push_back(std::move(global_entries));
     }
+
+    const auto fill = [&](const auto& self,
+                          std::size_t component_index_value,
+                          BasisIndex global_index,
+                          QComplex amplitude_value) -> void {
+        if (component_index_value == component_entries.size()) {
+            result[static_cast<std::size_t>(global_index)] = amplitude_value;
+            return;
+        }
+        for (const auto& [entry_index, entry_value] : component_entries[component_index_value]) {
+            self(
+                self,
+                component_index_value + 1U,
+                global_index | entry_index,
+                amplitude_value * entry_value);
+        }
+    };
+    fill(fill, 0U, 0U, QComplex{1.0, 0.0});
     return result;
 }
 
@@ -1085,6 +1721,16 @@ StorageMode QRegister::component_storage_mode(QubitId qubit) const {
     return std::get<AmplitudeStore>(component.state).mode();
 }
 
+ComponentKind QRegister::component_kind(QubitId qubit) const {
+    const StateComponent& component = components_[component_index(qubit)];
+    if (component.is_cell()) {
+        return ComponentKind::Cell;
+    }
+    return std::get<AmplitudeStore>(component.state).mode() == StorageMode::Sparse
+               ? ComponentKind::Sparse
+               : ComponentKind::Dense;
+}
+
 std::size_t QRegister::component_nonzero_count(QubitId qubit) const {
     const StateComponent& component = components_[component_index(qubit)];
     if (component.is_cell()) {
@@ -1097,7 +1743,8 @@ std::size_t QRegister::component_nonzero_count(QubitId qubit) const {
 
 std::size_t QRegister::estimated_bytes() const noexcept {
     std::size_t total = sizeof(*this) + qubit_component_.capacity() * sizeof(std::size_t) +
-                        components_.capacity() * sizeof(StateComponent);
+                        components_.capacity() * sizeof(StateComponent) +
+                        component_order_.capacity() * sizeof(std::uint32_t);
     for (const StateComponent& component : components_) {
         total += component.qubits.capacity() * sizeof(QubitId);
         if (!component.is_cell()) {
@@ -1113,9 +1760,10 @@ std::string QRegister::describe() const {
            << "qubits: " << qubit_count_ << "\n"
            << "components: " << components_.size() << "\n"
            << "estimated engine bytes: " << estimated_bytes() << "\n";
-    for (std::size_t index = 0; index < components_.size(); ++index) {
-        const StateComponent& component = components_[index];
-        stream << "  [" << index << "] ";
+    const auto ordered = ordered_component_indices();
+    for (std::size_t logical_index = 0; logical_index < ordered.size(); ++logical_index) {
+        const StateComponent& component = components_[ordered[logical_index]];
+        stream << "  [" << logical_index << "] ";
         if (component.is_cell()) {
             const BlochCell& cell = std::get<BlochCell>(component.state);
             stream << "geometric cell q" << component.qubits.front() << "  r=("
@@ -1146,8 +1794,19 @@ bool QRegister::validate(std::string* reason) const {
     if (components_.empty()) {
         return fail("Register has no state components");
     }
+    if (component_order_.size() != components_.size()) {
+        return fail("Component order table does not match the component store");
+    }
+    std::vector<std::uint32_t> order = component_order_;
+    std::sort(order.begin(), order.end());
+    if (std::adjacent_find(order.begin(), order.end()) != order.end()) {
+        return fail("Component order keys are not unique");
+    }
     std::vector<bool> seen(qubit_count_, false);
-    for (const StateComponent& component : components_) {
+    for (std::size_t component_index_value = 0;
+         component_index_value < components_.size();
+         ++component_index_value) {
+        const StateComponent& component = components_[component_index_value];
         if (component.qubits.empty()) {
             return fail("A state component has no qubits");
         }
@@ -1160,6 +1819,9 @@ bool QRegister::validate(std::string* reason) const {
             }
             if (seen[qubit]) {
                 return fail("A qubit appears in multiple components");
+            }
+            if (qubit_component_[qubit] != component_index_value) {
+                return fail("Qubit-to-component index does not match the component store");
             }
             seen[qubit] = true;
         }
@@ -1198,31 +1860,65 @@ std::optional<std::pair<StateComponent, StateComponent>> QRegister::factor_singl
         return std::nullopt;
     }
 
-    struct Slice {
-        QComplex zero{};
-        QComplex one{};
-    };
-    std::unordered_map<BasisIndex, Slice> slices;
     const AmplitudeStore& store = std::get<AmplitudeStore>(component.state);
-    slices.reserve(store.nonzero_count() + 1U);
     const BasisIndex mask = BasisIndex{1} << local_position_value;
-    for (const auto& [index, value] : store.entries(config_.epsilon)) {
-        Slice& slice = slices[remove_bit(index, local_position_value)];
-        if ((index & mask) == 0U) {
-            slice.zero = value;
-        } else {
-            slice.one = value;
-        }
-    }
-
     long double rho00 = 0.0L;
     long double rho11 = 0.0L;
     QComplex rho01{};
-    for (const auto& [unused, slice] : slices) {
-        (void)unused;
-        rho00 += static_cast<long double>(slice.zero.norm2());
-        rho11 += static_cast<long double>(slice.one.norm2());
-        rho01 += slice.zero * slice.one.conjugate();
+
+    struct Slice {
+        BasisIndex index{0};
+        QComplex zero{};
+        QComplex one{};
+    };
+    std::vector<Slice> sparse_slices;
+    if (store.mode_ == StorageMode::Dense) {
+        const BasisIndex rest_dimension = store.dimension_ >> 1U;
+        for (BasisIndex rest_index = 0; rest_index < rest_dimension; ++rest_index) {
+            const BasisIndex zero_index = insert_zero_bit(rest_index, local_position_value);
+            const QComplex& zero = store.dense_[static_cast<std::size_t>(zero_index)];
+            const QComplex& one = store.dense_[static_cast<std::size_t>(zero_index | mask)];
+            rho00 += static_cast<long double>(zero.norm2());
+            rho11 += static_cast<long double>(one.norm2());
+            rho01 += zero * one.conjugate();
+        }
+    } else {
+        struct ReducedEntry {
+            BasisIndex index;
+            QComplex amplitude;
+        };
+        std::vector<ReducedEntry> zeros;
+        std::vector<ReducedEntry> ones;
+        zeros.reserve(store.sparse_.size());
+        ones.reserve(store.sparse_.size());
+        for (const auto& [index, value] : store.sparse_) {
+            const ReducedEntry reduced{remove_bit(index, local_position_value), value};
+            ((index & mask) == 0U ? zeros : ones).push_back(reduced);
+        }
+        sparse_slices.reserve(zeros.size() + ones.size());
+        std::size_t zero_index = 0;
+        std::size_t one_index = 0;
+        while (zero_index < zeros.size() || one_index < ones.size()) {
+            const BasisIndex reduced_index = one_index >= ones.size()
+                                                 ? zeros[zero_index].index
+                                                 : zero_index >= zeros.size()
+                                                       ? ones[one_index].index
+                                                       : std::min(
+                                                             zeros[zero_index].index,
+                                                             ones[one_index].index);
+            Slice slice;
+            slice.index = reduced_index;
+            if (zero_index < zeros.size() && zeros[zero_index].index == reduced_index) {
+                slice.zero = zeros[zero_index++].amplitude;
+            }
+            if (one_index < ones.size() && ones[one_index].index == reduced_index) {
+                slice.one = ones[one_index++].amplitude;
+            }
+            rho00 += static_cast<long double>(slice.zero.norm2());
+            rho11 += static_cast<long double>(slice.one.norm2());
+            rho01 += slice.zero * slice.one.conjugate();
+            sparse_slices.push_back(slice);
+        }
     }
     const long double determinant = rho00 * rho11 - static_cast<long double>(rho01.norm2());
     const long double scale = std::max(1.0L, rho00 * rho11);
@@ -1243,22 +1939,34 @@ std::optional<std::pair<StateComponent, StateComponent>> QRegister::factor_singl
         return std::nullopt;
     }
 
-    std::vector<AmplitudeStore::SparseEntry> rest_entries;
-    rest_entries.reserve(slices.size());
-    for (const auto& [rest_index, slice] : slices) {
-        const QComplex numerator = use_zero ? slice.zero : slice.one;
-        const QComplex value = numerator / divisor;
-        if (value.norm2() > config_.epsilon * config_.epsilon) {
-            rest_entries.emplace_back(rest_index, value);
-        }
-    }
-
     std::vector<QubitId> rest_qubits = component.qubits;
     const QubitId extracted_qubit = rest_qubits[local_position_value];
     rest_qubits.erase(rest_qubits.begin() + static_cast<std::ptrdiff_t>(local_position_value));
     const BasisIndex rest_dimension = BasisIndex{1} << rest_qubits.size();
-    AmplitudeStore rest_store = AmplitudeStore::from_entries(
-        rest_dimension, std::move(rest_entries), config_);
+    AmplitudeStore rest_store;
+    if (store.mode_ == StorageMode::Dense) {
+        std::vector<QComplex> rest_dense(static_cast<std::size_t>(rest_dimension));
+        for (BasisIndex rest_index = 0; rest_index < rest_dimension; ++rest_index) {
+            const BasisIndex zero_index = insert_zero_bit(rest_index, local_position_value);
+            const QComplex& numerator = use_zero
+                                            ? store.dense_[static_cast<std::size_t>(zero_index)]
+                                            : store.dense_[static_cast<std::size_t>(zero_index | mask)];
+            rest_dense[static_cast<std::size_t>(rest_index)] = numerator / divisor;
+        }
+        rest_store = AmplitudeStore::from_dense(std::move(rest_dense), config_);
+    } else {
+        std::vector<AmplitudeStore::SparseEntry> rest_entries;
+        rest_entries.reserve(sparse_slices.size());
+        for (const Slice& slice : sparse_slices) {
+            const QComplex numerator = use_zero ? slice.zero : slice.one;
+            const QComplex value = numerator / divisor;
+            if (value.norm2() > config_.epsilon * config_.epsilon) {
+                rest_entries.emplace_back(slice.index, value);
+            }
+        }
+        rest_store = AmplitudeStore::from_entries(
+            rest_dimension, std::move(rest_entries), config_);
+    }
 
     StateComponent rest_component;
     rest_component.qubits = std::move(rest_qubits);
@@ -1291,14 +1999,48 @@ void QRegister::compact_component(std::size_t component_index_value) {
                 continue;
             }
             components_[component_index_value] = std::move(factor->first);
-            components_.push_back(std::move(factor->second));
-            reindex_components();
+            for (QubitId qubit : components_[component_index_value].qubits) {
+                qubit_component_[qubit] = component_index_value;
+            }
+            (void)append_component(std::move(factor->second));
             extracted = true;
             break;
         }
         if (!extracted) {
             break;
         }
+    }
+}
+
+void QRegister::compact_component_targets(
+    std::size_t component_index_value,
+    std::span<const QubitId> candidate_qubits) {
+    if (component_index_value >= components_.size()) {
+        throw QStateError("Cannot compact an invalid component");
+    }
+    for (QubitId qubit : candidate_qubits) {
+        validate_qubit(qubit);
+        const std::size_t current_index = component_index(qubit);
+        StateComponent& component = components_[current_index];
+        if (component.is_cell()) {
+            continue;
+        }
+        if (component.qubits.size() == 1U) {
+            const AmplitudeStore& store = std::get<AmplitudeStore>(component.state);
+            component.state = BlochCell::from_amplitudes(
+                store.at(0U), store.at(1U), config_.epsilon);
+            continue;
+        }
+        const std::size_t position = local_position(component, qubit);
+        auto factor = factor_singleton(component, position);
+        if (!factor.has_value()) {
+            continue;
+        }
+        components_[current_index] = std::move(factor->first);
+        for (QubitId remaining : components_[current_index].qubits) {
+            qubit_component_[remaining] = current_index;
+        }
+        (void)append_component(std::move(factor->second));
     }
 }
 
@@ -1310,4 +2052,4 @@ QRegister QRegister::decode_qsc(std::span<const std::uint8_t> bytes) {
     return QStateCodec::decode(bytes);
 }
 
-}  // namespace qubit
+} 
