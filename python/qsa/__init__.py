@@ -13,9 +13,9 @@ from typing import Optional
 __version__ = "0.1.6"
 
 class QubitNativeError(RuntimeError):
+    pass
 
 class _CallableInt(int):
-
     def __call__(self) -> int:
         return int(self)
 
