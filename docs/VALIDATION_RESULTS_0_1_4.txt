@@ -1,0 +1,32 @@
+QSA 0.1.4 VALIDATION RESULTS
+Date: 2026-07-24
+
+PASS: optimized Release suite 8/8
+PASS: portable Release suite 8/8
+PASS: native ASan/UBSan suite 4/4
+PASS: 14,400-operation independent NumPy differential validation
+PASS: 200 randomized Grover searches / 41,500 amplitude checks
+PASS: exact QRegister Grover against compressed and dense references
+PASS: 10,000-iteration Grover fast-forward equivalence
+PASS: 60-qubit count-only Grover constant-memory validation
+PASS: QSC v1 frozen fixtures and Grover dense-state round trip
+PASS: QSA 0.1.4 wrapper against QSA 0.1.3 native library
+PASS: QSA 0.1.4 wrapper against QSA 0.1.0 native library
+PASS: canonical qsa and legacy qubit_native Python interfaces
+
+Measured 16-qubit optimal search (201 iterations):
+QSA 0.1.0-era dense path: 20.682477 ms
+QSA 0.1.3 dense path:     20.974312 ms
+QSA 0.1.4 QRegister:      16.165133 ms
+QSA 0.1.4 compressed:      0.098901 us
+
+Compressed speedup versus original QSA-era dense path: 209,123.03x
+Compressed speedup versus QSA 0.1.3 dense path:       212,073.81x
+Compressed memory reduction at 16 qubits:              10,922.67x
+
+60-qubit count-only search:
+Logical states: 1,152,921,504,606,846,976
+Optimal iterations fast-forwarded: 843,314,856
+Engine memory: 88 bytes
+Dense complex128 equivalent: 18,446,744,073,709,551,616 bytes (16 EiB)
+Amortized create/fast-forward/read: 0.356574 us

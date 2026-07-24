@@ -1,0 +1,19 @@
+metric,value,unit,notes
+qsa_0_1_0_external_dense_full,20682.477,microseconds,Original QSA had no native Grover primitive; H-state materialization plus dense exact oracle/diffusion
+qsa_0_1_3_external_dense_full,20974.312,microseconds,Immediate prior QSA had no native Grover primitive; H-state materialization plus dense exact oracle/diffusion
+qsa_0_1_4_dense_reference_full,15890.008,microseconds,Conventional explicit dense amplitude reference
+qsa_0_1_4_qregister_exact_full,16165.133,microseconds,Exact interoperable QRegister Grover path
+qsa_0_1_4_compressed_full,0.098901,microseconds,Exact two-amplitude-class Grover path with explicit marked-index validation
+compressed_vs_qsa_0_1_0,209123.0321230321,x,Measured end-to-end speedup versus original QSA-era dense path
+compressed_vs_qsa_0_1_3,212073.81118492232,x,Measured end-to-end speedup versus immediate prior QSA path
+compressed_vs_dense_reference,160665.79711024155,x,Measured end-to-end speedup
+qregister_exact_vs_qsa_0_1_0,1.2794498504899403,x,Measured end-to-end speedup versus original QSA-era dense path
+qregister_exact_vs_qsa_0_1_3,1.2975032126243564,x,Measured end-to-end speedup versus immediate prior QSA path
+dense_16_memory,1048576,bytes,65536 complex double amplitudes
+compressed_16_memory,96,bytes,GroverSearch with one explicit marked index
+compressed_16_memory_reduction,10922.666666666666,x,Measured engine representation comparison
+logical_60_states,1152921504606846976,states,Count-only symmetry-compressed search
+logical_60_optimal_iterations,843314856,iterations,Fast-forwarded through two-dimensional rotation power
+logical_60_fast_forward,0.356574,microseconds,Median amortized full create/fast-forward/read cycle over 100000 searches
+logical_60_compressed_memory,88,bytes,Count-only engine representation
+logical_60_dense_memory,18446744073709551616,bytes,Theoretical complex128 dense statevector

@@ -1,24 +1,56 @@
-Qubit Native State Engine v0.1.0 validation results
-Date: 2026-07-13
+Qubit State Algebra v0.1.2 validation results
+Date: 2026-07-23
 
-Native tests:
-100% tests passed, 0 tests failed out of 1
+Release compatibility suite:
+5/5 tests passed
+- Native C++ engine
+- Stable and additive C ABI
+- Canonical qsa Python API
+- Legacy qubit_native Python API
+- Machine-readable 0.1 compatibility manifest
+
+New regression coverage:
+- 1,000 independent Bell pairs
+- Inverse CNOT component recovery
+- Stable swap-pop component indexing
+- Frozen multi-component QSC v1 ordering packet
 
 Sanitizers:
-AddressSanitizer + UndefinedBehaviorSanitizer passed
+ASan + UBSan compatibility suite: 5/5 passed
+Native leak detection: passed
+Python interpreter leak detection disabled for unrelated host-runtime shutdown allocations
 
 Differential validation:
-120 circuits x 120 random gates passed against independent NumPy statevector reference
+120 circuits x 120 random gates passed against an independent NumPy statevector
+reference at the established global-phase-invariant fidelity threshold
+
+Frozen persistence contract:
+Two QSC v1 fixtures decoded and re-encoded byte-for-byte
+0.1.2 construction reproduced the multi-component packet emitted by 0.1.1
+
+Native median hot-path speedups versus commit 555a7b7:
+1,000 Bell pairs: 29.11x
+20,000 sparse Rz gates: 5.00x
+2,000 sparse CNOT gates: 6.11x
+2,000 sparse Ry gates on 2,048 support: 9.10x
+20 dense CNOT gates on 65,536 amplitudes: 104.64x
+20 dense Ry gates on 65,536 amplitudes: 3.11x
+
+Python bridge benchmark:
+50,000 scalar calls: 35.073 ms
+50,000-operation compiled plan: 0.328 ms
+Bridge-overhead reduction: 106.87x
 
 Structured-state benchmark:
-10,000 independent qubits    components=10000  engine-memory=1.03 MiB
-50-qubit exact GHZ           components=1      engine-memory=5.60 KiB
-100 independent Bell pairs   components=100    engine-memory=25.88 KiB
+10,000 independent qubits    components=10000  engine-memory=1.07 MiB
+50-qubit exact GHZ           components=1      engine-memory=5.83 KiB
+100 independent Bell pairs  components=100    engine-memory=26.69 KiB
 
-GHZ memory comparison:
-20 qubits: QSA 2.32 KiB vs dense complex128 16.00 MiB
-30 qubits: QSA 3.41 KiB vs dense complex128 16.00 GiB
-40 qubits: QSA 4.51 KiB vs dense complex128 16.00 TiB
-50 qubits: QSA 5.60 KiB vs dense complex128 16.00 PiB
+Backward wrapper compatibility:
+0.1.2 Python wrapper against original 0.1.0 native library: passed
 
-Boundary: these results apply to mathematically structured states. Arbitrary highly entangled states can still require exponential storage.
+Extended differential stress:
+300 circuits x 300 random gates (90,000 operations): passed
+
+Local wheel limitation:
+Runner package index did not provide scikit-build-core; failure occurred before compilation

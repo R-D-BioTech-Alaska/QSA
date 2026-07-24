@@ -1,0 +1,25 @@
+QSA 0.1.6 validation results
+Date: 2026-07-24
+
+PASS: Full optimized Release build
+PASS: 12/12 optimized Release tests
+PASS: 12/12 portable Release tests
+PASS: 6/6 ASan/UBSan native tests
+PASS: CMake install package
+PASS: Independent installed C++ consumer using QSA::qstate_core
+PASS: Independent installed C consumer using QSA::qstate
+PASS: Lean wheel-equivalent install contains only qsa/libqstate.so
+PASS: Version synchronization across VERSION, Python, native, CMake, package, README, and citation metadata
+PASS: QSA 0.1 compatibility manifest
+PASS: Frozen QSC v1 fixtures
+PASS: Adversarial QSC truncation and corruption suite
+PASS: Current wrapper with QSA 0.1.0, 0.1.3, 0.1.4, and 0.1.5 native libraries
+PASS: 14,400-operation independent NumPy differential validation
+PASS: 200 randomized Grover searches and 41,500 amplitude checks
+PASS: 20,000 symmetry operations and 39,272 amplitude checks
+PASS: Local Markdown link validation
+PASS: YAML-family metadata parse
+
+Local wheel generation was not run because scikit-build-core, build, and wheel
+were unavailable in the runner. GitHub Actions now builds, checks, installs, and
+smoke-tests the generated wheel and source distribution.

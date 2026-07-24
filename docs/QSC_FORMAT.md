@@ -55,6 +55,12 @@ Three `f64` values: `x`, `y`, `z`.
 
 The final `u64` is an FNV-1a checksum over every preceding byte.
 
+The checksum detects accidental corruption. It is not a cryptographic message
+authentication code and must not be treated as proof that a packet came from a
+trusted QELM Base or Qubit node. Network transports must authenticate and bind
+the payload separately, and callers should enforce an external maximum packet
+size before decoding untrusted data.
+
 ## Network direction
 
 QSC is intentionally self-describing enough to become a Qubit-node channel payload. A later network envelope can add:

@@ -1,0 +1,40 @@
+QSA 0.1.5 validation results
+============================
+
+PASS: optimized native Release suite, 10/10 tests
+PASS: portable native Release suite, 10/10 tests
+PASS: ASan/UBSan native suite, 5/5 tests
+PASS: independent NumPy differential validation, 14,400 randomized gates
+PASS: Grover differential validation, 200 randomized searches and 41,500 amplitude checks
+PASS: symmetry differential validation, 20,000 operations and 39,272 amplitude checks
+PASS: frozen QSA 0.1 contract manifest
+PASS: frozen QSC v1 byte fixtures
+PASS: canonical qsa and historical qubit_native Python imports
+PASS: QSA 0.1.5 wrapper compatibility with QSA 0.1.0, 0.1.3, and 0.1.4 native libraries
+PASS: old native libraries reject only SymmetryState with a clear ABI 1.5 requirement
+PASS: no compiler warnings in optimized, portable, or sanitizer builds
+
+Performance medians, nine native runs
+-------------------------------------
+20-qubit dense class reference, 1,000 iterations: 262.147439 ms
+20-qubit symmetry literal, 1,000 iterations: 0.677441 ms
+20-qubit symmetry fast-forward, 1,000 iterations: 0.002004949 ms
+Literal symmetry improvement: 386.967188287x
+Fast-forward symmetry improvement: 130750.178184x
+Dense memory: 16777216 bytes
+Symmetry memory: 392 bytes
+Memory reduction: 42799.020408163x
+Automatic discovery of 20-qubit uniform state: 63.807130 ms
+60-qubit Hamming-weight state, 100,000 operations: 9.328595 ms
+60-qubit Hamming-weight engine memory: 1592 bytes
+
+Grover regression medians, QSA 0.1.4 versus 0.1.5
+-------------------------------------------------
+Dense exact: 15747.481 us -> 15662.166 us
+QRegister exact: 16388.199 us -> 15577.722 us
+Compressed exact: 0.098773 us -> 0.100665 us
+60-qubit compressed fast-forward: 0.357158 us -> 0.359606 us
+
+The compressed differences are below 2% at nanosecond scale and do not indicate
+a material regression. QSA 0.1.5 adds symmetry as an isolated additive handle;
+existing QRegister, Grover, plan, C ABI, Python, and QSC v1 behavior remain intact.

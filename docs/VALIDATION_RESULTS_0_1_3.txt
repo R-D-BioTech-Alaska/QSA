@@ -1,0 +1,34 @@
+QSA 0.1.3 VALIDATION RESULTS
+Date: 2026-07-24
+
+Environment
+- CMake 3.31.6
+- GCC 14.2.0
+- Python 3.13.5
+- Linux x86-64
+
+PASS: Native-architecture Release build, 6/6 tests
+PASS: Portable Release build, 6/6 tests
+PASS: ASan/UBSan native build, 3/3 tests
+PASS: Independent NumPy differential validation, 14,400 random gates
+PASS: Random plan optimizer equivalence, 250 trials x 80 operations
+PASS: Frozen QSC v1 sparse fixture byte-for-byte round trip
+PASS: Frozen QSC v1 component-order fixture byte-for-byte round trip
+PASS: QSA 0.1.2 native-library fallback through QSA 0.1.3 Python wrapper
+PASS: QSA 0.1.0 native-library fallback through QSA 0.1.3 Python wrapper
+PASS: Clean installed-layout canonical and legacy imports
+PASS: Parameterized parallel plan execution in installed layout
+
+Median measured improvements
+- Native adjacent-operation fusion: 156.85x
+- Native diagonal-layer fusion: 31.23x
+- Native 256-register ensemble: 2.99x
+- Python scalar calls to optimized plan: 629.61x
+- Python structured bulk readout: 9.06x
+- Python parameter sweep: 2.09x
+- Python 256-register ensemble: 2.76x
+
+Packaging note
+- Wheel generation was not completed because the isolated package index did
+  not provide scikit-build-core>=0.10. Source compilation was not reached in
+  that failed packaging attempt.

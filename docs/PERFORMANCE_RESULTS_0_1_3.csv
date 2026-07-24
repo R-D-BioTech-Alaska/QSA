@@ -1,0 +1,8 @@
+benchmark,source_or_registers,compiled_steps_or_workers,literal_or_serial_ms,optimized_or_parallel_ms,speedup
+single_qubit_plan_fusion,20002,3,0.231510,0.001476,156.85
+diagonal_layer_fusion,640,1,38.146483,1.221429,31.23
+parallel_register_ensemble,256,5,54.198906,18.128704,2.99
+python_operation_plan,50000,3,31.742000,0.051000,629.61
+python_structured_bulk_readout,4096,1,60.929000,6.955000,9.06
+python_parameter_sweep,300,2,20.825000,10.074000,2.09
+python_parallel_ensemble,256,5,19.654000,7.180000,2.76
