@@ -1,8 +1,9 @@
 #include "qubit/qstate.hpp"
-
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,36 @@ void test_non_entangling_gate_compacts() {
     require(state.amplitude(3).norm2() > 1.0 - 1e-12, "state must be |11>");
 }
 
+void test_inverse_two_qubit_gate_recovers_cells() {
+    qubit::QRegister state(2);
+    state.apply_h(0);
+    state.apply_cnot(0, 1);
+    require(state.component_count() == 1, "Bell pair must be entangled before inversion");
+    state.apply_cnot(0, 1);
+    require(state.component_count() == 2,
+            "inverse CNOT must recover the original independent cells");
+    require_near(state.probability_one(0), 0.5, 1e-12, "recovered control probability");
+    require_near(state.probability_one(1), 0.0, 1e-12, "recovered target probability");
+    require(state.validate(), "inverse-gate compaction must validate");
+}
+
+void test_large_independent_bell_pairs() {
+    constexpr std::size_t pairs = 1'000;
+    qubit::QRegister state(pairs * 2U);
+    for (std::size_t pair = 0; pair < pairs; ++pair) {
+        const auto first = static_cast<qubit::QubitId>(pair * 2U);
+        state.apply_h(first);
+        state.apply_cnot(first, first + 1U);
+    }
+    require(state.component_count() == pairs,
+            "independent Bell pairs must remain separate stable components");
+    require(state.component_size(0) == 2U, "first Bell pair component width");
+    require(state.component_size(1999) == 2U, "last Bell pair component width");
+    require_near(state.probability_one(0), 0.5, 1e-12, "first Bell pair probability");
+    require_near(state.probability_one(1999), 0.5, 1e-12, "last Bell pair probability");
+    require(state.validate(), "large stable-component register must validate");
+}
+
 void test_sparse_ghz() {
     constexpr std::size_t qubits = 40;
     qubit::QRegister state(qubits);
@@ -123,6 +154,53 @@ void test_qsc_roundtrip() {
     require(rejected, "QSC checksum must reject corrupted data");
 }
 
+void test_qsc_v1_frozen_fixture() {
+    const std::string path = std::string(QSA_TEST_SOURCE_DIR) +
+                             "/tests/fixtures/qsc_v1_sparse_exact.bin";
+    std::ifstream input(path, std::ios::binary);
+    require(static_cast<bool>(input), "QSC v1 fixture must be readable");
+    const std::vector<std::uint8_t> bytes{
+        std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    require(!bytes.empty(), "QSC v1 fixture must not be empty");
+
+    qubit::QRegister restored = qubit::QRegister::decode_qsc(bytes);
+    require(restored.qubit_count() == 2U, "QSC v1 fixture qubit count");
+    require(restored.component_count() == 1U, "QSC v1 fixture component count");
+    require(restored.component_kind(0) == qubit::ComponentKind::Sparse,
+            "QSC v1 fixture storage kind");
+    require(restored.component_nonzero_count(0) == 1U, "QSC v1 fixture support");
+    require_near(restored.amplitude(0).re, 1.0, 1e-12, "QSC v1 fixture amplitude");
+    require(restored.encode_qsc() == bytes, "QSC v1 bytes must remain stable");
+}
+
+void test_qsc_v1_component_order_fixture() {
+    const std::string path = std::string(QSA_TEST_SOURCE_DIR) +
+                             "/tests/fixtures/qsc_v1_component_order_exact.bin";
+    std::ifstream input(path, std::ios::binary);
+    require(static_cast<bool>(input), "QSC component-order fixture must be readable");
+    const std::vector<std::uint8_t> expected{
+        std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    require(!expected.empty(), "QSC component-order fixture must not be empty");
+
+    qubit::QRegister state(8);
+    state.apply_h(0);
+    state.apply_cnot(0, 3);
+    state.apply_h(1);
+    state.apply_cnot(1, 6);
+    state.apply_x(2);
+    state.apply_cnot(2, 5);
+    state.apply_ry(4, 0.31);
+    state.apply_rz(3, -0.82);
+    (void)state.measure(1, 0.75);
+
+    require(state.encode_qsc() == expected,
+            "swap-pop component storage must preserve historical QSC ordering");
+    qubit::QRegister restored = qubit::QRegister::decode_qsc(expected);
+    require(restored.encode_qsc() == expected,
+            "decoded component-order fixture must re-encode byte-for-byte");
+    require(restored.validate(), "component-order fixture must validate");
+}
+
 void test_trajectory_noise() {
     qubit::QRegister state(1);
     state.apply_x(0);
@@ -135,14 +213,18 @@ void test_trajectory_noise() {
     require_near(state.probability_one(0), 1.0, 1e-12, "H-Z-H must act as X");
 }
 
-}  // namespace
+} 
 
 int main() {
     test_geometric_cells();
     test_bell_state_and_measurement();
     test_non_entangling_gate_compacts();
+    test_inverse_two_qubit_gate_recovers_cells();
+    test_large_independent_bell_pairs();
     test_sparse_ghz();
     test_qsc_roundtrip();
+    test_qsc_v1_frozen_fixture();
+    test_qsc_v1_component_order_fixture();
     test_trajectory_noise();
     std::cout << "All Qubit Native State Engine tests passed.\n";
     return 0;
