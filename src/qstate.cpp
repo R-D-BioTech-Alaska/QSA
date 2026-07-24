@@ -1,4 +1,5 @@
 #include "qubit/qstate.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -76,7 +77,7 @@ struct SplitMix64 {
     }
 };
 
-} 
+}  // namespace
 
 namespace gates {
 
@@ -163,7 +164,7 @@ QMatrix4 swap() {
     return matrix;
 }
 
-} 
+}  // namespace gates
 
 void BlochCell::normalize(double epsilon) {
     const double length = std::sqrt(x * x + y * y + z * z);
@@ -1193,6 +1194,9 @@ std::size_t QRegister::merge_components(std::size_t first, std::size_t second) {
         throw QStateError("Entangled component exceeds configured qubit limit");
     }
 
+    // Component width is capped at 62, while a register may contain millions of
+    // independent qubits. Keep remapping local to the two components instead of
+    // allocating a register-width lookup table for every merge.
     std::vector<std::size_t> left_positions(left.qubits.size());
     std::vector<std::size_t> right_positions(right.qubits.size());
     std::size_t left_cursor = 0;
@@ -2052,4 +2056,4 @@ QRegister QRegister::decode_qsc(std::span<const std::uint8_t> bytes) {
     return QStateCodec::decode(bytes);
 }
 
-} 
+}  // namespace qubit

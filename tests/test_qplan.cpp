@@ -1,5 +1,6 @@
 #include "qubit/qplan.hpp"
 #include "qubit/qstate.hpp"
+
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -206,7 +207,7 @@ void test_parameterized_plan() {
     }
 }
 
-} 
+}  // namespace
 
 int main() {
     test_fusion_equivalence();

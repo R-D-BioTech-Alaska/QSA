@@ -1,3 +1,10 @@
+"""Python control layer for the Qubit State Algebra native engine.
+
+The numerical core remains in dependency-free C++20. This module intentionally
+avoids NumPy and preserves both the canonical ``qsa`` API and the historical
+``qubit_native`` calling conventions.
+"""
+
 from __future__ import annotations
 
 import ctypes
@@ -5,19 +12,23 @@ import os
 import random
 import sys
 import threading
-
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
 __version__ = "0.1.6"
 
+
 class QubitNativeError(RuntimeError):
-    pass
+    """Raised when the native QSA engine rejects an operation."""
+
 
 class _CallableInt(int):
+    """Integer value that also supports the historical ``value()`` form."""
+
     def __call__(self) -> int:
         return int(self)
+
 
 def _library_names() -> tuple[str, ...]:
     if sys.platform.startswith("win"):
@@ -26,8 +37,10 @@ def _library_names() -> tuple[str, ...]:
         return ("libqstate.dylib",)
     return ("libqstate.so",)
 
+
 def _explicit_library_path(path: Optional[str]) -> Optional[str]:
     return path or os.environ.get("QSA_NATIVE_LIB") or os.environ.get("QUBIT_NATIVE_LIB")
+
 
 def _load_library(path: Optional[str] = None) -> ctypes.CDLL:
     candidates: list[Path] = []
@@ -65,6 +78,7 @@ def _load_library(path: Optional[str] = None) -> ctypes.CDLL:
         + "\n".join(failures)
     )
 
+
 class _NativeOperation(ctypes.Structure):
     _fields_ = [
         ("opcode", ctypes.c_uint32),
@@ -74,6 +88,7 @@ class _NativeOperation(ctypes.Structure):
         ("parameter", ctypes.c_double),
         ("sample", ctypes.c_double),
     ]
+
 
 class _NativeParameterizedOperation(ctypes.Structure):
     _fields_ = [
@@ -87,7 +102,9 @@ class _NativeParameterizedOperation(ctypes.Structure):
         ("sample_slot", ctypes.c_int32),
     ]
 
+
 class Parameter:
+    """Named numeric slot used by :class:`ParameterizedPlan`."""
 
     __slots__ = ("name",)
 
@@ -105,6 +122,7 @@ class Parameter:
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Parameter) and self.name == other.name
+
 
 _OPERATION_CODES = {
     "x": 1,
@@ -127,7 +145,9 @@ _OPERATION_CODES = {
     "amplitude_damping_trajectory": 18,
 }
 
+
 class OperationPlan:
+    """Reusable operation sequence with optional native fusion and ensembles."""
 
     def __init__(self, operations: object, *, optimize: bool = True) -> None:
         normalized: list[tuple[object, ...]] = []
@@ -201,6 +221,7 @@ class OperationPlan:
             return native_handle
 
     def compiled_step_count(self, register: "QubitRegister") -> int:
+        """Return the native step count after fusion for this runtime."""
         register._ensure_open()
         native = self._native_handle(register._bindings)
         if native is None:
@@ -213,6 +234,7 @@ class OperationPlan:
         *,
         workers: int = 0,
     ) -> list["QubitRegister"]:
+        """Execute this immutable plan across independent registers in parallel."""
         states = list(registers)
         if not states:
             return states
@@ -262,7 +284,9 @@ class OperationPlan:
         except Exception:
             pass
 
+
 class ParameterizedPlan:
+    """Reusable circuit template with numeric values bound at execution time."""
 
     def __init__(self, operations: object, *, optimize: bool = True) -> None:
         names: list[str] = []
@@ -345,6 +369,7 @@ class ParameterizedPlan:
     def __len__(self) -> int:
         return self.count
 
+    @property
     def parameter_count(self) -> int:
         return len(self.parameter_names)
 
@@ -389,6 +414,7 @@ class ParameterizedPlan:
             self._native_handles[key] = (bindings, native_handle)
             return native_handle
 
+    @staticmethod
     def _value_buffer(values: tuple[float, ...]) -> object:
         array_type = ctypes.c_double * len(values)
         return array_type(*values)
@@ -471,6 +497,7 @@ class ParameterizedPlan:
             self.close()
         except Exception:
             pass
+
 
 class _Bindings:
     def __init__(self, library_path: Optional[str] = None) -> None:
@@ -706,6 +733,7 @@ class _Bindings:
                 self.lib.qstate_grover_description_write.argtypes = [handle, ctypes.c_char_p, size]
                 self.lib.qstate_grover_description_write.restype = ctypes.c_int
 
+
             self.has_symmetry_api = hasattr(self.lib, "qstate_symmetry_create_ordered")
             if self.has_symmetry_api:
                 self.lib.qstate_symmetry_create_ordered.argtypes = [size, u64_p, size]
@@ -832,14 +860,17 @@ class _Bindings:
                 f"{operation} requires QSA native ABI 1.5 or newer; an older library was loaded"
             )
 
+
 _BINDINGS: dict[str, _Bindings] = {}
 _BINDINGS_LOCK = threading.Lock()
+
 
 def _bindings_key(path: Optional[str]) -> str:
     explicit = _explicit_library_path(path)
     if explicit:
         return str(Path(explicit).expanduser().resolve())
     return "<automatic>"
+
 
 def _get_bindings(path: Optional[str] = None) -> _Bindings:
     key = _bindings_key(path)
@@ -850,7 +881,15 @@ def _get_bindings(path: Optional[str] = None) -> _Bindings:
             _BINDINGS[key] = bindings
         return bindings
 
+
 class GroverSearch:
+    """Exact symmetry-compressed Grover search.
+
+    Standard Grover evolution keeps every marked state at one shared amplitude
+    and every unmarked state at another. This class stores those two amplitude
+    classes, so ideal Grover searches can represent enormous logical spaces
+    without allocating a dense ``2**qubits`` statevector.
+    """
 
     def __init__(
         self,
@@ -883,6 +922,7 @@ class GroverSearch:
             self._explicit_marked = tuple(sorted(marked))
         self._closed = False
 
+    @classmethod
     def from_marked_count(
         cls,
         qubits: int,
@@ -953,30 +993,37 @@ class GroverSearch:
         self._bindings.check(self._bindings.lib.qstate_grover_run_optimal(self._handle))
         return self
 
+    @property
     def qubit_count(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_grover_qubit_count(self._handle))
 
+    @property
     def space_size(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_grover_space_size(self._handle))
 
+    @property
     def marked_count(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_grover_marked_count(self._handle))
 
+    @property
     def iteration_count(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_grover_iteration_count(self._handle))
 
+    @property
     def optimal_iterations(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_grover_optimal_iterations(self._handle))
 
+    @property
     def estimated_bytes(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_grover_estimated_bytes(self._handle))
 
+    @property
     def has_explicit_marked_indices(self) -> bool:
         self._ensure_open()
         result = int(
@@ -986,6 +1033,7 @@ class GroverSearch:
             raise QubitNativeError(self._bindings.error())
         return bool(result)
 
+    @property
     def success_probability(self) -> float:
         self._ensure_open()
         result = ctypes.c_double()
@@ -1006,9 +1054,11 @@ class GroverSearch:
         )
         return complex(real.value, imag.value)
 
+    @property
     def marked_amplitude(self) -> complex:
         return self._amplitude_call("qstate_grover_marked_amplitude")
 
+    @property
     def unmarked_amplitude(self) -> complex:
         return self._amplitude_call("qstate_grover_unmarked_amplitude")
 
@@ -1048,7 +1098,16 @@ class GroverSearch:
         )
         return output.value.decode("utf-8")
 
+
+
 class SymmetryState:
+    """Exact amplitude-class state for symmetric quantum evolution.
+
+    Each class represents any number of basis states that currently share one
+    amplitude. Class-space operations evolve those amplitudes without creating
+    a dense ``2**qubits`` array. ``to_register`` is the safe exact fallback for
+    operations that no longer preserve the supplied class partition.
+    """
 
     _MEMBERSHIP_NAMES = {
         0: "count_only",
@@ -1090,6 +1149,7 @@ class SymmetryState:
             self._handle = ctypes.c_void_p(handle)
         self._closed = False
 
+    @classmethod
     def from_counts(
         cls,
         qubits: int,
@@ -1099,6 +1159,7 @@ class SymmetryState:
     ) -> "SymmetryState":
         return cls(qubits, class_counts, count_only=True, library_path=library_path)
 
+    @classmethod
     def from_labels(
         cls,
         qubits: int,
@@ -1120,12 +1181,14 @@ class SymmetryState:
             raise QubitNativeError(bindings.error())
         return cls(qubits, (), _bindings=bindings, _handle=handle)
 
+    @classmethod
     def hamming_weight(
         cls,
         qubits: int,
         *,
         library_path: Optional[str] = None,
     ) -> "SymmetryState":
+        """Create the exact permutation-invariant Hamming-weight partition."""
         bindings = _get_bindings(library_path)
         bindings.require_symmetry("SymmetryState.hamming_weight")
         handle = bindings.lib.qstate_symmetry_create_hamming_weight(int(qubits))
@@ -1133,6 +1196,7 @@ class SymmetryState:
             raise QubitNativeError(bindings.error())
         return cls(int(qubits), (), _bindings=bindings, _handle=handle)
 
+    @classmethod
     def from_register(
         cls,
         register: "QubitRegister",
@@ -1141,6 +1205,12 @@ class SymmetryState:
         tolerance: float = 0.0,
         max_classes: int = 1_000_000,
     ) -> "SymmetryState":
+        """Discover amplitude classes in an existing register.
+
+        ``tolerance=0`` performs bit-exact discovery. A nonzero tolerance is
+        explicit bounded approximation; the resulting maximum change is
+        available through :attr:`discovery_error`.
+        """
         register._ensure_open()
         bindings = register._bindings
         bindings.require_symmetry("SymmetryState.from_register")
@@ -1177,6 +1247,7 @@ class SymmetryState:
         except Exception:
             pass
 
+    @staticmethod
     def _complex_arrays(values: object) -> tuple[object, object, int]:
         entries = tuple(complex(value) for value in values)
         array_type = ctypes.c_double * len(entries)
@@ -1251,6 +1322,7 @@ class SymmetryState:
         return self
 
     def split_class(self, class_index: int, first_count: int) -> int:
+        """Split one equivalence class without materializing the state."""
         self._ensure_open()
         result = ctypes.c_size_t()
         self._bindings.check(
@@ -1261,6 +1333,7 @@ class SymmetryState:
         return int(result.value)
 
     def merge_equivalent(self, *, tolerance: float = 1e-12) -> int:
+        """Merge amplitude classes that have become numerically equivalent."""
         self._ensure_open()
         result = ctypes.c_size_t()
         self._bindings.check(
@@ -1298,18 +1371,22 @@ class SymmetryState:
         )
         return self
 
+    @property
     def qubit_count(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_symmetry_qubit_count(self._handle))
 
+    @property
     def space_size(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_symmetry_space_size(self._handle))
 
+    @property
     def class_count(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_symmetry_class_count(self._handle))
 
+    @property
     def membership(self) -> str:
         self._ensure_open()
         value = int(self._bindings.lib.qstate_symmetry_membership_mode(self._handle))
@@ -1317,10 +1394,12 @@ class SymmetryState:
             raise QubitNativeError(self._bindings.error())
         return self._MEMBERSHIP_NAMES.get(value, f"unknown_{value}")
 
+    @property
     def estimated_bytes(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_symmetry_estimated_bytes(self._handle))
 
+    @property
     def discovery_error(self) -> float:
         self._ensure_open()
         result = ctypes.c_double()
@@ -1430,7 +1509,9 @@ class SymmetryState:
         )
         return output.value.decode("utf-8")
 
+
 class QubitRegister:
+    """Adaptive qubit-native register backed by the compiled QSA engine."""
 
     def __init__(
         self,
@@ -1527,6 +1608,11 @@ class QubitRegister:
         return self._call("swap", first, second)
 
     def grover_oracle(self, marked_indices: object) -> "QubitRegister":
+        """Apply an exact full-register phase oracle.
+
+        This opt-in operation may promote the register to one dense component.
+        Use :class:`GroverSearch` for symmetry-compressed ideal Grover search.
+        """
         self._ensure_open()
         self._bindings.require_grover("grover_oracle")
         marked = (int(marked_indices),) if isinstance(marked_indices, int) else tuple(
@@ -1544,6 +1630,7 @@ class QubitRegister:
         return self
 
     def grover_diffusion(self) -> "QubitRegister":
+        """Apply exact inversion about the global mean amplitude."""
         self._ensure_open()
         self._bindings.require_grover("grover_diffusion")
         self._bindings.check(
@@ -1556,6 +1643,7 @@ class QubitRegister:
         marked_indices: object,
         count: int = 1,
     ) -> "QubitRegister":
+        """Apply exact full-register Grover iterations using dense amplitudes."""
         self._ensure_open()
         self._bindings.require_grover("grover_iterations")
         if count < 0:
@@ -1590,10 +1678,17 @@ class QubitRegister:
         self._bindings.require_extended("amplitude_damping_trajectory")
         return self._call("amplitude_damping_trajectory", qubit, gamma, sample)
 
+    @staticmethod
     def compile_operations(operations: object, *, optimize: bool = True) -> OperationPlan:
         return OperationPlan(operations, optimize=optimize)
 
     def apply_batch(self, operations: object) -> "QubitRegister":
+        """Apply an ordered sequence with one native call.
+
+        Pass an :class:`OperationPlan` when the same circuit is executed more
+        than once so Python parsing and native-buffer construction happen only
+        during plan compilation.
+        """
         self._ensure_open()
         plan = operations if isinstance(operations, OperationPlan) else OperationPlan(operations)
         if len(plan) == 0:
@@ -1628,6 +1723,7 @@ class QubitRegister:
     def apply_plan(self, plan: OperationPlan) -> "QubitRegister":
         return self.apply_batch(plan)
 
+    @staticmethod
     def apply_plan_many(
         registers: object,
         plan: OperationPlan,
@@ -1643,6 +1739,7 @@ class QubitRegister:
     ) -> "QubitRegister":
         return plan.apply(self, values)
 
+    @staticmethod
     def apply_parameterized_plan_many(
         registers: object,
         plan: ParameterizedPlan,
@@ -1661,6 +1758,7 @@ class QubitRegister:
         return float(result.value)
 
     def probabilities_one(self) -> list[float]:
+        """Return all |1> populations with one native component traversal."""
         self._ensure_open()
         count = int(self.qubit_count)
         if not self._bindings.has_bulk_probability_api:
@@ -1723,14 +1821,17 @@ class QubitRegister:
         )
         return complex(real.value, imag.value)
 
+    @property
     def qubit_count(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_qubit_count(self._handle))
 
+    @property
     def component_count(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_component_count(self._handle))
 
+    @property
     def estimated_bytes(self) -> _CallableInt:
         self._ensure_open()
         return _CallableInt(self._bindings.lib.qstate_estimated_bytes(self._handle))
@@ -1759,12 +1860,14 @@ class QubitRegister:
         self._bindings.check(self._bindings.lib.qstate_validate(self._handle))
         return True
 
+    @property
     def native_version(self) -> str:
         if not self._bindings.has_extended_api:
             return "0.1.0-compatible"
         raw = self._bindings.lib.qstate_version_string()
         return raw.decode("ascii", errors="replace") if raw else "unknown"
 
+    @property
     def abi_version(self) -> tuple[int, int, int]:
         if not self._bindings.has_extended_api:
             return (1, 0, 0)
@@ -1798,6 +1901,7 @@ class QubitRegister:
     def save_qsc(self, path: str | os.PathLike[str]) -> None:
         Path(path).write_bytes(self.encode_qsc())
 
+    @classmethod
     def decode_qsc(
         cls,
         data: bytes,
@@ -1815,6 +1919,7 @@ class QubitRegister:
         qubits = int(bindings.lib.qstate_qubit_count(handle))
         return cls(qubits, _bindings=bindings, _handle=handle)
 
+    @classmethod
     def load_qsc(
         cls,
         path: str | os.PathLike[str],
@@ -1823,6 +1928,8 @@ class QubitRegister:
     ) -> "QubitRegister":
         return cls.decode_qsc(Path(path).read_bytes(), library_path=library_path)
 
+
+# C++ naming and historical Python-module compatibility aliases.
 QRegister = QubitRegister
 
 __all__ = [

@@ -8,6 +8,8 @@
 
 namespace qubit {
 
+// QComplex is deliberately owned by the Qubit engine.  The core does not
+// depend on NumPy, std::complex, BLAS, or an external quantum SDK.
 struct QComplex {
     double re{0.0};
     double im{0.0};
@@ -125,4 +127,4 @@ struct QComplex {
 
 inline constexpr QComplex QI{0.0, 1.0};
 
-} 
+}  // namespace qubit

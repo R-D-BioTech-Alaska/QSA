@@ -4,6 +4,7 @@
 #include "qubit/qsymmetry.hpp"
 #include "qubit/qstate.hpp"
 #include "qubit/version.h"
+
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -242,7 +243,7 @@ qubit::ParameterizedOperation convert_parameterized_operation(
     };
 }
 
-} 
+}  // namespace
 
 extern "C" {
 
@@ -811,6 +812,7 @@ int qstate_parameterized_plan_execute_many(
     });
 }
 
+
 int qstate_apply_grover_oracle(
     qstate_handle handle,
     const uint64_t* marked_indices,
@@ -1086,6 +1088,7 @@ int qstate_grover_description_write(
     });
 }
 
+
 qstate_symmetry_handle qstate_symmetry_create_ordered(
     size_t qubit_count,
     const uint64_t* class_counts,
@@ -1151,6 +1154,8 @@ qstate_symmetry_handle qstate_symmetry_create_labels(
         return nullptr;
     }
 }
+
+
 
 qstate_symmetry_handle qstate_symmetry_create_hamming_weight(size_t qubit_count) {
     try {
@@ -1229,6 +1234,7 @@ int qstate_symmetry_apply_class_phases(
 int qstate_symmetry_apply_reflection(qstate_symmetry_handle handle) {
     return guarded([&] { as_symmetry(handle)->state.apply_weighted_reflection(); });
 }
+
 
 int qstate_symmetry_split_class(
     qstate_symmetry_handle handle,
@@ -1432,6 +1438,7 @@ size_t qstate_symmetry_estimated_bytes(qstate_symmetry_handle handle) {
     }
 }
 
+
 int qstate_symmetry_discovery_error(
     qstate_symmetry_handle handle,
     double* result) {
@@ -1479,4 +1486,4 @@ int qstate_symmetry_description_write(
     });
 }
 
-} 
+}  // extern "C"

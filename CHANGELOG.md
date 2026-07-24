@@ -13,7 +13,7 @@
 - Added security, threading, contribution, citation, release-checklist, issue-template, and dependency-update metadata
 - Preserved all QSA 0.1 mathematical behavior, C++/C/Python contracts, and QSC v1 bytes
 
-## 0.1.5 — 2026-07-23
+## 0.1.5 — 2026-07-24
 
 - Generalized Grover's two-class compression into a reusable exact amplitude-class symmetry algebra
 - Added ordered-range, count-only symbolic, explicit-label, and Hamming-weight partitions
@@ -30,7 +30,7 @@
 - Preserved QSC v1 bytes and every QSA 0.1 C++, C, Python, plan, and Grover contract
 - Measured 386.97x repeated-operation and 130,750.18x fast-forward gains over the equivalent dense 20-qubit class workload
 
-## 0.1.4 — 2026-07-23
+## 0.1.4 — 2026-07-24
 
 - Added an exact symmetry-compressed Grover engine with two amplitude classes
 - Added logarithmic-time fast-forward across any number of ideal Grover iterations
@@ -45,7 +45,7 @@
 - Preserved every QSA 0.1 C++, C, Python, and QSC v1 compatibility contract
 - Added reproducible Grover benchmarks showing over 160,000x acceleration versus dense exact evolution on the measured 16-qubit optimal-search workload
 
-## 0.1.3 — 2026-07-22
+## 0.1.3 — 2026-07-24
 
 - Added immutable native operation-plan handles to avoid rebuilding C buffers on repeated execution
 - Added adjacent single-qubit matrix fusion and safe identity elision
@@ -58,7 +58,7 @@
 - Added native and Python benchmarks for plan fusion, diagonal layers, ensembles, parameter sweeps, and bulk readout
 - Preserved the QSA 0.1 C++, C, Python, and QSC v1 compatibility contracts
 
-## 0.1.2 — 2026-07-20
+## 0.1.2 — 2026-07-23
 
 - Replaced register-wide component erasure and reindexing with stable swap-pop storage
 - Preserved historical QSC v1 and `describe()` component order through compact logical order keys
@@ -72,7 +72,7 @@
 - Added a frozen multi-component QSC ordering fixture and large stable-component regression test
 - Added reproducible native hot-path benchmarks showing 3.11x to 104.64x gains on measured workloads
 
-## 0.1.1 — 2026-07-18
+## 0.1.1 — 2026-07-23
 
 - Froze the QSA 0.1 C++, C, Python, and QSC compatibility contracts
 - Added byte-for-byte QSC v1 fixtures and compatibility tests

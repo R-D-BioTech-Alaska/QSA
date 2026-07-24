@@ -5,6 +5,8 @@
 #define QSTATE_VERSION_PATCH 6
 #define QSTATE_VERSION_STRING "0.1.6"
 
+// The ABI version changes only when an existing exported C contract becomes
+// incompatible. Additive symbols do not change the ABI major version.
 #define QSTATE_ABI_VERSION_MAJOR 1
 #define QSTATE_ABI_VERSION_MINOR 5
 #define QSTATE_ABI_VERSION_PATCH 0

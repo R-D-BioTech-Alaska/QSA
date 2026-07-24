@@ -1,3 +1,5 @@
+"""Ensure every release-facing version source agrees."""
+
 from __future__ import annotations
 
 import re
@@ -5,11 +7,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
 def capture(path: str, pattern: str) -> str:
     text = (ROOT / path).read_text(encoding="utf-8")
     match = re.search(pattern, text, re.MULTILINE)
     assert match, f"version pattern missing in {path}"
     return match.group(1)
+
 
 def main() -> None:
     expected = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
@@ -30,6 +34,7 @@ def main() -> None:
     for source, version in versions.items():
         assert version == expected, f"{source} has {version}, expected {expected}"
     print(f"QSA version sources agree: {expected}")
+
 
 if __name__ == "__main__":
     main()

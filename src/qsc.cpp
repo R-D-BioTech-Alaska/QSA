@@ -1,4 +1,5 @@
 #include "qubit/qstate.hpp"
+
 #include <array>
 #include <bit>
 #include <cstring>
@@ -106,7 +107,7 @@ private:
     }
 };
 
-} 
+}  // namespace
 
 std::vector<std::uint8_t> QStateCodec::encode(const QRegister& state) {
     std::string reason;
@@ -306,4 +307,4 @@ QRegister QStateCodec::decode(std::span<const std::uint8_t> bytes) {
     return state;
 }
 
-} 
+}  // namespace qubit

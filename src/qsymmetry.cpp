@@ -1,4 +1,5 @@
 #include "qubit/qsymmetry.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -224,7 +225,7 @@ void validate_unitary(
     }
 }
 
-} 
+}  // namespace
 
 SymmetryState::SymmetryState(
     std::size_t qubit_count,
@@ -898,4 +899,4 @@ std::string SymmetryState::describe() const {
     return stream.str();
 }
 
-} 
+}  // namespace qubit

@@ -23,6 +23,7 @@ typedef void* qstate_parameterized_plan_handle;
 typedef void* qstate_grover_handle;
 typedef void* qstate_symmetry_handle;
 
+// Stable QSA 0.1 C ABI. Existing declarations must not be removed or changed.
 QSTATE_API qstate_handle qstate_create(size_t qubit_count);
 QSTATE_API void qstate_destroy(qstate_handle handle);
 QSTATE_API const char* qstate_last_error(void);
@@ -57,6 +58,7 @@ QSTATE_API size_t qstate_qsc_size(qstate_handle handle);
 QSTATE_API int qstate_qsc_write(qstate_handle handle, uint8_t* output, size_t output_size);
 QSTATE_API qstate_handle qstate_qsc_read(const uint8_t* data, size_t data_size);
 
+
 typedef enum qstate_opcode {
     QSTATE_OP_X = 1,
     QSTATE_OP_Y = 2,
@@ -87,6 +89,7 @@ typedef struct qstate_operation {
     double sample;
 } qstate_operation;
 
+// Additive ABI 1.1 surface. Older callers remain source and binary compatible.
 QSTATE_API uint32_t qstate_abi_version_major(void);
 QSTATE_API uint32_t qstate_abi_version_minor(void);
 QSTATE_API uint32_t qstate_abi_version_patch(void);
@@ -119,6 +122,8 @@ QSTATE_API int qstate_apply_operations(
     size_t operation_count,
     size_t* completed_count);
 
+// Additive ABI 1.2 surface: immutable compiled plans, parallel ensembles, and
+// one-call readout of every single-qubit population.
 typedef enum qstate_plan_flags {
     QSTATE_PLAN_DEFAULT = 0,
     QSTATE_PLAN_OPTIMIZE = 1
@@ -146,6 +151,8 @@ QSTATE_API int qstate_probabilities_one(
     double* output,
     size_t output_size);
 
+// Additive ABI 1.3 surface: reusable plan templates whose numeric gate and
+// trajectory values are bound at execution time.
 typedef struct qstate_parameterized_operation {
     uint32_t opcode;
     uint32_t first;
@@ -181,6 +188,10 @@ QSTATE_API int qstate_parameterized_plan_execute_many(
     size_t worker_count,
     size_t* completed_handle_count);
 
+
+// Additive ABI 1.4 surface: exact Grover primitives for QRegister and a
+// symmetry-compressed Grover engine that stores two amplitude classes rather
+// than an explicit 2^n statevector.
 QSTATE_API int qstate_apply_grover_oracle(
     qstate_handle handle,
     const uint64_t* marked_indices,
@@ -240,6 +251,9 @@ QSTATE_API int qstate_grover_description_write(
     char* output,
     size_t output_size);
 
+
+// Additive ABI 1.5 surface: general exact amplitude-class symmetry algebra.
+// Existing QSA state, plan, Grover, QSC, and Python contracts are unchanged.
 QSTATE_API qstate_symmetry_handle qstate_symmetry_create_ordered(
     size_t qubit_count,
     const uint64_t* class_counts,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qcomplex.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -69,8 +70,10 @@ namespace gates {
 [[nodiscard]] QMatrix4 cnot();
 [[nodiscard]] QMatrix4 cz();
 [[nodiscard]] QMatrix4 swap();
-} 
+}  // namespace gates
 
+// A pure, unentangled qubit is represented geometrically rather than as a
+// two-element generic array.  x^2 + y^2 + z^2 == 1 within tolerance.
 struct BlochCell {
     double x{0.0};
     double y{0.0};
@@ -142,6 +145,8 @@ public:
         const QStateConfig& config,
         bool renormalize = true);
 
+    // Specialized unitary kernels preserve support and storage mode. They
+    // avoid hash-table reconstruction and normalization on common gates.
     void apply_x(std::size_t bit_position);
     void apply_y(std::size_t bit_position);
     void apply_z(std::size_t bit_position);
@@ -213,12 +218,16 @@ public:
     void apply_swap(QubitId first, QubitId second);
     void apply_two(QubitId first, QubitId second, const QMatrix4& matrix);
 
+    // Exact full-register Grover primitives. These are deliberately opt-in:
+    // invoking them may promote a structured register to one dense component.
     void apply_grover_oracle(std::span<const BasisIndex> marked_indices);
     void apply_grover_diffusion();
     void apply_grover_iterations(
         std::span<const BasisIndex> marked_indices,
         std::uint64_t iteration_count = 1);
 
+    // Pure-state quantum trajectory noise.  Repeated trajectories reproduce
+    // the corresponding mixed channel without storing a 4^n density matrix.
     void apply_bit_flip_trajectory(QubitId qubit, double probability, double sample);
     void apply_phase_flip_trajectory(QubitId qubit, double probability, double sample);
     void apply_depolarizing_trajectory(QubitId qubit, double probability, double sample);
@@ -248,6 +257,8 @@ private:
     std::size_t qubit_count_{0};
     QStateConfig config_{};
     std::vector<StateComponent> components_{};
+    // Logical component order is kept separately so hot-path removals can use
+    // swap-pop without changing QSC v1 or describe() ordering.
     std::vector<std::uint32_t> component_order_{};
     std::uint64_t next_component_order_{0};
     std::vector<std::size_t> qubit_component_{};
@@ -281,4 +292,4 @@ public:
     [[nodiscard]] static QRegister decode(std::span<const std::uint8_t> bytes);
 };
 
-} 
+}  // namespace qubit

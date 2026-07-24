@@ -1,3 +1,5 @@
+"""Machine-readable compatibility contract gate."""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,6 +10,7 @@ import qsa
 import qubit_native
 
 ROOT = Path(__file__).resolve().parents[1]
+
 
 def main() -> None:
     contract = json.loads((ROOT / "compatibility/qsa_0_1_contract.json").read_text())
@@ -34,6 +37,7 @@ def main() -> None:
         assert digest == record["sha256"], f"QSC v1 fixture changed: {record['path']}"
 
     print("QSA 0.1 compatibility manifest passed.")
+
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,5 @@
+"""Compatibility checks for canonical and historical Python entry points."""
+
 from __future__ import annotations
 
 from qsa import (
@@ -13,6 +15,7 @@ from qsa import (
 )
 from qubit_native import QubitRegister as LegacyQubitRegister
 
+
 def main() -> None:
     assert __version__ == "0.1.6"
     assert QRegister is QubitRegister
@@ -22,6 +25,7 @@ def main() -> None:
         assert state.native_version == "0.1.6"
         assert state.abi_version >= (1, 5, 0)
 
+        # Both property and historical method forms remain valid.
         assert state.qubit_count == 2
         assert state.qubit_count() == 2
         assert state.component_count == 2
@@ -179,6 +183,7 @@ def main() -> None:
         raise AssertionError("closed registers must reject operations")
 
     print("QSA Python compatibility tests passed.")
+
 
 if __name__ == "__main__":
     main()

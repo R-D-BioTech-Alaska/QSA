@@ -1,4 +1,5 @@
 #include "qubit/qstate.hpp"
+
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -154,6 +155,7 @@ void test_qsc_roundtrip() {
     require(rejected, "QSC checksum must reject corrupted data");
 }
 
+
 void test_qsc_v1_frozen_fixture() {
     const std::string path = std::string(QSA_TEST_SOURCE_DIR) +
                              "/tests/fixtures/qsc_v1_sparse_exact.bin";
@@ -213,7 +215,7 @@ void test_trajectory_noise() {
     require_near(state.probability_one(0), 1.0, 1e-12, "H-Z-H must act as X");
 }
 
-} 
+}  // namespace
 
 int main() {
     test_geometric_cells();

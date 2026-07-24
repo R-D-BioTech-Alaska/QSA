@@ -1,4 +1,5 @@
 #include "qubit/qsymmetry.hpp"
+
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -204,7 +205,7 @@ void test_huge_count_only_state() {
     require(state.validate(), "huge count-only symmetry state validates");
 }
 
-} 
+}  // namespace
 
 int main() {
     test_ordered_classes_and_reflection();

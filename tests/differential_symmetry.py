@@ -1,3 +1,5 @@
+"""Independent dense-reference validation for the QSA symmetry algebra."""
+
 from __future__ import annotations
 
 import cmath
@@ -6,9 +8,11 @@ import random
 
 from qsa import SymmetryState
 
+
 def normalize(counts: list[int], amplitudes: list[complex]) -> list[complex]:
     norm = math.sqrt(sum(count * abs(value) ** 2 for count, value in zip(counts, amplitudes)))
     return [value / norm for value in amplitudes]
+
 
 def class_for_basis(counts: list[int], basis: int) -> int:
     offset = 0
@@ -17,6 +21,7 @@ def class_for_basis(counts: list[int], basis: int) -> int:
             return index
         offset += count
     raise AssertionError("basis outside dense reference")
+
 
 def apply_rotation(
     counts: list[int], amplitudes: list[complex], first: int, second: int, angle: float
@@ -35,6 +40,7 @@ def apply_rotation(
         [coefficient / math.sqrt(count) for count, coefficient in zip(counts, coefficients)],
     )
 
+
 def rotation_matrix(size: int, first: int, second: int, angle: float) -> list[list[complex]]:
     matrix = [[0j for _ in range(size)] for _ in range(size)]
     for index in range(size):
@@ -46,6 +52,7 @@ def rotation_matrix(size: int, first: int, second: int, angle: float) -> list[li
     matrix[second][first] = s
     matrix[second][second] = c
     return matrix
+
 
 def run() -> None:
     rng = random.Random(0x51A1E7)
@@ -116,6 +123,7 @@ def run() -> None:
         "QSA symmetry differential validation passed: "
         f"{operation_checks} operations, {amplitude_checks} amplitude checks"
     )
+
 
 if __name__ == "__main__":
     run()

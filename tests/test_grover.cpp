@@ -1,5 +1,6 @@
 #include "qubit/qgrover.hpp"
 #include "qubit/qstate.hpp"
+
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -148,7 +149,7 @@ void test_qregister_exact_grover() {
     }
 }
 
-}
+}  // namespace
 
 int main() {
     test_single_target_optimum();

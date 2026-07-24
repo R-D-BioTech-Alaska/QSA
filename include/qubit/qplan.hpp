@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qstate.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -111,4 +112,4 @@ private:
     bool optimize_{true};
 };
 
-} 
+}  // namespace qubit

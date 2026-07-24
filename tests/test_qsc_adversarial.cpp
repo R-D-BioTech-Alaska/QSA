@@ -1,4 +1,5 @@
 #include "qubit/qstate.hpp"
+
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -54,7 +55,7 @@ void expect_rejected(const std::vector<std::uint8_t>& bytes, const std::string& 
     require(rejected, label);
 }
 
-} 
+}  // namespace
 
 int main() {
     qubit::QRegister state(2);

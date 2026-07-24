@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qstate.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -16,20 +17,36 @@ enum class SymmetryMembership : std::uint8_t {
     HammingWeight = 3,
 };
 
+// Exact amplitude-class representation for permutation-symmetric state spaces.
+//
+// Every basis state in one class shares one complex amplitude. Class sizes are
+// retained explicitly, so normalization and class-space unitary evolution are
+// exact without allocating the logical 2^n statevector. Operations that remain
+// inside the class partition cost O(class_count) or O(class_count^3 log k), not
+// O(2^n). A state can be materialized into QRegister when an operation breaks
+// the symmetry and the requested fallback size is safe.
 class SymmetryState {
 public:
+    // Classes occupy consecutive basis-index ranges in the supplied order.
     SymmetryState(std::size_t qubit_count, std::span<const BasisIndex> class_counts);
 
+    // Class counts are known, but basis membership is intentionally symbolic.
     [[nodiscard]] static SymmetryState from_counts(
         std::size_t qubit_count,
         std::span<const BasisIndex> class_counts);
 
+    // One class label per basis state. Labels must be dense in [0, class_count).
     [[nodiscard]] static SymmetryState from_labels(
         std::size_t qubit_count,
         std::span<const std::uint32_t> labels);
 
+    // Permutation-invariant basis partition. Class k contains every basis
+    // state with Hamming weight k, requiring only qubit_count + 1 amplitudes.
     [[nodiscard]] static SymmetryState hamming_weight(std::size_t qubit_count);
 
+    // Discover amplitude equivalence classes in an existing register. The
+    // default tolerance of zero is bit-exact. Nonzero tolerance is explicit,
+    // bounded approximation and is reported through discovery_error().
     [[nodiscard]] static SymmetryState discover(
         const QRegister& state,
         std::size_t max_qubits = 24,
@@ -57,12 +74,20 @@ public:
     void apply_class_phases(std::span<const double> angles);
     void apply_weighted_reflection();
 
+    // Refine one equivalence class without materializing the logical state.
+    // The original class keeps first_count members and the returned class
+    // receives the remainder with the same amplitude.
     [[nodiscard]] std::size_t split_class(
         std::size_t class_index,
         BasisIndex first_count);
 
+    // Merge classes whose amplitudes are equal within tolerance. Ordered-range
+    // states merge adjacent classes; symbolic and explicit states can merge any
+    // equivalent classes. Returns the number of removed classes.
     [[nodiscard]] std::size_t merge_equivalent(double tolerance = 1e-12);
 
+    // Matrix acts on normalized class coefficients c_i = sqrt(count_i) * a_i.
+    // The matrix is row-major and must be unitary within tolerance.
     void apply_class_unitary(std::span<const QComplex> matrix, double tolerance = 1e-10);
     void iterate_class_unitary(
         std::span<const QComplex> matrix,
@@ -110,4 +135,4 @@ private:
     void assign_normalized_coefficients(std::span<const QComplex> coefficients);
 };
 
-} 
+}  // namespace qubit

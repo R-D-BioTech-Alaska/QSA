@@ -1,4 +1,8 @@
+#!/usr/bin/env python3
+"""Locate QSA integration surfaces in one or more checked-out repositories."""
+
 from __future__ import annotations
+
 import argparse
 import re
 from pathlib import Path
@@ -17,6 +21,7 @@ TEXT_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".py", ".md", ".toml",
     ".yml", ".yaml", ".json", ".txt", ".ini", ".cfg", ".cmake", ".ps1", ".sh",
 }
+
 
 def scan(root: Path) -> int:
     matches = 0
@@ -37,6 +42,7 @@ def scan(root: Path) -> int:
                 matches += 1
     return matches
 
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("roots", nargs="+", type=Path)
@@ -48,6 +54,7 @@ def main() -> int:
         total += scan(root.resolve())
     print(f"QSA dependency scan complete: {total} matching lines")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

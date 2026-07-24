@@ -1,4 +1,5 @@
 #include "qubit/c_api.h"
+
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -25,7 +26,7 @@ void require_near(double actual, double expected, double tolerance, const std::s
     require(std::abs(actual - expected) <= tolerance, message);
 }
 
-} 
+}  // namespace
 
 int main() {
     require(qstate_abi_version_major() == 1U, "ABI major must remain 1");

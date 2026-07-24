@@ -1,4 +1,5 @@
 #include "qubit/qgrover.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -35,7 +36,7 @@ struct SplitMix64 {
     return std::clamp(static_cast<double>(value), 0.0, 1.0);
 }
 
-} 
+}  // namespace
 
 GroverSearch::GroverSearch(
     std::size_t qubit_count,
@@ -118,6 +119,7 @@ void GroverSearch::iterate(std::uint64_t count) {
     long double result_sin = 0.0L;
     std::uint64_t exponent = count;
 
+    // Exponentiate the two-dimensional Grover rotation in O(log count).
     while (exponent != 0U) {
         if ((exponent & 1U) != 0U) {
             const long double next_cos = result_cos * base_cos - result_sin * base_sin;
@@ -318,4 +320,4 @@ std::string GroverSearch::describe() const {
     return stream.str();
 }
 
-}
+}  // namespace qubit

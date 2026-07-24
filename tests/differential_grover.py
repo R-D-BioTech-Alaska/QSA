@@ -1,14 +1,19 @@
+"""Independent dense-amplitude differential validation for GroverSearch."""
+
 from __future__ import annotations
 
 import math
 import random
+
 import numpy as np
 
 from qsa import GroverSearch, QubitRegister
 
+
 def dense_iteration(state: np.ndarray, marked: np.ndarray) -> None:
     state[marked] *= -1.0
     state[:] = 2.0 * state.mean() - state
+
 
 def main() -> None:
     generator = random.Random(0x51534147)
@@ -44,6 +49,7 @@ def main() -> None:
             if abs(search.success_probability - expected_success) > 2e-10:
                 raise AssertionError("Grover success probability mismatch")
 
+        # Small random cases also exercise the fully interoperable QRegister path.
         if qubits <= 8 and case < 60:
             with QubitRegister(qubits) as exact:
                 for qubit in range(qubits):
@@ -63,6 +69,7 @@ def main() -> None:
         f"Grover differential validation passed: {cases} randomized searches, "
         f"{amplitude_checks} amplitude checks."
     )
+
 
 if __name__ == "__main__":
     main()

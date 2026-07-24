@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qstate.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -9,6 +10,13 @@
 
 namespace qubit {
 
+// Exact symmetry-compressed Grover search state.
+//
+// Standard Grover evolution preserves one shared amplitude for every marked
+// basis state and one shared amplitude for every unmarked basis state. This
+// class stores those two amplitude classes instead of allocating 2^n values.
+// It is exact for the ideal uniform-start Grover process and for any sequence
+// of its oracle, diffusion, and complete-iteration operations.
 class GroverSearch {
 public:
     GroverSearch(std::size_t qubit_count, std::span<const BasisIndex> marked_indices);
@@ -67,4 +75,4 @@ private:
     [[nodiscard]] BasisIndex select_unmarked(BasisIndex rank) const;
 };
 
-} 
+}  // namespace qubit

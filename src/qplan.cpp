@@ -1,4 +1,5 @@
 #include "qubit/qplan.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -106,7 +107,7 @@ namespace {
            almost_equal(phase.one, QComplex{1.0, 0.0}, tolerance);
 }
 
-} 
+}  // namespace
 
 OperationPlan::OperationPlan(std::span<const Operation> operations, bool optimize)
     : source_operation_count_(operations.size()), optimized_(optimize) {
@@ -473,4 +474,4 @@ void ParameterizedOperationPlan::execute_many(
     plan.execute_many(states, worker_count, completed_states);
 }
 
-} 
+}  // namespace qubit

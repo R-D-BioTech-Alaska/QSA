@@ -1,3 +1,5 @@
+"""Random-circuit differential validation against an independent NumPy reference."""
+
 from __future__ import annotations
 
 import math
@@ -27,10 +29,12 @@ SWAP = np.array(
     dtype=np.complex128,
 )
 
+
 def rx(theta: float) -> np.ndarray:
     c = math.cos(theta / 2)
     s = math.sin(theta / 2)
     return np.array([[c, -1j * s], [-1j * s, c]], dtype=np.complex128)
+
 
 def ry(theta: float) -> np.ndarray:
     c = math.cos(theta / 2)
