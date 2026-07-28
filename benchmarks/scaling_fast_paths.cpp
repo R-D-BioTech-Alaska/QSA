@@ -57,7 +57,8 @@ int main() {
             QComplex::from_polar(1.0, 0.123),
         };
         const double diagonal = median_ms([&] {
-            state.apply_diagonal(std::span<const QDiagonalPhase>(&phase, 1U));
+            state.apply_diagonal_structured(
+                std::span<const QDiagonalPhase>(&phase, 1U));
         }, 9);
         const double direct = median_ms([&] {
             state.apply_z(static_cast<QubitId>(qubits - 1U));
@@ -77,7 +78,7 @@ int main() {
             QComplex::from_polar(1.0, 0.193),
         };
         const double active_patch = median_ms([&] {
-            state.apply_diagonal(
+            state.apply_diagonal_structured(
                 std::span<const QDiagonalPhase>(&patch_phase, 1U));
         }, 9);
         std::cout << "diagonal_patch_scaling qubits=" << qubits
@@ -89,10 +90,10 @@ int main() {
     const auto support = state.component_read_view(0U).sparse.size();
     for (std::size_t bit : {0U, 9U, 17U, 30U}) {
         const double x = median_ms([&] {
-            state.apply_x(static_cast<QubitId>(bit));
+            state.apply_x_structured(static_cast<QubitId>(bit));
         });
         const double y = median_ms([&] {
-            state.apply_y(static_cast<QubitId>(bit));
+            state.apply_y_structured(static_cast<QubitId>(bit));
         });
         std::cout << "sparse_pauli width=36 support=" << support
                   << " bit=" << bit
