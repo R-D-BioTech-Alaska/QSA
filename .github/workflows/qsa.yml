@@ -7,13 +7,120 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: qsa-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  release-version-sync:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/release-0.1.7-version-sync'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/release-0.1.7-version-sync
+          fetch-depth: 0
+      - name: Synchronize 0.1.7 metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, count: int = -1) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"missing expected text in {path}: {old!r}")
+              target.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          Path("VERSION").write_text("0.1.7\n", encoding="utf-8")
+          replace("pyproject.toml", 'version = "0.1.6"', 'version = "0.1.7"', 1)
+          replace(
+              "CMakeLists.txt",
+              "project(QubitNativeStateEngine VERSION 0.1.6 LANGUAGES CXX)",
+              "project(QubitNativeStateEngine VERSION 0.1.7 LANGUAGES CXX)",
+              1,
+          )
+          replace(
+              "include/qubit/version.h",
+              "#define QSTATE_VERSION_PATCH 6",
+              "#define QSTATE_VERSION_PATCH 7",
+              1,
+          )
+          replace(
+              "include/qubit/version.h",
+              '#define QSTATE_VERSION_STRING "0.1.6"',
+              '#define QSTATE_VERSION_STRING "0.1.7"',
+              1,
+          )
+          replace(
+              "python/qsa/__init__.py",
+              '__version__ = "0.1.6"',
+              '__version__ = "0.1.7"',
+              1,
+          )
+          replace("CITATION.cff", 'version: "0.1.6"', 'version: "0.1.7"', 1)
+          replace(
+              "CITATION.cff",
+              'date-released: "2026-07-24"',
+              'date-released: "2026-07-28"',
+              1,
+          )
+          replace("tests/test_python_compat.py", '"0.1.6"', '"0.1.7"')
+          replace("tests/test_c_api.cpp", '"0.1.6"', '"0.1.7"', 1)
+          replace(
+              ".github/ISSUE_TEMPLATE/bug_report.yml",
+              "placeholder: 0.1.6",
+              "placeholder: 0.1.7",
+              1,
+          )
+          replace(
+              "docs/VALIDATION.md",
+              "> Historical report for QSA 0.1.2. The current QSA 0.1.6 release report is in [`VALIDATION_0_1_6.md`](VALIDATION_0_1_6.md).",
+              "> Historical report for QSA 0.1.2. The QSA 0.1.6 release report is in [`VALIDATION_0_1_6.md`](VALIDATION_0_1_6.md).",
+              1,
+          )
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text(encoding="utf-8")
+          if "## 0.1.7 — 2026-07-28" not in text:
+              section = """## 0.1.7 — 2026-07-28
+
+- Added native quantum-dot pockets and exact reference validation
+- Added exact structural CNOT, CZ, and disconnected SWAP acceleration
+- Added joint component measurement and component-aware symmetry discovery
+- Added Bayesian adaptive compaction with mandatory exact audits
+- Added exact representation advice for register, symmetry, stabilizer, phase-graph, and quantum-dot workloads
+- Added exact stabilizer and uniform phase-graph backends
+- Added dependency-aware operation reduction and parallel independent-component execution
+- Added zero-copy component read views and reusable output buffers
+- Added compiled exact diagonal plans
+- Added structured diagonal execution and linear sparse X/Y permutations
+- Added word-parallel stabilizer batch execution with bounded scratch memory
+- Preserved the QSA 0.1 C++, C, Python, and QSC v1 compatibility contracts
+
+"""
+              changelog.write_text(
+                  text.replace("# Changelog\n\n", "# Changelog\n\n" + section, 1),
+                  encoding="utf-8",
+              )
+          PY
+          python tests/test_version_sync.py
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/qsa.yml
+          rm -f .github/workflows/release-0.1.7-sync.yml
+          git config user.name "Inserian"
+          git config user.email "99493283+Inserian@users.noreply.github.com"
+          git add VERSION pyproject.toml CMakeLists.txt include/qubit/version.h \
+            python/qsa/__init__.py CITATION.cff tests/test_python_compat.py \
+            tests/test_c_api.cpp .github/ISSUE_TEMPLATE/bug_report.yml \
+            docs/VALIDATION.md CHANGELOG.md .github/workflows/qsa.yml \
+            .github/workflows/release-0.1.7-sync.yml
+          git commit -m "Release QSA 0.1.7"
+          git push origin HEAD:agent/release-0.1.7-version-sync
+
   cpp-validation:
     strategy:
       fail-fast: false
