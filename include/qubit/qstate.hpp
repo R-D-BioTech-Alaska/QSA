@@ -175,6 +175,7 @@ private:
     void sort_sparse();
 
     friend class QRegister;
+    friend class CompiledDiagonalPlan;
 };
 
 struct StateComponent {
@@ -199,6 +200,7 @@ class QStateCodec;
 class AdaptiveOperationPlan;
 class SymmetryState;
 class IndependentComponentPlan;
+class CompiledDiagonalPlan;
 
 class QRegister {
 public:
@@ -322,6 +324,7 @@ private:
     friend class AdaptiveOperationPlan;
     friend class SymmetryState;
     friend class IndependentComponentPlan;
+    friend class CompiledDiagonalPlan;
 };
 
 class QStateCodec {
