@@ -1,6 +1,6 @@
 # Exact representation advisor
 
-QSA contains several exact state engines whose performance depends on workload structure. `RepresentationAdvisor` ranks the existing `QRegister`, `SymmetryState`, and `QuantumDotPocket` paths using explicit workload evidence and Bayesian outcome history.
+QSA contains several exact state engines whose performance depends on workload structure. `RepresentationAdvisor` ranks the existing `QRegister`, `SymmetryState`, `QuantumDotPocket`, and `StabilizerState` paths using explicit workload evidence and Bayesian outcome history.
 
 The advisor does not convert state, execute a backend, or approximate a result. It returns a recommendation with eligibility, estimated work, posterior success, adjusted score, and a short reason. The caller remains responsible for choosing and constructing the representation.
 
@@ -14,6 +14,6 @@ Discovery stops before class growth exceeds `max_classes`. This prevents an unhe
 
 ## Bayesian evidence
 
-Each representation has a Beta posterior within four workload contexts: general, fragmented, symmetry-supported, and declared quantum-dot work. `observe()` records whether a backend was fastest for a comparable workload. The posterior adjusts future rankings but cannot make an ineligible backend eligible.
+Each representation has a Beta posterior within five workload contexts: general, fragmented, symmetry-supported, Clifford-only, and declared quantum-dot work. `observe()` records whether a backend was fastest for a comparable workload. The posterior adjusts future rankings but cannot make an ineligible backend eligible.
 
 The reproducible benchmark target is `qstate_representation_advisor_benchmark`.

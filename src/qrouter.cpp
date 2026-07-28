@@ -34,6 +34,8 @@ const char* representation_name(RepresentationKind kind) noexcept {
             return "SymmetryState";
         case RepresentationKind::QuantumDot:
             return "QuantumDotPocket";
+        case RepresentationKind::Stabilizer:
+            return "StabilizerState";
     }
     return "unknown";
 }
@@ -47,7 +49,8 @@ RepresentationFeatures RepresentationAdvisor::inspect(
     const QRegister& state,
     std::uint64_t repeated_steps,
     std::size_t exact_symmetry_classes,
-    bool quantum_dot_declared) {
+    bool quantum_dot_declared,
+    bool clifford_only) {
     if (repeated_steps == 0U) {
         throw QStateError("Representation advisor repeated_steps must be positive");
     }
@@ -58,6 +61,7 @@ RepresentationFeatures RepresentationAdvisor::inspect(
     features.repeated_steps = repeated_steps;
     features.exact_symmetry_classes = exact_symmetry_classes;
     features.quantum_dot_declared = quantum_dot_declared;
+    features.clifford_only = clifford_only;
     for (std::size_t qubit = 0; qubit < state.qubit_count(); ++qubit) {
         const QubitId id = static_cast<QubitId>(qubit);
         features.largest_component =
@@ -70,6 +74,9 @@ RepresentationFeatures RepresentationAdvisor::inspect(
 std::size_t RepresentationAdvisor::context(
     const RepresentationFeatures& features) const noexcept {
     if (features.quantum_dot_declared) {
+        return 4U;
+    }
+    if (features.clifford_only) {
         return 3U;
     }
     if (features.exact_symmetry_classes != 0U &&
@@ -86,7 +93,7 @@ std::size_t RepresentationAdvisor::context(
 std::size_t RepresentationAdvisor::index(
     const RepresentationFeatures& features,
     RepresentationKind kind) const noexcept {
-    return context(features) * 3U + static_cast<std::size_t>(kind);
+    return context(features) * 4U + static_cast<std::size_t>(kind);
 }
 
 double RepresentationAdvisor::posterior_mean(
@@ -110,7 +117,7 @@ std::vector<RepresentationScore> RepresentationAdvisor::rank(
     const double qubits = static_cast<double>(features.qubit_count);
 
     std::vector<RepresentationScore> scores;
-    scores.reserve(3U);
+    scores.reserve(4U);
 
     RepresentationScore register_score;
     register_score.kind = RepresentationKind::Register;
@@ -151,6 +158,22 @@ std::vector<RepresentationScore> RepresentationAdvisor::rank(
         ? "workload explicitly declares fixed quantum-dot structure"
         : "workload does not declare quantum-dot structure";
     scores.push_back(dot_score);
+
+    RepresentationScore stabilizer_score;
+    stabilizer_score.kind = RepresentationKind::Stabilizer;
+    stabilizer_score.eligible = features.clifford_only;
+    const double stabilizer_width = std::max(1.0, std::ceil(qubits / 64.0));
+    stabilizer_score.estimated_work = stabilizer_score.eligible
+        ? safe_product(steps, safe_product(8.0, stabilizer_width))
+        : std::numeric_limits<double>::infinity();
+    stabilizer_score.posterior_success = posterior_mean(features, stabilizer_score.kind);
+    stabilizer_score.adjusted_score = stabilizer_score.eligible
+        ? stabilizer_score.estimated_work / stabilizer_score.posterior_success
+        : std::numeric_limits<double>::infinity();
+    stabilizer_score.reason = stabilizer_score.eligible
+        ? "workload is explicitly restricted to Clifford operations"
+        : "workload is not declared Clifford-only";
+    scores.push_back(stabilizer_score);
 
     std::stable_sort(scores.begin(), scores.end(), [](const RepresentationScore& left,
                                                        const RepresentationScore& right) {
