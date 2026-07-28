@@ -106,10 +106,10 @@ void test_sparse_pauli_permutations() {
         for (int operation = 0; operation < 80; ++operation) {
             const QubitId qubit = static_cast<QubitId>(bit_distribution(random));
             if (gate_distribution(random) == 0) {
-                specialized.apply_x(qubit);
+                specialized.apply_x_structured(qubit);
                 generic.apply_single(qubit, qubit::gates::x());
             } else {
-                specialized.apply_y(qubit);
+                specialized.apply_y_structured(qubit);
                 generic.apply_single(qubit, qubit::gates::y());
             }
             require_sorted_sparse(specialized);
@@ -139,8 +139,8 @@ void test_sparse_pauli_maximum_bit() {
         AmplitudeStore x = AmplitudeStore::from_entries(
             dimension, source, config, false);
         AmplitudeStore y = x;
-        x.apply_x(bit);
-        y.apply_y(bit);
+        x.apply_x_structured(bit);
+        y.apply_y_structured(bit);
 
         auto expected_x = source;
         auto expected_y = source;
@@ -232,7 +232,7 @@ void test_diagonal_active_component_grouping() {
             });
         }
 
-        optimized.apply_diagonal(phases);
+        optimized.apply_diagonal_structured(phases);
         for (const QDiagonalPhase& phase : phases) {
             literal.apply_single(phase.qubit, diagonal_matrix(phase));
         }
@@ -251,7 +251,7 @@ void test_diagonal_active_component_grouping() {
         QComplex::from_polar(1.0, -0.25),
         QComplex::from_polar(1.0, 0.25),
     };
-    large.apply_diagonal(std::span<const QDiagonalPhase>(&phase, 1U));
+    large.apply_diagonal_structured(std::span<const QDiagonalPhase>(&phase, 1U));
     require(large.component_count() == 250'000U,
             "single-cell diagonal update changed large-register structure");
     require(large.validate(), "large diagonal scaling state failed validation");
@@ -268,7 +268,7 @@ void test_diagonal_active_component_grouping() {
         QComplex::from_polar(1.0, -0.37),
         QComplex::from_polar(1.0, 0.21),
     };
-    active_patch.apply_diagonal(
+    active_patch.apply_diagonal_structured(
         std::span<const QDiagonalPhase>(&patch_phase, 1U));
     literal_patch.apply_single(target, diagonal_matrix(patch_phase));
     require(active_patch.component_count() == patch_qubits - 1U,
