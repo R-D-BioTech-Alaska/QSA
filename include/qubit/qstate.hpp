@@ -187,6 +187,7 @@ struct StateComponent {
 };
 
 class QStateCodec;
+class AdaptiveOperationPlan;
 
 class QRegister {
 public:
@@ -302,6 +303,7 @@ private:
     [[nodiscard]] std::size_t promote_global_dense();
 
     friend class QStateCodec;
+    friend class AdaptiveOperationPlan;
 };
 
 class QStateCodec {
