@@ -126,6 +126,13 @@ int main() {
                 "advisor did not select declared quantum-dot structure");
     }
     {
+        QRegister state(64);
+        const auto features = RepresentationAdvisor::inspect(
+            state, 100'000U, 0U, false, true);
+        require(advisor.recommend(features).kind == RepresentationKind::Stabilizer,
+                "advisor did not select a declared Clifford workload");
+    }
+    {
         QRegister state(12);
         const auto features = RepresentationAdvisor::inspect(state, 10U);
         require(advisor.recommend(features).kind == RepresentationKind::Register,
