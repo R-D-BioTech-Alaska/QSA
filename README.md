@@ -11,7 +11,7 @@
 
 [![DOI](https://img.shields.io/badge/DOI-10.13140%2FRG.2.2.19653.20965-blue)](https://doi.org/10.13140/RG.2.2.19653.20965)
 [![Build and Test](https://github.com/R-D-BioTech-Alaska/QSA/actions/workflows/qsa.yml/badge.svg)](https://github.com/R-D-BioTech-Alaska/QSA/actions/workflows/qsa.yml)
-[![Version](https://img.shields.io/badge/version-0.1.6-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.7-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ### A from-scratch, qubit-native mathematical runtime for ordinary computers
@@ -45,151 +45,292 @@ QSA follows a different rule:
 
 > **Do not build a global statevector unless the state actually requires one.**
 
-A register is kept as a set of state components:
+A QSA register is stored as a collection of state components:
 
-* Independent pure qubits stay as geometric Bloch cells `(x, y, z)`.
-* Qubits merge only when a gate connects their components.
+* Independent pure qubits remain geometric Bloch cells.
+* Qubits merge only when an operation connects their components.
 * Entangled components use sparse or dense amplitude storage as needed.
-* Gates operate directly on the affected amplitudes.
 * Measurement collapses only the component being measured.
-* Qubits that become separable can be split back out.
+* Qubits can separate again when the state becomes factorable.
 * Noise is handled through pure-state trajectories instead of a global density matrix.
+* Specialized exact representations are used when stronger mathematical structure exists.
 
 Examples:
 
 * 10,000 independent qubits remain 10,000 small cells.
 * 100 independent Bell pairs remain 100 separate two-qubit components.
 * A 50-qubit GHZ state remains a sparse component with two nonzero amplitudes.
+* A 60-qubit permutation-symmetric state can remain 61 Hamming-weight classes.
+* A large Clifford circuit can remain an exact stabilizer tableau instead of becoming a statevector.
 
-QSA 0.1.5 also added exact amplitude-class states. If many basis states truly share the same amplitude, QSA can store one amplitude for the entire class instead of storing every basis amplitude separately.
+QSA avoids exponential allocation when the state has exploitable structure. It does not claim that every possible quantum state can be compressed.
 
 ---
 
-## What Changed Since 0.1.0
+## What Changed in QSA 0.1.7
 
-| Release | Main work |
-|---|---|
-| **0.1.1** | Fixed and froze the C++, C, Python, and QSC v1 compatibility surface. Added batch execution and QSC caching. |
-| **0.1.2** | Reworked component storage and added specialized sparse and dense gate kernels. |
-| **0.1.3** | Added compiled operation plans, gate fusion, parameter binding, parallel register batches, and bulk readout. |
-| **0.1.4** | Added exact Grover operations and a compressed Grover engine. |
-| **0.1.5** | Generalized Grover compression into `SymmetryState`, an exact amplitude-class engine. |
-| **0.1.6** | Added installable CMake packages, stronger CI, sanitizer runs, hostile-QSC tests, package checks, version checks, security documentation, and release tooling. |
+QSA 0.1.7 is a major expansion of the engine.
 
-The old interfaces remain available. New work has been added through new methods and symbols instead of replacing the original entry points.
+The original QSA register remains in place, but it is now supported by several additional exact representations and execution systems.
+
+### Exact structural gate acceleration
+
+QSA can now avoid merging disconnected components when the gate semantics prove that no entanglement can be created.
+
+This includes exact fast paths for:
+
+* CNOT with known control or target states
+* CZ with known basis states
+* SWAP between disconnected components
+* Sparse X and Y permutations
+* Diagonal operations that touch only a small number of components
+
+The disconnected SWAP path is especially important. A SWAP does not create entanglement, so QSA can exchange logical qubit positions without constructing the tensor product of both components.
+
+In a measured test involving two dense 12-qubit components, this changed the operation from roughly two seconds and 256 MiB to a few microseconds and about 129 KiB.
+
+### Native quantum-dot systems
+
+QSA now includes a native quantum-dot pocket engine.
+
+Each dot is represented as a four-level local system using two logical qubits. The engine supports:
+
+* Pair-block topology
+* Pair-plus-context topology
+* Local charge and spin rotations
+* Capacitive coupling
+* Spin exchange
+* Charge tunneling
+* Second-order Trotter evolution
+* Exact comparison against a normal `QRegister` reference path
+
+Quantum-dot work remains opt-in and separate from the ordinary QSA register.
+
+### Bayesian adaptive compaction
+
+Separability checks are exact, but repeatedly scanning a persistently entangled component can waste time.
+
+QSA 0.1.7 includes an optional Bayesian controller that learns whether another separability check is likely to succeed.
+
+It does not change amplitudes, skip gates, prune states, or approximate the result. It only decides when an expensive representation-cleanup check is worth running.
+
+Mandatory exact audits ensure that newly recovered separability is still detected.
+
+Measured improvements on persistent dense entanglement were approximately 4.3x to 5.4x.
+
+### Exact representation advisor
+
+QSA now has a representation advisor for higher-level schedulers.
+
+It can rank eligible exact engines such as:
+
+* `QRegister`
+* `SymmetryState`
+* `StabilizerState`
+* `PhaseGraphState`
+* `QuantumDotPocket`
+
+The advisor cannot make an invalid backend eligible. For example, a non-Clifford workload cannot be routed to the stabilizer engine simply because the stabilizer engine was previously fast.
+
+### Component-aware symmetry discovery
+
+Symmetry discovery no longer has to begin by materializing the entire register.
+
+QSA can inspect independent components directly and construct exact amplitude classes from their combined structure.
+
+This allows some large structured states to be compressed without first paying the cost of a global `2^n` statevector.
+
+### Exact stabilizer backend
+
+QSA now includes a packed binary symplectic tableau for Clifford circuits.
+
+Supported operations include:
+
+* X, Y, Z
+* H
+* S and S-dagger
+* CNOT
+* CZ
+* SWAP
+* Z measurement
+* Whole-register measurement
+
+A measured 18-qubit, 800-gate Clifford workload ran approximately 1,744x faster than the ordinary QSA register while using hundreds of bytes instead of several megabytes.
+
+A 4,096-qubit, 100,000-gate Clifford workload can be represented using only a few megabytes.
+
+### Word-parallel stabilizer batches
+
+Long Clifford circuits can now be executed through `StabilizerState::apply_batch()`.
+
+The batch engine:
+
+* Validates the complete batch before changing the state
+* Finds the qubits touched by the circuit
+* Transposes packed tableau columns
+* Applies Clifford updates using word-level Boolean operations
+* Restores the normal tableau layout afterward
+* Enforces a configurable scratch-memory limit
+
+For a 4,096-qubit, 100,000-gate workload, the batch path measured roughly 120x to 138x faster than scalar stabilizer execution.
+
+### Exact phase-graph states
+
+QSA now includes a compact phase-graph backend for supported commuting phase circuits.
+
+It stores local phases, edge phases, and global phase structure instead of allocating every basis amplitude.
+
+A measured 100,000-qubit phase graph with 199,999 phase operations completed in roughly 4.6 milliseconds using about 4 MB.
+
+### Dependency-aware execution
+
+The operation planner can now cancel or combine exact operations even when unrelated operations appear between them.
+
+Examples include:
+
+* X followed by X
+* H followed by H
+* CNOT followed by the same CNOT
+* CZ followed by the same CZ
+* SWAP followed by the same SWAP
+* Compatible rotation fusion
+
+A measured 200,000-operation cancellation workload reduced to zero remaining operations.
+
+### Parallel independent-component execution
+
+Operations on separate state components can be executed concurrently.
+
+This preserves QSA's component boundaries while allowing additional CPU parallelism when a register contains independent work.
+
+### Zero-copy read views
+
+QSA can expose read-only views of component data without copying every amplitude into a new container.
+
+This includes:
+
+* Bloch-cell views
+* Sparse support views
+* Dense amplitude views
+* Reusable probability output buffers
+* Reusable measurement output buffers
+
+The existing allocating methods remain available.
+
+### Compiled diagonal plans
+
+Repeated diagonal circuits can precompute their exact phase coefficients and reuse them.
+
+The plan verifies the component layout and storage mode before execution. If the state no longer matches the compiled layout, the operation is rejected rather than applied incorrectly.
+
+---
+
+## Release History
+
+| Release   | Main work                                                                                                                                                                                                                                                                                                         |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0.1.1** | Fixed the C++, C, Python, and QSC v1 compatibility surface. Added batch execution and QSC caching.                                                                                                                                                                                                                |
+| **0.1.2** | Reworked component storage and added specialized sparse and dense gate kernels.                                                                                                                                                                                                                                   |
+| **0.1.3** | Added compiled plans, gate fusion, parameter binding, parallel register batches, and bulk readout.                                                                                                                                                                                                                |
+| **0.1.4** | Added exact Grover operations and compressed Grover evolution.                                                                                                                                                                                                                                                    |
+| **0.1.5** | Added `SymmetryState`, exact amplitude classes, and Hamming-weight states.                                                                                                                                                                                                                                        |
+| **0.1.6** | Added installable CMake packages, stronger CI, hostile-QSC testing, compatibility checks, security documentation, and release tooling.                                                                                                                                                                            |
+| **0.1.7** | Added quantum-dot systems, structural acceleration, Bayesian compaction, representation advice, component-aware symmetry discovery, stabilizer and phase-graph backends, parallel component execution, zero-copy views, compiled diagonal plans, structured sparse kernels, and word-parallel stabilizer batches. |
+
+The established QSA 0.1 interfaces remain available. New systems have been added through new methods and classes instead of replacing the original entry points.
 
 ---
 
 ## Current Capabilities
 
-### State representation
+### State systems
 
-* QSA-owned `QComplex` scalar
 * Geometric single-qubit Bloch cells
-* Sparse and dense entangled components
-* Local component merging
-* Singleton separability recovery
-* Stable component storage without register-wide reindexing on each merge
-* Exact amplitude queries without global materialization
-* Optional materialization for small validation cases
+* Sparse and dense local amplitude components
 * Exact amplitude-class symmetry states
-* Ordered-range, explicit-label, count-only, and Hamming-weight class partitions
-* Discovery of equal-amplitude classes from a `QubitRegister`
-* Exact conversion from a symmetry state back into a normal register when the state can be materialized
+* Exact Grover compression
+* Exact stabilizer tableaus
+* Exact phase-graph states
+* Native quantum-dot pockets
+* QSC binary state storage
 
-### Gates and measurement
+### Gates and evolution
 
 * X, Y, Z, H, S, S-dagger, T, and T-dagger
 * Rx, Ry, and Rz
 * CNOT, CZ, and SWAP
-* Arbitrary 2x2 operators through C++
-* Arbitrary 4x4 operators through C++
-* Single-qubit measurement and collapse
-* Whole-register measurement
-* Bit-flip, phase-flip, depolarizing, and amplitude-damping trajectories
+* Arbitrary 2x2 and 4x4 C++ operators
+* Exact structural gate variants
+* Compiled operation plans
+* Compiled diagonal plans
+* Parameterized plans
+* Pure-state noise trajectories
+
+### Measurement and readout
+
+* Single-qubit measurement
+* Sequential whole-register measurement
+* Joint component measurement
+* Bulk probability readout
+* Zero-copy component views
+* Reusable output buffers
 
 ### Execution
 
-* Specialized sparse and dense kernels
+* Sparse and dense specialized kernels
 * Direct permutation and diagonal kernels
-* Compiled operation plans
-* Adjacent single-qubit gate fusion
-* One-pass diagonal layers
-* Parameterized plans
-* Parallel execution over independent registers
-* Bulk probability readout
-* Mutation-aware QSC caching
-* Optional native CPU optimization through `QSTATE_NATIVE_ARCH`
+* Linear sparse X and Y paths
+* Active-component diagonal execution
+* Parallel independent registers
+* Parallel independent components
+* Stabilizer batch execution
+* Adaptive compaction
+* Representation advice
+* Optional native CPU optimization
 
-### Grover and symmetry
-
-* Exact Grover oracle and diffusion on `QubitRegister`
-* Compressed `GroverSearch` for ideal marked/unmarked amplitude evolution
-* Fast-forward of repeated Grover iterations
-* General class-space unitary evolution through `SymmetryState`
-* Fast-forward of repeated class-space operations
-* Exact Hamming-weight states for permutation-symmetric systems
-
-### Interfaces and packaging
+### Interfaces
 
 * C++ API
 * Versioned C ABI
 * NumPy-free Python package
-* Supported import: `from qsa import ...`
-* Legacy `qubit_native` import compatibility
-* Installable CMake targets:
-  * `QSA::qstate_core`
-  * `QSA::qstate`
-* Linux, Windows, and macOS CI
-* Python 3.9, 3.12, and 3.13 package checks
+* Installable CMake targets
+* Linux, Windows, and macOS support
+* Python 3.9, 3.12, and 3.13 package testing
 
 ---
 
-## Measured Results
+## Selected Measured Results
 
-The numbers below are from specific benchmark workloads. They are not one universal multiplier for every circuit.
+These are workload-specific measurements, not one universal multiplier for every circuit.
 
-### Native engine compared with QSA 0.1.0
+| Workload                                                |                                           Result |
+| ------------------------------------------------------- | -----------------------------------------------: |
+| 1,000 independent Bell pairs compared with QSA 0.1.0    |                                **32.12x faster** |
+| 20 dense CNOT gates over 65,536 amplitudes              |                               **107.18x faster** |
+| 50,000 Python gate calls through one compiled plan      |                               **629.61x faster** |
+| Compressed 16-qubit Grover search                       | **160,665.80x faster than the dense exact path** |
+| 20-qubit symmetry fast-forward                          |                **130,750.18x faster than dense** |
+| Disconnected SWAP between two dense 12-qubit components |                approximately **745,000x faster** |
+| Joint measurement of one dense 20-qubit component       |                    approximately **489x faster** |
+| Bayesian compaction on persistent entanglement          |               approximately **4.3x–5.4x faster** |
+| Component-aware 20-qubit symmetry discovery             |                  approximately **3,845x faster** |
+| 18-qubit, 800-gate stabilizer workload                  |                  approximately **1,744x faster** |
+| Sparse X over 262,144 support entries                   |             up to approximately **23.3x faster** |
+| Sparse Y over 262,144 support entries                   |             up to approximately **15.4x faster** |
+| 4,096-qubit, 100,000-gate stabilizer batch              |               approximately **120x–138x faster** |
+| 100,000-qubit phase graph with 199,999 phase operations |                         approximately **4.6 ms** |
 
-| Workload | QSA 0.1.0 | Accelerated engine | Change |
-|---|---:|---:|---:|
-| 1,000 independent Bell pairs | 10.675 ms | 0.332 ms | **32.12x faster** |
-| 20,000 sparse Rz gates | 2.495 ms | 0.387 ms | **6.45x faster** |
-| 2,000 sparse CNOT gates | 4.978 ms | 0.751 ms | **6.63x faster** |
-| 2,000 sparse Ry gates | 220.335 ms | 26.908 ms | **8.19x faster** |
-| 20 dense CNOT gates over 65,536 amplitudes | 447.406 ms | 4.174 ms | **107.18x faster** |
-| 20 dense Ry gates over 65,536 amplitudes | 7.764 ms | 2.810 ms | **2.76x faster** |
+The largest results come from exact mathematical compression or from avoiding work that the state does not require.
 
-### Plans and batched execution
+A fully general dense state still requires a fully general dense representation.
 
-| Workload | Result |
-|---|---:|
-| 20,002 adjacent single-qubit operations reduced to 3 native steps | **156.85x faster** |
-| 640 diagonal operations reduced to one patch traversal | **31.23x faster** |
-| 50,000 Python gate calls run through one optimized native plan | **629.61x faster** |
-| Bulk probability readout for 4,096 structured qubits | **9.06x faster** |
-| One plan applied across 256 independent registers | **2.99x faster** |
-
-### Grover and symmetry states
-
-| Workload | Result |
-|---|---:|
-| Compressed 16-qubit Grover search against the dense exact path | **160,665.80x faster** |
-| Compressed 16-qubit Grover memory against a dense statevector | **10,922.67x smaller** |
-| 20-qubit symmetry state, executing all 1,000 operations | **386.97x faster than dense** |
-| Same 20-qubit symmetry operation fast-forwarded | **130,750.18x faster than dense** |
-| 20-qubit symmetry memory against a dense statevector | **42,799.02x smaller** |
-| 60-qubit Hamming-weight state | **61 classes in 1,592 bytes** |
-
-The large Grover and symmetry results come from exact mathematical compression. They apply when the class structure is real and remains valid. If a circuit produces a general dense state with independent amplitudes, QSA still has to store and process those amplitudes.
-
-Benchmark code and recorded results are in [`benchmarks/`](benchmarks/) and [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+Benchmark code is available in [`benchmarks/`](benchmarks/).
 
 ---
 
 ## Structured-State Memory Results
 
-A representative release build produced:
+Representative results:
 
 ```text
 10,000 independent qubits
@@ -206,23 +347,10 @@ components=100
 engine-memory=25.88 KiB
 ```
 
-Dense `complex128` comparisons for the same GHZ structure:
+Dense `complex128` comparison for a 50-qubit GHZ state:
 
 ```text
-20 qubits
-QSA: approximately 2.32 KiB
-Dense statevector: 16 MiB
-
-30 qubits
-QSA: approximately 3.41 KiB
-Dense statevector: 16 GiB
-
-40 qubits
-QSA: approximately 4.51 KiB
-Dense statevector: 16 TiB
-
-50 qubits
-QSA: approximately 5.60 KiB
+QSA sparse GHZ: approximately 5.60 KiB
 Dense statevector: 16 PiB
 ```
 
@@ -233,25 +361,23 @@ Additional symmetry results:
 logical-basis-states=1,048,576
 QSA symmetry-memory=392 bytes
 dense complex128 memory=16 MiB
-memory-reduction=42,799.02x
 
 60-qubit Hamming-weight state
 logical-basis-states=1,152,921,504,606,846,976
 amplitude-classes=61
 QSA engine-memory=1,592 bytes
-dense complex128 equivalent=16 EiB
 ```
 
-These are structured-state results. They are not compression ratios for arbitrary quantum states.
+These results apply to states with the described structure. They are not compression ratios for arbitrary states.
 
 ---
 
 ## Installation
 
-### Install from GitHub
+Install QSA 0.1.7 from GitHub:
 
 ```bash
-python -m pip install "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@v0.1.6"
+python -m pip install "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@v0.1.7"
 ```
 
 Install the current `main` branch:
@@ -260,86 +386,17 @@ Install the current `main` branch:
 python -m pip install "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@main"
 ```
 
-Import QSA with:
+Import QSA:
 
 ```python
 from qsa import QubitRegister
 ```
 
-Upgrade an existing installation:
-
-```bash
-python -m pip install --upgrade --force-reinstall \
-  "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@main"
-```
-
-Uninstall:
-
-```bash
-python -m pip uninstall qubit-state-algebra
-```
-
 ---
 
-## Build From Source
+## Quick Start
 
-Requirements:
-
-* CMake 3.20 or newer
-* A C++20 compiler
-* Python 3.9 or newer for the Python package
-
-```bash
-git clone https://github.com/R-D-BioTech-Alaska/QSA.git
-cd QSA
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
-```
-
-For a local build that will only run on the same machine:
-
-```bash
-cmake -S . -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DQSTATE_NATIVE_ARCH=ON
-```
-
-Leave `QSTATE_NATIVE_ARCH` off for portable packages and wheels.
-
-The native build produces the shared library, test programs, examples, and benchmark executables for the active platform.
-
----
-
-## Use QSA From Another CMake Project
-
-Install QSA to a prefix:
-
-```bash
-cmake --install build --prefix "$PWD/install"
-```
-
-Use the C++ engine:
-
-```cmake
-find_package(QSA CONFIG REQUIRED)
-target_link_libraries(my_application PRIVATE QSA::qstate_core)
-```
-
-Use the stable C ABI shared library:
-
-```cmake
-find_package(QSA CONFIG REQUIRED)
-target_link_libraries(my_application PRIVATE QSA::qstate)
-```
-
-Set `CMAKE_PREFIX_PATH` when the install prefix is not in a normal system location.
-
----
-
-## Python Examples
-
-### Bell State
+Create a Bell state:
 
 ```python
 from qsa import QubitRegister
@@ -360,115 +417,7 @@ Expected nonzero amplitudes:
 |11> = 0.7071067811865475 + 0j
 ```
 
-### Compiled Operation Plan
-
-```python
-from qsa import OperationPlan, QubitRegister
-
-plan = OperationPlan([
-    ("h", 0),
-    ("cnot", 0, 1),
-    ("rz", 1, 0.25),
-    ("cnot", 1, 2),
-])
-
-with QubitRegister(3) as state:
-    state.apply_plan(plan)
-```
-
-Plans are useful when the same circuit is run many times. QSA can fuse adjacent single-qubit work and combine compatible diagonal operations into fewer native passes.
-
-### Parameterized Plan
-
-```python
-from qsa import Parameter, ParameterizedPlan, QubitRegister
-
-theta = Parameter("theta")
-phi = Parameter("phi")
-
-plan = ParameterizedPlan([
-    ("ry", 0, theta),
-    ("rz", 0, phi),
-    ("cnot", 0, 1),
-    ("ry", 1, theta),
-])
-
-states = [QubitRegister(2) for _ in range(128)]
-try:
-    plan.apply_many(states, {"theta": 0.31, "phi": -0.22}, workers=0)
-finally:
-    for state in states:
-        state.close()
-```
-
-### Grover Search
-
-```python
-from qsa import GroverSearch
-
-with GroverSearch(40, [731]) as search:
-    search.run_optimal()
-    print(search.success_probability)
-    print(search.sample())
-```
-
-`GroverSearch` stores the shared marked and unmarked amplitudes directly. It is exact for uniform-start Grover evolution with a fixed marked set.
-
-Use `QubitRegister` when gate-level interoperability is needed:
-
-```python
-from qsa import QubitRegister
-
-with QubitRegister(16) as state:
-    for qubit in range(16):
-        state.h(qubit)
-
-    state.grover_iterations([48_731], 201)
-```
-
-The `QubitRegister` form is exact and interoperable with normal gates, but it promotes the register into a dense component.
-
-### Symmetry State
-
-```python
-from qsa import SymmetryState
-
-with SymmetryState.hamming_weight(60) as state:
-    state.phases([-0.02 * weight for weight in range(61)])
-    state.reflect()
-
-    print(state.class_probability(30))
-    print(state.estimated_bytes)
-```
-
-A 60-qubit Hamming-weight state has `2^60` basis states but only 61 Hamming-weight classes.
-
-### Bulk Readout
-
-```python
-probabilities = state.probabilities_one()
-```
-
-This reads every qubit's `|1>` probability in one native call.
-
-### QSC Save and Restore
-
-```python
-from qsa import QubitRegister
-
-with QubitRegister(2) as state:
-    state.h(0)
-    state.cnot(0, 1)
-    packet = state.encode_qsc()
-
-restored = QubitRegister.decode_qsc(packet)
-try:
-    print(restored.describe())
-finally:
-    restored.close()
-```
-
-### Large Structured State
+Create a large sparse GHZ state:
 
 ```python
 from qsa import QubitRegister
@@ -480,78 +429,46 @@ with QubitRegister(50) as state:
         state.cnot(0, target)
 
     print(state.describe())
-    print("Component size:", state.component_size(0))
     print("Nonzero amplitudes:", state.component_nonzero_count(0))
     print("Estimated memory:", state.estimated_bytes)
 ```
 
-This creates an exact 50-qubit GHZ state without allocating a dense `2^50` vector.
+This creates an exact 50-qubit GHZ state without allocating a dense `2^50` statevector.
 
 ---
 
-## Source-Tree Python Use
+## Build From Source
 
-Build the native library first:
+Requirements:
+
+* CMake 3.20 or newer
+* A C++20 compiler
+* Python 3.9 or newer for the Python package
 
 ```bash
+git clone https://github.com/R-D-BioTech-Alaska/QSA.git
+cd QSA
+
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-Linux:
+For a local build optimized for the current machine:
 
 ```bash
-export PYTHONPATH="$PWD/python"
-export QSA_NATIVE_LIB="$PWD/build/libqstate.so"
-python3 examples/bell.py
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DQSTATE_NATIVE_ARCH=ON
 ```
 
-macOS:
-
-```bash
-export PYTHONPATH="$PWD/python"
-export QSA_NATIVE_LIB="$PWD/build/libqstate.dylib"
-python3 examples/bell.py
-```
-
-Windows PowerShell:
-
-```powershell
-$env:PYTHONPATH = "$PWD\python"
-$env:QSA_NATIVE_LIB = "$PWD\build\Release\qstate.dll"
-py examples\bell.py
-```
-
-A normal package installation does not require these environment variables.
-
----
-
-## C++ Example
-
-```cpp
-#include "qubit/qstate.hpp"
-
-#include <cstdint>
-#include <iostream>
-
-int main() {
-    qubit::QRegister state(50);
-
-    state.apply_h(0);
-    for (std::uint32_t target = 1; target < 50; ++target) {
-        state.apply_cnot(0, target);
-    }
-
-    std::cout << state.describe();
-    std::cout << "Support: " << state.component_nonzero_count(0) << '\n';
-}
-```
+Leave `QSTATE_NATIVE_ARCH` off when building portable packages or wheels.
 
 ---
 
 ## QSC
 
-**Qubit State Code (QSC)** is the binary format used to save and restore normal QSA registers.
+**Qubit State Code (QSC)** is the checksummed binary format used to save and restore normal QSA registers.
 
 QSC v1 stores:
 
@@ -569,9 +486,9 @@ packet = state.encode_qsc()
 restored = QubitRegister.decode_qsc(packet)
 ```
 
-QSC v1 is a compatibility contract. Existing packets remain readable by newer 0.1 releases.
+QSC v1 remains a compatibility contract. Existing QSC v1 packets remain readable by newer QSA 0.1 releases.
 
-The checksum is for accidental corruption. It is not authentication or encryption. Networked Qubit nodes must carry QSC inside an authenticated and encrypted transport.
+The checksum protects against accidental corruption. It is not authentication or encryption.
 
 ---
 
@@ -590,7 +507,7 @@ QELM Base
     v
 Qubit Network
     |
-    | leases work to a temporary node
+    | leases bounded work to a temporary node
     v
 QSA
     |
@@ -599,119 +516,112 @@ QSA
 QSC or result returned to QELM Base
 ```
 
-The node does not need QELM's full model, long-term memory, user history, or private knowledge. It can receive a temporary mathematical state, a bounded operation plan, and return only the result or updated state.
+A Qubit node does not need QELM's complete model, long-term memory, user history, or private knowledge. It can receive a temporary mathematical state and a bounded operation plan, then return only the result or updated state.
 
-QSA helps this model by keeping work compact:
-
-* Independent channels stay independent.
-* Sparse states stay sparse.
-* Symmetric states can be represented by amplitude classes.
-* Dense work can be limited to the local component that actually needs it.
-* Plans replace thousands of individual calls with one native workload.
+QSA supports this design by keeping independent and structured work compact.
 
 ---
 
 ## Validation
 
-Run the native tests:
+QSA 0.1.7 passed the complete repository test matrix across Linux, macOS, and Windows.
+
+Validation includes:
+
+* 29 complete CTest targets
+* 14,400 randomized NumPy comparison operations
+* Grover and symmetry comparison tests
+* Quantum-dot differential, safety, stress, robustness, and concurrency tests
+* Structural CNOT, CZ, and SWAP tests
+* Bayesian compaction audit tests
+* Representation-advisor eligibility tests
+* Stabilizer comparison against `QRegister`
+* Phase-graph differential validation
+* Sparse X and Y permutation tests
+* Structured diagonal tests
+* Stabilizer scalar-versus-batch comparison
+* Packed tableau boundary tests
+* Invalid-batch atomicity
+* Scratch-memory rejection
+* Concurrent independent execution
+* ASan and UBSan
+* Python 3.9, 3.12, and 3.13 package tests
+* Wheel and source-distribution installation tests
+* Independent installed C and C++ consumer builds
+
+NumPy is used only as an outside reference in differential tests. It is not part of the QSA engine.
+
+Run the native tests with:
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
-Run the independent NumPy comparison:
+Run the independent NumPy comparison with:
 
 ```bash
 python3 benchmarks/compare_numpy.py
 ```
 
-NumPy is used only as an outside reference in the differential tests. It is not part of the QSA engine.
-
-Validation covers:
-
-* Random single- and two-qubit gates
-* Bell and GHZ states
-* Sparse and dense evolution
-* Measurement and post-measurement collapse
-* Component separation
-* Noise trajectories
-* QSC round trips and frozen QSC v1 fixtures
-* Corrupt and hostile QSC input
-* Plan optimizer equivalence
-* Grover evolution against a dense exact reference
-* Symmetry evolution against a dense exact reference
-* Cross-version Python/native compatibility
-* Portable, optimized, and sanitizer builds
-* Installed C and C++ package consumers
-
-The 0.1.6 release gates include:
-
-* 12 native release tests
-* 14,400 randomized NumPy comparison operations
-* 200 Grover searches and 41,500 amplitude checks
-* 20,000 symmetry operations and 39,272 amplitude checks
-* ASan and UBSan builds
-* Exact tagged-archive rebuild tests
-
-See [`docs/VALIDATION_0_1_6.md`](docs/VALIDATION_0_1_6.md) and [`docs/VALIDATION_RESULTS_0_1_6.txt`](docs/VALIDATION_RESULTS_0_1_6.txt).
-
 ---
 
 ## Compatibility
 
-QSA 0.1 keeps the established C++, C, Python, and QSC v1 interfaces in place.
+QSA 0.1.7 keeps the established QSA 0.1 C++, C, Python, and QSC v1 interfaces in place.
 
 * Existing C++ names remain available.
 * Existing C ABI symbols remain available.
-* Existing Python imports and method forms remain available.
+* Existing Python imports remain available.
 * Existing gate and qubit ordering remain unchanged.
 * Existing QSC v1 packets remain readable.
+* Existing scalar execution paths remain available.
+* New structured and specialized paths are additive.
 * `QSA_NATIVE_LIB` is the preferred native-library override.
 * `QUBIT_NATIVE_LIB` remains supported for older projects.
 
-See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
-
-### Threading
-
-Separate state handles may run at the same time. Immutable plans may be shared across separate registers. Do not mutate one register from multiple threads at once.
-
-See [`docs/THREADING.md`](docs/THREADING.md).
+Separate state objects may run concurrently. Do not mutate one state object from multiple threads at the same time.
 
 ---
 
 ## Limits
 
-QSA avoids exponential allocation when a state has exploitable structure. It does not make every quantum state compact.
+QSA avoids exponential allocation when a state has exploitable structure.
 
-A fully general, globally entangled state may still require exponentially many independent amplitudes. If that information is present, an exact simulator has to store it somewhere.
+It does not make every quantum state compact.
 
-QSA is designed to delay and localize that cost:
+A fully general globally entangled state may still require exponentially many independent amplitudes. If that information is present, an exact simulator has to store it somewhere.
+
+QSA is designed to delay, localize, or avoid that cost when the mathematics permits:
 
 * Independent qubits remain cells.
 * Local entanglement remains local.
 * Sparse states remain sparse.
-* Equal-amplitude basis states can remain in symmetry classes.
+* Equal-amplitude states can remain symmetry classes.
+* Clifford circuits can remain stabilizer tableaus.
+* Supported phase structures can remain phase graphs.
+* Quantum-dot systems can remain bounded local components.
+* Structured operations can skip unrelated components.
 * Dense storage is used only where the state requires it.
 
-Performance should be measured on the circuit being run, not inferred from one benchmark.
+Performance should be measured on the actual workload being run.
 
 ---
 
 ## Next Work
 
-1. Selective GPU execution for dense local components
-2. More explicit SIMD kernels
-3. Automatic representation selection and migration
-4. Stabilizer components for Clifford-heavy circuits
-5. Symbolic-phase components
+1. Persistent compiled stabilizer plans
+2. Automatic exact migration between QSA representations
+3. Expanded Bayesian representation routing
+4. Selective GPU execution for dense local components
+5. Explicit SIMD kernels where they provide repeatable gains
 6. Matrix-product and tensor-linked components
-7. Wider factor detection
-8. Larger batched trajectory and mixed-state work
+7. Wider factor and separability detection
+8. Larger trajectory and mixed-state workloads
 9. QELM operation compiler and scheduler
-10. Qubit node leases, verification, and state-destruction protocol
-11. Authenticated QSC network envelope
+10. Qubit node verification and state-destruction protocol
+11. Authenticated QSC network transport
 12. Android, iOS, and WebAssembly builds
-13. Differential testing against Aer, QuEST, qsim, and other independent simulators
+13. Additional differential testing against independent simulators
 
 ---
 
@@ -719,14 +629,14 @@ Performance should be measured on the circuit being run, not inferred from one b
 
 * [`docs/MATHEMATICS.md`](docs/MATHEMATICS.md)
 * [`docs/QSC_FORMAT.md`](docs/QSC_FORMAT.md)
-* [`docs/REPO_INTEGRATION.md`](docs/REPO_INTEGRATION.md)
 * [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)
 * [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)
 * [`docs/THREADING.md`](docs/THREADING.md)
 * [`docs/GROVER.md`](docs/GROVER.md)
 * [`docs/SYMMETRY.md`](docs/SYMMETRY.md)
-* [`docs/VALIDATION_0_1_6.md`](docs/VALIDATION_0_1_6.md)
-* [`docs/VALIDATION_RESULTS_0_1_6.txt`](docs/VALIDATION_RESULTS_0_1_6.txt)
+* [`docs/STABILIZER.md`](docs/STABILIZER.md)
+* [`docs/SCALING_FAST_PATHS.md`](docs/SCALING_FAST_PATHS.md)
+* [`docs/QUANTUM_DOTS.md`](docs/QUANTUM_DOTS.md)
 * [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)
 
 ---
@@ -735,7 +645,7 @@ Performance should be measured on the circuit being run, not inferred from one b
 
 QSA is an active research and engineering project.
 
-Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing a public API, QSC behavior, or numerical tolerance.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing a public API, QSC behavior, representation contract, or numerical tolerance.
 
 Security reports should follow [`SECURITY.md`](SECURITY.md) instead of being posted as a public issue.
 
@@ -743,7 +653,9 @@ Security reports should follow [`SECURITY.md`](SECURITY.md) instead of being pos
 
 ## Citation
 
-Use the DOI at the top of this README or the repository's [`CITATION.cff`](CITATION.cff).
+Use the DOI at the top of this README or the repository's [`CITATION.cff`](CITATION.cff) when citing Qubit State Algebra.
+
+For results or features specific to this release, identify the software version as **QSA 0.1.7**.
 
 ---
 
@@ -751,4 +663,4 @@ Use the DOI at the top of this README or the repository's [`CITATION.cff`](CITAT
 
 Qubit State Algebra is released under the MIT License.
 
-See [`LICENSE`](LICENSE)
+See [`LICENSE`](LICENSE).
