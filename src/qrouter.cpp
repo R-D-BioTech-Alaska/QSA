@@ -36,6 +36,8 @@ const char* representation_name(RepresentationKind kind) noexcept {
             return "QuantumDotPocket";
         case RepresentationKind::Stabilizer:
             return "StabilizerState";
+        case RepresentationKind::PhaseGraph:
+            return "PhaseGraphState";
     }
     return "unknown";
 }
@@ -50,7 +52,9 @@ RepresentationFeatures RepresentationAdvisor::inspect(
     std::uint64_t repeated_steps,
     std::size_t exact_symmetry_classes,
     bool quantum_dot_declared,
-    bool clifford_only) {
+    bool clifford_only,
+    bool uniform_phase_graph,
+    std::size_t phase_graph_edges) {
     if (repeated_steps == 0U) {
         throw QStateError("Representation advisor repeated_steps must be positive");
     }
@@ -62,6 +66,8 @@ RepresentationFeatures RepresentationAdvisor::inspect(
     features.exact_symmetry_classes = exact_symmetry_classes;
     features.quantum_dot_declared = quantum_dot_declared;
     features.clifford_only = clifford_only;
+    features.uniform_phase_graph = uniform_phase_graph;
+    features.phase_graph_edges = phase_graph_edges;
     for (std::size_t qubit = 0; qubit < state.qubit_count(); ++qubit) {
         const QubitId id = static_cast<QubitId>(qubit);
         features.largest_component =
@@ -74,9 +80,12 @@ RepresentationFeatures RepresentationAdvisor::inspect(
 std::size_t RepresentationAdvisor::context(
     const RepresentationFeatures& features) const noexcept {
     if (features.quantum_dot_declared) {
-        return 4U;
+        return 5U;
     }
     if (features.clifford_only) {
+        return 4U;
+    }
+    if (features.uniform_phase_graph) {
         return 3U;
     }
     if (features.exact_symmetry_classes != 0U &&
@@ -93,7 +102,7 @@ std::size_t RepresentationAdvisor::context(
 std::size_t RepresentationAdvisor::index(
     const RepresentationFeatures& features,
     RepresentationKind kind) const noexcept {
-    return context(features) * 4U + static_cast<std::size_t>(kind);
+    return context(features) * 5U + static_cast<std::size_t>(kind);
 }
 
 double RepresentationAdvisor::posterior_mean(
@@ -117,7 +126,7 @@ std::vector<RepresentationScore> RepresentationAdvisor::rank(
     const double qubits = static_cast<double>(features.qubit_count);
 
     std::vector<RepresentationScore> scores;
-    scores.reserve(4U);
+    scores.reserve(5U);
 
     RepresentationScore register_score;
     register_score.kind = RepresentationKind::Register;
@@ -174,6 +183,23 @@ std::vector<RepresentationScore> RepresentationAdvisor::rank(
         ? "workload is explicitly restricted to Clifford operations"
         : "workload is not declared Clifford-only";
     scores.push_back(stabilizer_score);
+
+    RepresentationScore phase_graph_score;
+    phase_graph_score.kind = RepresentationKind::PhaseGraph;
+    phase_graph_score.eligible = features.uniform_phase_graph;
+    const double phase_graph_size = static_cast<double>(
+        features.qubit_count + features.phase_graph_edges + 1U);
+    phase_graph_score.estimated_work = phase_graph_score.eligible
+        ? safe_product(steps, std::max(1.0, phase_graph_size * 0.02))
+        : std::numeric_limits<double>::infinity();
+    phase_graph_score.posterior_success = posterior_mean(features, phase_graph_score.kind);
+    phase_graph_score.adjusted_score = phase_graph_score.eligible
+        ? phase_graph_score.estimated_work / phase_graph_score.posterior_success
+        : std::numeric_limits<double>::infinity();
+    phase_graph_score.reason = phase_graph_score.eligible
+        ? "workload is explicitly restricted to the uniform phase-graph gate family"
+        : "workload is not declared uniform phase-graph";
+    scores.push_back(phase_graph_score);
 
     std::stable_sort(scores.begin(), scores.end(), [](const RepresentationScore& left,
                                                        const RepresentationScore& right) {
