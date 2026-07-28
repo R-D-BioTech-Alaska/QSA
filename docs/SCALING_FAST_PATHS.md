@@ -4,15 +4,15 @@ QSA keeps structured registers compact by operating only on components touched b
 
 ## Active-component diagonal evolution
 
-`QRegister::apply_diagonal()` applies geometric-cell phases immediately and groups amplitude-patch phases only for components that actually receive a phase. A single phase on one cell or one entangled patch no longer allocates a grouping vector for every independent component in the register.
+`QRegister::apply_diagonal_structured()` applies geometric-cell phases immediately and groups amplitude-patch phases only for components that actually receive a phase. A single phase on one cell or one entangled patch no longer allocates a grouping vector for every independent component in the register.
 
 The dense multi-phase path retains the compact grouped loop used by ordinary training layers. The active-component path is selected only when the register is much wider than the phase set, so small and dense workloads keep their historical performance.
 
-The transformation is exact: every selected basis amplitude is multiplied by the same product of unit-magnitude coefficients as before. Component membership, support, and storage mode are unchanged.
+The structured variants are additive and leave the historical scalar methods unchanged. The transformation is exact: every selected basis amplitude is multiplied by the same product of unit-magnitude coefficients as before. Component membership, support, and storage mode are unchanged.
 
 ## Linear sparse Pauli permutations
 
-Sparse X and Y gates are index permutations. XOR by one bit exchanges the lower and upper halves of each naturally sorted index block. QSA now rotates those two sorted halves and applies the Pauli-Y phase in one linear pass instead of permuting every index and sorting the complete support again.
+`apply_x_structured()` and `apply_y_structured()` use the fact that sparse X and Y gates are index permutations. XOR by one bit exchanges the lower and upper halves of each naturally sorted index block. QSA now rotates those two sorted halves and applies the Pauli-Y phase in one linear pass instead of permuting every index and sorting the complete support again.
 
 For support size `k`, the sparse X/Y index work changes from `O(k log k)` sorting to `O(k)` exact permutation. The support remains sorted and duplicate-free without rebuilding the amplitude store.
 
