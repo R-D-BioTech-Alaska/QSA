@@ -175,6 +175,7 @@ private:
     void sort_sparse();
 
     friend class QRegister;
+    friend class CompiledDiagonalPlan;
 };
 
 struct StateComponent {
@@ -186,10 +187,20 @@ struct StateComponent {
     }
 };
 
+struct QComponentReadView {
+    ComponentKind kind{ComponentKind::Cell};
+    std::span<const QubitId> qubits{};
+    const BlochCell* cell{nullptr};
+    std::span<const AmplitudeStore::SparseEntry> sparse{};
+    std::span<const QComplex> dense{};
+    BasisIndex dimension{0};
+};
+
 class QStateCodec;
 class AdaptiveOperationPlan;
 class SymmetryState;
 class IndependentComponentPlan;
+class CompiledDiagonalPlan;
 
 class QRegister {
 public:
@@ -244,13 +255,18 @@ public:
 
     [[nodiscard]] double probability_one(QubitId qubit) const;
     [[nodiscard]] std::vector<double> probabilities_one() const;
+    void probabilities_one_into(std::span<double> output) const;
     [[nodiscard]] int measure(QubitId qubit, double sample);
     [[nodiscard]] std::vector<int> measure_all(std::uint64_t seed);
     [[nodiscard]] std::vector<int> measure_all_joint(std::uint64_t seed);
+    void measure_all_into(std::uint64_t seed, std::span<int> output);
 
     [[nodiscard]] QComplex amplitude(BasisIndex global_basis_index) const;
     [[nodiscard]] QComplex amplitude_bits(std::span<const std::uint8_t> bits) const;
     [[nodiscard]] std::vector<QComplex> materialize(std::size_t max_qubits = 24) const;
+
+    [[nodiscard]] QComponentReadView component_read_view(QubitId qubit) const;
+    [[nodiscard]] std::vector<QComponentReadView> component_read_views() const;
 
     [[nodiscard]] std::size_t component_size(QubitId qubit) const;
     [[nodiscard]] StorageMode component_storage_mode(QubitId qubit) const;
@@ -308,6 +324,7 @@ private:
     friend class AdaptiveOperationPlan;
     friend class SymmetryState;
     friend class IndependentComponentPlan;
+    friend class CompiledDiagonalPlan;
 };
 
 class QStateCodec {
