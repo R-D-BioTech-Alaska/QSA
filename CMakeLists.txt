@@ -18,6 +18,8 @@ option(QSTATE_INSTALL_DEVELOPMENT "Install C++ headers, static library, and CMak
 
 add_library(qstate_core STATIC
     src/qstate.cpp
+    src/qdot.cpp
+    src/qdot_reference.cpp
     src/qsc.cpp
     src/qplan.cpp
     src/qgrover.cpp
@@ -90,6 +92,30 @@ if(QSTATE_BUILD_TESTS)
     add_executable(qstate_qsc_adversarial_tests tests/test_qsc_adversarial.cpp)
     target_link_libraries(qstate_qsc_adversarial_tests PRIVATE qstate_core)
     add_test(NAME qstate_qsc_adversarial_tests COMMAND qstate_qsc_adversarial_tests)
+
+    add_executable(qstate_qdot_safety_tests tests/test_qdot_safety.cpp)
+    target_link_libraries(qstate_qdot_safety_tests PRIVATE qstate_core)
+    add_test(NAME qstate_qdot_safety_tests COMMAND qstate_qdot_safety_tests)
+
+    add_executable(qstate_qdot_differential_tests tests/test_qdot_differential.cpp)
+    target_link_libraries(qstate_qdot_differential_tests PRIVATE qstate_core)
+    add_test(NAME qstate_qdot_differential_tests COMMAND qstate_qdot_differential_tests)
+
+    add_executable(qstate_qdot_stress_tests tests/test_qdot_stress.cpp)
+    target_link_libraries(qstate_qdot_stress_tests PRIVATE qstate_core)
+    add_test(NAME qstate_qdot_stress_tests COMMAND qstate_qdot_stress_tests)
+
+    add_executable(qstate_qdot_concurrency_tests tests/test_qdot_concurrency.cpp)
+    target_link_libraries(qstate_qdot_concurrency_tests PRIVATE qstate_core)
+    add_test(NAME qstate_qdot_concurrency_tests COMMAND qstate_qdot_concurrency_tests)
+
+    add_executable(qstate_qdot_robustness_tests tests/test_qdot_robustness.cpp)
+    target_link_libraries(qstate_qdot_robustness_tests PRIVATE qstate_core)
+    add_test(NAME qstate_qdot_robustness_tests COMMAND qstate_qdot_robustness_tests)
+
+    add_executable(qstate_qdot_no_regression_tests tests/test_qdot_no_regression.cpp)
+    target_link_libraries(qstate_qdot_no_regression_tests PRIVATE qstate_core)
+    add_test(NAME qstate_qdot_no_regression_tests COMMAND qstate_qdot_no_regression_tests)
 
     if(QSTATE_BUILD_PYTHON_TESTS)
         find_package(Python3 COMPONENTS Interpreter)
@@ -166,6 +192,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_symmetry_benchmark benchmarks/symmetry_algebra.cpp)
     target_link_libraries(qstate_symmetry_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_qdot_benchmark benchmarks/quantum_dot.cpp)
+    target_link_libraries(qstate_qdot_benchmark PRIVATE qstate_core)
 endif()
 
 include(CMakePackageConfigHelpers)
