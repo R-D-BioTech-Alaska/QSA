@@ -29,6 +29,7 @@ add_library(qstate_core STATIC
     src/qsymmetry_components.cpp
     src/qrouter.cpp
     src/qstabilizer.cpp
+    src/qstabilizer_batch.cpp
     src/qphase_graph.cpp
     src/qexecution.cpp
     src/qread.cpp
@@ -146,6 +147,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_stabilizer_tests PRIVATE qstate_core)
     add_test(NAME qstate_stabilizer_tests COMMAND qstate_stabilizer_tests)
 
+    add_executable(qstate_stabilizer_batch_tests tests/test_stabilizer_batch.cpp)
+    target_link_libraries(qstate_stabilizer_batch_tests PRIVATE qstate_core)
+    add_test(NAME qstate_stabilizer_batch_tests COMMAND qstate_stabilizer_batch_tests)
+
     add_executable(qstate_phase_graph_tests tests/test_phase_graph.cpp)
     target_link_libraries(qstate_phase_graph_tests PRIVATE qstate_core)
     add_test(NAME qstate_phase_graph_tests COMMAND qstate_phase_graph_tests)
@@ -161,6 +166,10 @@ if(QSTATE_BUILD_TESTS)
     add_executable(qstate_compiled_diagonal_tests tests/test_compiled_diagonal.cpp)
     target_link_libraries(qstate_compiled_diagonal_tests PRIVATE qstate_core)
     add_test(NAME qstate_compiled_diagonal_tests COMMAND qstate_compiled_diagonal_tests)
+
+    add_executable(qstate_scaling_fast_paths_tests tests/test_scaling_fast_paths.cpp)
+    target_link_libraries(qstate_scaling_fast_paths_tests PRIVATE qstate_core)
+    add_test(NAME qstate_scaling_fast_paths_tests COMMAND qstate_scaling_fast_paths_tests)
 
     if(QSTATE_BUILD_PYTHON_TESTS)
         find_package(Python3 COMPONENTS Interpreter)
@@ -264,6 +273,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_compiled_diagonal_benchmark benchmarks/compiled_diagonal.cpp)
     target_link_libraries(qstate_compiled_diagonal_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_scaling_fast_paths_benchmark benchmarks/scaling_fast_paths.cpp)
+    target_link_libraries(qstate_scaling_fast_paths_benchmark PRIVATE qstate_core)
 endif()
 
 include(CMakePackageConfigHelpers)
