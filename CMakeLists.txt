@@ -29,6 +29,7 @@ add_library(qstate_core STATIC
     src/qsymmetry_components.cpp
     src/qrouter.cpp
     src/qstabilizer.cpp
+    src/qphase_graph.cpp
 )
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
@@ -142,6 +143,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_stabilizer_tests PRIVATE qstate_core)
     add_test(NAME qstate_stabilizer_tests COMMAND qstate_stabilizer_tests)
 
+    add_executable(qstate_phase_graph_tests tests/test_phase_graph.cpp)
+    target_link_libraries(qstate_phase_graph_tests PRIVATE qstate_core)
+    add_test(NAME qstate_phase_graph_tests COMMAND qstate_phase_graph_tests)
+
     if(QSTATE_BUILD_PYTHON_TESTS)
         find_package(Python3 COMPONENTS Interpreter)
         if(Python3_Interpreter_FOUND)
@@ -232,6 +237,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_stabilizer_benchmark benchmarks/stabilizer.cpp)
     target_link_libraries(qstate_stabilizer_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_phase_graph_benchmark benchmarks/phase_graph.cpp)
+    target_link_libraries(qstate_phase_graph_benchmark PRIVATE qstate_core)
 endif()
 
 include(CMakePackageConfigHelpers)
