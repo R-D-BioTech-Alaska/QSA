@@ -15,6 +15,7 @@ enum class RepresentationKind : std::uint8_t {
     Symmetry = 1,
     QuantumDot = 2,
     Stabilizer = 3,
+    PhaseGraph = 4,
 };
 
 struct RepresentationFeatures {
@@ -26,6 +27,8 @@ struct RepresentationFeatures {
     std::size_t exact_symmetry_classes{0};
     bool quantum_dot_declared{false};
     bool clifford_only{false};
+    bool uniform_phase_graph{false};
+    std::size_t phase_graph_edges{0};
 };
 
 struct RepresentationScore {
@@ -51,7 +54,9 @@ public:
         std::uint64_t repeated_steps = 1U,
         std::size_t exact_symmetry_classes = 0U,
         bool quantum_dot_declared = false,
-        bool clifford_only = false);
+        bool clifford_only = false,
+        bool uniform_phase_graph = false,
+        std::size_t phase_graph_edges = 0U);
 
     [[nodiscard]] std::vector<RepresentationScore> rank(
         const RepresentationFeatures& features) const;
@@ -71,7 +76,7 @@ private:
     };
 
     RepresentationAdvisorConfig config_{};
-    std::array<Posterior, 20> posteriors_{};
+    std::array<Posterior, 30> posteriors_{};
 
     [[nodiscard]] std::size_t context(const RepresentationFeatures& features) const noexcept;
     [[nodiscard]] std::size_t index(
