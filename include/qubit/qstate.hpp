@@ -149,6 +149,8 @@ public:
     // avoid hash-table reconstruction and normalization on common gates.
     void apply_x(std::size_t bit_position);
     void apply_y(std::size_t bit_position);
+    void apply_x_structured(std::size_t bit_position);
+    void apply_y_structured(std::size_t bit_position);
     void apply_z(std::size_t bit_position);
     void apply_phase(std::size_t bit_position, QComplex phase_zero, QComplex phase_one);
     void apply_cnot(std::size_t control_bit, std::size_t target_bit);
@@ -215,6 +217,8 @@ public:
 
     void apply_x(QubitId qubit);
     void apply_y(QubitId qubit);
+    void apply_x_structured(QubitId qubit);
+    void apply_y_structured(QubitId qubit);
     void apply_z(QubitId qubit);
     void apply_h(QubitId qubit);
     void apply_s(QubitId qubit);
@@ -226,6 +230,7 @@ public:
     void apply_rz(QubitId qubit, double theta);
     void apply_single(QubitId qubit, const QMatrix2& matrix);
     void apply_diagonal(std::span<const QDiagonalPhase> phases);
+    void apply_diagonal_structured(std::span<const QDiagonalPhase> phases);
 
     void apply_cnot(QubitId control, QubitId target);
     void apply_cz(QubitId first, QubitId second);

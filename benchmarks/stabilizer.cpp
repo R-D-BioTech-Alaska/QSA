@@ -15,6 +15,8 @@ using qubit::QRegister;
 using qubit::QStateConfig;
 using qubit::QubitId;
 using qubit::StabilizerConfig;
+using qubit::StabilizerOperation;
+using qubit::StabilizerOperationCode;
 using qubit::StabilizerState;
 
 struct CliffordGate {
@@ -38,6 +40,34 @@ struct CliffordGate {
         }
         result.push_back(CliffordGate{
             static_cast<std::uint8_t>(generator() % 5U), first, second});
+    }
+    return result;
+}
+
+[[nodiscard]] std::vector<StabilizerOperation> batch_operations(
+    const std::vector<CliffordGate>& operations) {
+    std::vector<StabilizerOperation> result;
+    result.reserve(operations.size());
+    for (const CliffordGate& gate : operations) {
+        StabilizerOperationCode code = StabilizerOperationCode::H;
+        switch (gate.kind) {
+            case 0U:
+                code = StabilizerOperationCode::H;
+                break;
+            case 1U:
+                code = StabilizerOperationCode::S;
+                break;
+            case 2U:
+                code = StabilizerOperationCode::Cnot;
+                break;
+            case 3U:
+                code = StabilizerOperationCode::Cz;
+                break;
+            default:
+                code = StabilizerOperationCode::Swap;
+                break;
+        }
+        result.push_back(StabilizerOperation{code, gate.first, gate.second});
     }
     return result;
 }
@@ -115,10 +145,20 @@ int main() {
 
     StabilizerConfig large_config;
     large_config.max_tableau_bytes = 1ULL << 29;
-    StabilizerState large(4096U, large_config);
+    large_config.max_batch_scratch_bytes = 1ULL << 29;
     const auto large_operations = gates(4096U, 100'000U, 0x4C41524745434C49ULL);
-    const double large_ms = timed_ms([&] { execute(large, large_operations); });
-    std::cout << "clifford qubits=4096 gates=100000 milliseconds=" << large_ms
-              << " bytes=" << large.estimated_bytes() << '\n';
+    const auto large_batch = batch_operations(large_operations);
+    StabilizerState large_scalar(4096U, large_config);
+    const double large_scalar_ms = timed_ms([&] {
+        execute(large_scalar, large_operations);
+    });
+    StabilizerState large_batched(4096U, large_config);
+    const double large_batch_ms = timed_ms([&] {
+        large_batched.apply_batch(large_batch);
+    });
+    std::cout << "clifford qubits=4096 gates=100000 scalar_ms=" << large_scalar_ms
+              << " batch_ms=" << large_batch_ms
+              << " batch_speedup=" << large_scalar_ms / large_batch_ms
+              << " bytes=" << large_batched.estimated_bytes() << '\n';
     return 0;
 }

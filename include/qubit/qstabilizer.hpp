@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,26 @@ namespace qubit {
 
 struct StabilizerConfig {
     std::size_t max_tableau_bytes{1ULL << 30};
+    // Bounds transient transposed columns and operation-local batch workspace.
+    std::size_t max_batch_scratch_bytes{1ULL << 30};
+};
+
+enum class StabilizerOperationCode : std::uint8_t {
+    X,
+    Y,
+    Z,
+    H,
+    S,
+    Sdg,
+    Cnot,
+    Cz,
+    Swap,
+};
+
+struct StabilizerOperation {
+    StabilizerOperationCode code{StabilizerOperationCode::H};
+    QubitId first{0};
+    QubitId second{0};
 };
 
 class StabilizerState {
@@ -31,6 +52,8 @@ public:
     void apply_cnot(QubitId control, QubitId target);
     void apply_cz(QubitId first, QubitId second);
     void apply_swap(QubitId first, QubitId second);
+    // Exact word-parallel execution for validated Clifford-only gate batches.
+    void apply_batch(std::span<const StabilizerOperation> operations);
 
     [[nodiscard]] double probability_one(QubitId qubit) const;
     [[nodiscard]] int measure_z(QubitId qubit, double sample);
