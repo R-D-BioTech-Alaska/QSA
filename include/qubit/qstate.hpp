@@ -216,6 +216,12 @@ public:
     void apply_cnot(QubitId control, QubitId target);
     void apply_cz(QubitId first, QubitId second);
     void apply_swap(QubitId first, QubitId second);
+
+    // Exact structure-aware variants. These preserve disconnected components
+    // whenever the gate semantics prove that no entanglement can be created.
+    void apply_cnot_structured(QubitId control, QubitId target);
+    void apply_cz_structured(QubitId first, QubitId second);
+    void apply_swap_structured(QubitId first, QubitId second);
     void apply_two(QubitId first, QubitId second, const QMatrix4& matrix);
 
     // Exact full-register Grover primitives. These are deliberately opt-in:
@@ -237,6 +243,7 @@ public:
     [[nodiscard]] std::vector<double> probabilities_one() const;
     [[nodiscard]] int measure(QubitId qubit, double sample);
     [[nodiscard]] std::vector<int> measure_all(std::uint64_t seed);
+    [[nodiscard]] std::vector<int> measure_all_joint(std::uint64_t seed);
 
     [[nodiscard]] QComplex amplitude(BasisIndex global_basis_index) const;
     [[nodiscard]] QComplex amplitude_bits(std::span<const std::uint8_t> bits) const;
@@ -273,6 +280,17 @@ private:
     [[nodiscard]] std::size_t local_position(const StateComponent& component, QubitId qubit) const;
     void apply_cell_matrix(BlochCell& cell, const QMatrix2& matrix);
     [[nodiscard]] std::size_t merge_components(std::size_t first, std::size_t second);
+    [[nodiscard]] std::size_t merge_components_cached(std::size_t first, std::size_t second);
+    [[nodiscard]] StateComponent relabel_component(
+        const StateComponent& component, QubitId from, QubitId to) const;
+    void swap_disconnected_qubits(
+        std::size_t first_component,
+        QubitId first,
+        std::size_t second_component,
+        QubitId second);
+    [[nodiscard]] static std::optional<int> exact_z_basis(const StateComponent& component);
+    [[nodiscard]] static std::optional<int> exact_x_eigenvalue(
+        const StateComponent& component);
     void compact_component(std::size_t component_index);
     void compact_component_targets(
         std::size_t component_index,

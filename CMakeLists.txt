@@ -18,6 +18,7 @@ option(QSTATE_INSTALL_DEVELOPMENT "Install C++ headers, static library, and CMak
 
 add_library(qstate_core STATIC
     src/qstate.cpp
+    src/qstructure.cpp
     src/qdot.cpp
     src/qdot_reference.cpp
     src/qsc.cpp
@@ -117,6 +118,14 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_qdot_no_regression_tests PRIVATE qstate_core)
     add_test(NAME qstate_qdot_no_regression_tests COMMAND qstate_qdot_no_regression_tests)
 
+    add_executable(qstate_structural_acceleration_tests tests/test_structural_acceleration.cpp)
+    target_link_libraries(qstate_structural_acceleration_tests PRIVATE qstate_core)
+    add_test(NAME qstate_structural_acceleration_tests COMMAND qstate_structural_acceleration_tests)
+
+    add_executable(qstate_joint_measure_tests tests/test_joint_measure.cpp)
+    target_link_libraries(qstate_joint_measure_tests PRIVATE qstate_core)
+    add_test(NAME qstate_joint_measure_tests COMMAND qstate_joint_measure_tests)
+
     if(QSTATE_BUILD_PYTHON_TESTS)
         find_package(Python3 COMPONENTS Interpreter)
         if(Python3_Interpreter_FOUND)
@@ -195,6 +204,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_qdot_benchmark benchmarks/quantum_dot.cpp)
     target_link_libraries(qstate_qdot_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_structural_acceleration_benchmark benchmarks/structural_acceleration.cpp)
+    target_link_libraries(qstate_structural_acceleration_benchmark PRIVATE qstate_core)
 endif()
 
 include(CMakePackageConfigHelpers)

@@ -285,13 +285,13 @@ void OperationPlan::apply_direct(QRegister& state, const Operation& operation) {
             state.apply_rz(operation.first, operation.parameter);
             break;
         case OperationCode::Cnot:
-            state.apply_cnot(operation.first, operation.second);
+            state.apply_cnot_structured(operation.first, operation.second);
             break;
         case OperationCode::Cz:
-            state.apply_cz(operation.first, operation.second);
+            state.apply_cz_structured(operation.first, operation.second);
             break;
         case OperationCode::Swap:
-            state.apply_swap(operation.first, operation.second);
+            state.apply_swap_structured(operation.first, operation.second);
             break;
         case OperationCode::BitFlipTrajectory:
             state.apply_bit_flip_trajectory(operation.first, operation.parameter, operation.sample);
