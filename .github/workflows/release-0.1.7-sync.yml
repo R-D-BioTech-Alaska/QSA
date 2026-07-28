@@ -1,9 +1,9 @@
 name: Release 0.1.7 version sync
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/release-0.1.7-version-sync
+      - main
 
 permissions:
   contents: write
