@@ -188,6 +188,7 @@ struct StateComponent {
 
 class QStateCodec;
 class AdaptiveOperationPlan;
+class SymmetryState;
 
 class QRegister {
 public:
@@ -304,6 +305,7 @@ private:
 
     friend class QStateCodec;
     friend class AdaptiveOperationPlan;
+    friend class SymmetryState;
 };
 
 class QStateCodec {

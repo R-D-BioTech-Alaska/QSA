@@ -26,6 +26,8 @@ add_library(qstate_core STATIC
     src/qplan.cpp
     src/qgrover.cpp
     src/qsymmetry.cpp
+    src/qsymmetry_components.cpp
+    src/qrouter.cpp
 )
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
@@ -131,6 +133,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_adaptive_compaction_tests PRIVATE qstate_core)
     add_test(NAME qstate_adaptive_compaction_tests COMMAND qstate_adaptive_compaction_tests)
 
+    add_executable(qstate_representation_advisor_tests tests/test_representation_advisor.cpp)
+    target_link_libraries(qstate_representation_advisor_tests PRIVATE qstate_core)
+    add_test(NAME qstate_representation_advisor_tests COMMAND qstate_representation_advisor_tests)
+
     if(QSTATE_BUILD_PYTHON_TESTS)
         find_package(Python3 COMPONENTS Interpreter)
         if(Python3_Interpreter_FOUND)
@@ -215,6 +221,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_adaptive_compaction_benchmark benchmarks/adaptive_compaction.cpp)
     target_link_libraries(qstate_adaptive_compaction_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_representation_advisor_benchmark benchmarks/representation_advisor.cpp)
+    target_link_libraries(qstate_representation_advisor_benchmark PRIVATE qstate_core)
 endif()
 
 include(CMakePackageConfigHelpers)

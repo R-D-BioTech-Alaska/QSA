@@ -53,6 +53,12 @@ public:
         double tolerance = 0.0,
         std::size_t max_classes = 1'000'000);
 
+    // Discover exact count-only amplitude classes from QSA components without
+    // materializing the full register. Basis membership remains symbolic.
+    [[nodiscard]] static SymmetryState discover_components(
+        const QRegister& state,
+        std::size_t max_classes = 1'000'000);
+
     [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
     [[nodiscard]] BasisIndex space_size() const noexcept { return space_size_; }
     [[nodiscard]] std::size_t class_count() const noexcept { return counts_.size(); }
