@@ -32,6 +32,7 @@ add_library(qstate_core STATIC
     src/qphase_graph.cpp
     src/qexecution.cpp
     src/qread.cpp
+    src/qdiagonal.cpp
 )
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
@@ -157,6 +158,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_read_views_tests PRIVATE qstate_core)
     add_test(NAME qstate_read_views_tests COMMAND qstate_read_views_tests)
 
+    add_executable(qstate_compiled_diagonal_tests tests/test_compiled_diagonal.cpp)
+    target_link_libraries(qstate_compiled_diagonal_tests PRIVATE qstate_core)
+    add_test(NAME qstate_compiled_diagonal_tests COMMAND qstate_compiled_diagonal_tests)
+
     if(QSTATE_BUILD_PYTHON_TESTS)
         find_package(Python3 COMPONENTS Interpreter)
         if(Python3_Interpreter_FOUND)
@@ -256,6 +261,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_read_views_benchmark benchmarks/read_views.cpp)
     target_link_libraries(qstate_read_views_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_compiled_diagonal_benchmark benchmarks/compiled_diagonal.cpp)
+    target_link_libraries(qstate_compiled_diagonal_benchmark PRIVATE qstate_core)
 endif()
 
 include(CMakePackageConfigHelpers)
