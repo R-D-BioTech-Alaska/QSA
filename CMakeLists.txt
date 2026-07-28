@@ -18,6 +18,7 @@ option(QSTATE_INSTALL_DEVELOPMENT "Install C++ headers, static library, and CMak
 
 add_library(qstate_core STATIC
     src/qstate.cpp
+    src/qstate_structured.cpp
     src/qstructure.cpp
     src/qadaptive.cpp
     src/qdot.cpp
