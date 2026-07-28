@@ -133,6 +133,13 @@ int main() {
                 "advisor did not select a declared Clifford workload");
     }
     {
+        QRegister state(64);
+        const auto features = RepresentationAdvisor::inspect(
+            state, 100'000U, 0U, false, false, true, 128U);
+        require(advisor.recommend(features).kind == RepresentationKind::PhaseGraph,
+                "advisor did not select a declared phase-graph workload");
+    }
+    {
         QRegister state(12);
         const auto features = RepresentationAdvisor::inspect(state, 10U);
         require(advisor.recommend(features).kind == RepresentationKind::Register,
