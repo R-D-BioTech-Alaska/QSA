@@ -1,10 +1,3 @@
-"""Python control layer for the Qubit State Algebra native engine.
-
-The numerical core remains in dependency-free C++20. This module intentionally
-avoids NumPy and preserves both the canonical ``qsa`` API and the historical
-``qubit_native`` calling conventions.
-"""
-
 from __future__ import annotations
 
 import ctypes
@@ -12,11 +5,12 @@ import os
 import random
 import sys
 import threading
+
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 
 
 class QubitNativeError(RuntimeError):
