@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use Qubit State Algebra in research, please cite the software and the accompanying preprint."
 title: "Qubit State Algebra"
-version: "0.1.6"
+version: "0.1.7"
 date-released: "2026-07-24"
 license: MIT
 type: software
