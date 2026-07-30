@@ -16,7 +16,7 @@ keywords = ["quantum", "qubit", "qelm", "simulation", "state-engine"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: MIT License",
+  "License :: Other/Proprietary License",
   "Programming Language :: C++",
   "Programming Language :: Python :: 3",
   "Operating System :: Microsoft :: Windows",
@@ -31,6 +31,7 @@ Documentation = "https://github.com/R-D-BioTech-Alaska/QSA/tree/main/docs"
 Issues = "https://github.com/R-D-BioTech-Alaska/QSA/issues"
 Changelog = "https://github.com/R-D-BioTech-Alaska/QSA/blob/main/CHANGELOG.md"
 DOI = "https://doi.org/10.13140/RG.2.2.19653.20965"
+Commercial-Licensing = "https://github.com/R-D-BioTech-Alaska/QSA/blob/main/COMMERCIAL_LICENSE.md"
 
 [project.optional-dependencies]
 validation = ["numpy>=1.24"]
@@ -58,6 +59,10 @@ sdist.include = [
   "CONTRIBUTING.md",
   "SECURITY.md",
   "CITATION.cff",
+  "COMMERCIAL_LICENSE.md",
+  "LICENSE_HISTORY.md",
+  "TRADEMARKS.md",
+  "NOTICE",
   "LICENSE",
   "VERSION"
 ]
