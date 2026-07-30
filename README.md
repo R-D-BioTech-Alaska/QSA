@@ -12,7 +12,7 @@
 [![DOI](https://img.shields.io/badge/DOI-10.13140%2FRG.2.2.19653.20965-blue)](https://doi.org/10.13140/RG.2.2.19653.20965)
 [![Build and Test](https://github.com/R-D-BioTech-Alaska/QSA/actions/workflows/qsa.yml/badge.svg)](https://github.com/R-D-BioTech-Alaska/QSA/actions/workflows/qsa.yml)
 [![Version](https://img.shields.io/badge/version-0.1.7-blue)](CHANGELOG.md)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-orange)](LICENSE)
 
 ### A from-scratch, qubit-native mathematical runtime for ordinary computers
 
@@ -643,7 +643,7 @@ Performance should be measured on the actual workload being run.
 
 ## Contributing
 
-QSA is an active research and engineering project.
+QSA is an active source-available research and engineering project. Noncommercial use is permitted under PolyForm Strict 1.0.0; code changes require prior written permission.
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing a public API, QSC behavior, representation contract, or numerical tolerance.
 
@@ -661,6 +661,6 @@ For results or features specific to this release, identify the software version 
 
 ## License
 
-Qubit State Algebra is released under the MIT License.
+Qubit State Algebra is source-available under the **PolyForm Strict License 1.0.0**. Noncommercial use is permitted. Distribution, modification, derivative works, sublicensing, transfer, and commercial use require separate written permission.
 
-See [`LICENSE`](LICENSE).
+See [`LICENSE`](LICENSE), [`LICENSE_HISTORY.md`](LICENSE_HISTORY.md), and [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md). Earlier versions lawfully obtained under MIT remain under their original MIT terms.
