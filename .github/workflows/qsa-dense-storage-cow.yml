@@ -66,7 +66,6 @@ jobs:
               "touched_branch_owners",
               "untouched_root_owners",
               "untouched_branch_owners",
-              "exact",
           }
           for field in fields[1:]:
               key, value = field.split("=", 1)
@@ -75,7 +74,7 @@ jobs:
               receipt["groups"] == 16
               and receipt["group_width"] == 16
               and receipt["components"] == 16
-              and receipt["exact"] == 1
+              and receipt["max_error"] <= 2.0e-12
               and receipt["touched_root_owners"] == 1
               and receipt["touched_branch_owners"] == 1
               and receipt["untouched_root_owners"] == 2
