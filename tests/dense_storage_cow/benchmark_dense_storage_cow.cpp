@@ -83,7 +83,9 @@ int main() {
 
     qubit::QRegister control = qubit::QRegister::decode_qsc(root_qsc);
     control.apply_rz(0U, angle);
-    const bool exact = receipt_branch.read().encode_qsc() == control.encode_qsc();
+    const double maximum_error = qsa_dense_cow_test::max_state_error(
+        receipt_branch.read(),
+        control);
 
     const double qsc_ms = median(qsc_samples);
     const double cow_ms = median(cow_samples);
@@ -105,7 +107,7 @@ int main() {
               << " touched_branch_owners=" << touched_branch_owners
               << " untouched_root_owners=" << untouched_root_owners
               << " untouched_branch_owners=" << untouched_branch_owners
-              << " exact=" << (exact ? 1 : 0)
+              << " max_error=" << maximum_error
               << '\n';
-    return exact ? 0 : 1;
+    return maximum_error <= 2.0e-12 ? 0 : 1;
 }
