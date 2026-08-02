@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qcomplex.hpp"
+#include "qubit/qshared_vector.hpp"
 
 #include <array>
 #include <cstddef>
@@ -131,6 +132,9 @@ public:
     [[nodiscard]] std::vector<SparseEntry> entries(double epsilon = 0.0) const;
     [[nodiscard]] std::vector<QComplex> dense_copy() const;
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
+    [[nodiscard]] long storage_owner_count() const noexcept {
+        return mode_ == StorageMode::Dense ? dense_.owner_count() : 1L;
+    }
 
     void normalize(double epsilon = 1e-12);
     void apply_single(
@@ -160,7 +164,7 @@ public:
 private:
     BasisIndex dimension_{0};
     StorageMode mode_{StorageMode::Sparse};
-    std::vector<QComplex> dense_{};
+    detail::SharedVector<QComplex> dense_{};
     std::vector<SparseEntry> sparse_{};
 
     void assign_entries(
@@ -277,6 +281,13 @@ public:
     [[nodiscard]] StorageMode component_storage_mode(QubitId qubit) const;
     [[nodiscard]] ComponentKind component_kind(QubitId qubit) const;
     [[nodiscard]] std::size_t component_nonzero_count(QubitId qubit) const;
+    [[nodiscard]] long component_storage_owner_count(QubitId qubit) const {
+        const StateComponent& component = components_[component_index(qubit)];
+        if (component.is_cell()) {
+            return 1L;
+        }
+        return std::get<AmplitudeStore>(component.state).storage_owner_count();
+    }
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
     [[nodiscard]] std::string describe() const;
     [[nodiscard]] bool validate(std::string* reason = nullptr) const;
