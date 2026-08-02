@@ -1,0 +1,113 @@
+name: QSA Component Candidate Runtime
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qcausal_component_api.h"
+      - "include/qubit/detail/qcausal_component_impl.hpp"
+      - "include/qubit/version.h"
+      - "python/qsa/causal_components.py"
+      - "python/qsa/causal_component_candidates.py"
+      - "tests/test_causal_component_candidates_python.py"
+      - "benchmarks/causal_component_candidate_runtime.py"
+      - ".github/workflows/qsa-component-candidates.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-component-candidates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  component-candidate-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Test component candidate runtime
+        run: python tests/test_causal_component_candidates_python.py
+
+  component-candidate-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Benchmark component candidate runtime
+        run: python benchmarks/causal_component_candidate_runtime.py | tee component-candidates.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("component-candidates.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "causal_component_candidates":
+              raise SystemExit("unexpected component candidate output")
+          receipt = {"schema_version": "qsa.component-candidate-runtime.v1"}
+          integer_fields = {
+              "qubits",
+              "local_qubits",
+              "candidates",
+              "steps",
+              "operations",
+              "parameters",
+              "observables",
+              "generation",
+          }
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["qubits"] == 10_000
+              and receipt["local_qubits"] == 3
+              and receipt["candidates"] == 64
+              and receipt["steps"] == 6
+              and receipt["operations"] == 25
+              and receipt["parameters"] == 18
+              and receipt["observables"] == 14
+              and receipt["generation"] == 6
+              and receipt["max_error"] <= 2.0e-12
+              and all(
+                  math.isfinite(receipt[name]) and receipt[name] > 0.0
+                  for name in (
+                      "qsc_loop_ms",
+                      "full_causal_ms",
+                      "component_causal_ms",
+                      "component_vs_qsc",
+                      "component_vs_full",
+                  )
+              )
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"component candidate gate failed: {receipt}")
+          Path("component-candidates.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-component-candidates-${{ github.run_id }}
+          path: |
+            component-candidates.txt
+            component-candidates.json
+          if-no-files-found: error
