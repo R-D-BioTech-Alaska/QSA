@@ -47,7 +47,7 @@ public:
 
     [[nodiscard]] QRegister& write() {
         ensure_valid();
-        if (!state_.unique()) {
+        if (state_.use_count() != 1L) {
             state_ = std::make_shared<QRegister>(*state_);
         }
         return *state_;
@@ -68,7 +68,9 @@ public:
     }
 
     [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(state_); }
-    [[nodiscard]] bool unique() const noexcept { return state_ && state_.unique(); }
+    [[nodiscard]] bool unique() const noexcept {
+        return state_ && state_.use_count() == 1L;
+    }
     [[nodiscard]] long shared_owner_count() const noexcept {
         return state_ ? state_.use_count() : 0L;
     }
