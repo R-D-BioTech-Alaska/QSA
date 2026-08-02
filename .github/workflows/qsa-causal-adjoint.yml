@@ -1,0 +1,111 @@
+name: QSA Causal Weighted Adjoint
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qadjoint.hpp"
+      - "include/qubit/qplan.hpp"
+      - "include/qubit/qcausal_c_api.h"
+      - "include/qubit/detail/qcausal_adjoint_impl.hpp"
+      - "include/qubit/version.h"
+      - "python/qsa/causal_adjoint.py"
+      - "tests/test_causal_adjoint_python.py"
+      - "benchmarks/causal_adjoint_python.py"
+      - ".github/workflows/qsa-causal-adjoint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-causal-adjoint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adjoint-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Test exact weighted adjoints
+        run: python tests/test_causal_adjoint_python.py
+
+  adjoint-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Benchmark weighted adjoint
+        run: python benchmarks/causal_adjoint_python.py | tee causal-adjoint.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("causal-adjoint.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "causal_adjoint":
+              raise SystemExit("unexpected causal adjoint benchmark output")
+          receipt = {"schema_version": "qsa.causal-adjoint-benchmark.v1"}
+          integer_fields = {
+              "qubits",
+              "operations",
+              "parameters",
+              "observables",
+              "support_terms",
+              "shift_evaluations",
+              "adjoint_forward_sweeps",
+              "adjoint_reverse_sweeps",
+          }
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["qubits"] == 3
+              and receipt["operations"] == 25
+              and receipt["parameters"] == 18
+              and receipt["observables"] == 14
+              and receipt["support_terms"] == 20
+              and receipt["shift_evaluations"] == 37
+              and receipt["adjoint_forward_sweeps"] == 1
+              and receipt["adjoint_reverse_sweeps"] == 1
+              and receipt["max_value_error"] <= 2.0e-12
+              and receipt["max_gradient_error"] <= 2.0e-12
+              and math.isfinite(receipt["parameter_shift_ms"])
+              and math.isfinite(receipt["adjoint_ms"])
+              and math.isfinite(receipt["speedup"])
+              and receipt["parameter_shift_ms"] > 0.0
+              and receipt["adjoint_ms"] > 0.0
+              and receipt["speedup"] > 1.10
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"causal adjoint gate failed: {receipt}")
+          Path("causal-adjoint.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-causal-adjoint-${{ github.run_id }}
+          path: |
+            causal-adjoint.txt
+            causal-adjoint.json
+          if-no-files-found: error
