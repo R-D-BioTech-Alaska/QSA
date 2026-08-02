@@ -1,0 +1,101 @@
+name: QSA Causal Candidate Runtime
+
+on:
+  pull_request:
+    paths:
+      - "python/qsa/causal_candidates.py"
+      - "tests/test_causal_candidates_python.py"
+      - "benchmarks/causal_candidate_runtime.py"
+      - ".github/workflows/qsa-causal-candidates.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-causal-candidates-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  candidate-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Test candidate transactions
+        run: python tests/test_causal_candidates_python.py
+
+  candidate-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Benchmark persistent candidate loop
+        run: python benchmarks/causal_candidate_runtime.py | tee causal-candidates.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("causal-candidates.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "causal_candidate_runtime":
+              raise SystemExit("unexpected candidate runtime output")
+          receipt = {"schema_version": "qsa.causal-candidate-runtime.v1"}
+          integer_fields = {
+              "qubits",
+              "candidates",
+              "steps",
+              "operations",
+              "parameters",
+              "observables",
+              "generation",
+          }
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["qubits"] == 10_000
+              and receipt["candidates"] == 64
+              and receipt["steps"] == 6
+              and receipt["operations"] == 25
+              and receipt["parameters"] == 18
+              and receipt["observables"] == 14
+              and receipt["generation"] == 6
+              and receipt["max_error"] <= 2.0e-12
+              and all(
+                  math.isfinite(receipt[name]) and receipt[name] > 0.0
+                  for name in ("qsc_loop_ms", "causal_loop_ms", "speedup")
+              )
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"candidate runtime gate failed: {receipt}")
+          Path("causal-candidates.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-causal-candidates-${{ github.run_id }}
+          path: |
+            causal-candidates.txt
+            causal-candidates.json
+          if-no-files-found: error
