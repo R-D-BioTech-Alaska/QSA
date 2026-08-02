@@ -94,6 +94,9 @@ public:
     }
     [[nodiscard]] std::size_t parameter_count() const noexcept { return parameter_count_; }
     [[nodiscard]] bool optimized() const noexcept { return optimize_; }
+    [[nodiscard]] const std::vector<ParameterizedOperation>& operations() const noexcept {
+        return operations_;
+    }
 
     [[nodiscard]] OperationPlan bind(std::span<const double> parameters) const;
     void execute(
