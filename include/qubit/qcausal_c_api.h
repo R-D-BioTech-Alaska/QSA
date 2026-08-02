@@ -22,6 +22,13 @@ extern "C" {
 typedef void* qcausal_handle;
 typedef void* qcausal_parameterized_plan_handle;
 typedef void* qcausal_pauli_plan_handle;
+typedef void* qcausal_pauli_support_plan_handle;
+
+typedef struct qcausal_pauli_support_term {
+    uint32_t qubit;
+    uint8_t axis;
+    uint8_t reserved[3];
+} qcausal_pauli_support_term;
 
 // Experimental QSA 0.2 causal runtime surface. It is additive and separate
 // from the stable QSA 0.1 C ABI while the runtime contract is validated by
@@ -107,6 +114,35 @@ QCAUSAL_API int qcausal_pauli_plan_execute(
 // Writes handle_count * observable_count row-major values.
 QCAUSAL_API int qcausal_pauli_plan_execute_many(
     qcausal_pauli_plan_handle plan,
+    qcausal_handle* handles,
+    size_t handle_count,
+    double* output,
+    size_t output_size,
+    size_t worker_count,
+    size_t* completed_handle_count);
+
+// Compact supports use one contiguous term buffer and observable_count + 1
+// offsets. Offset zero must be zero and the final offset must equal term_count.
+QCAUSAL_API qcausal_pauli_support_plan_handle qcausal_pauli_support_plan_create(
+    size_t qubit_count,
+    const qcausal_pauli_support_term* terms,
+    size_t term_count,
+    const size_t* observable_offsets,
+    size_t observable_count,
+    double imaginary_tolerance);
+QCAUSAL_API void qcausal_pauli_support_plan_destroy(
+    qcausal_pauli_support_plan_handle plan);
+QCAUSAL_API size_t qcausal_pauli_support_plan_observable_count(
+    qcausal_pauli_support_plan_handle plan);
+QCAUSAL_API size_t qcausal_pauli_support_plan_term_count(
+    qcausal_pauli_support_plan_handle plan);
+QCAUSAL_API int qcausal_pauli_support_plan_execute(
+    qcausal_pauli_support_plan_handle plan,
+    qcausal_handle handle,
+    double* output,
+    size_t output_size);
+QCAUSAL_API int qcausal_pauli_support_plan_execute_many(
+    qcausal_pauli_support_plan_handle plan,
     qcausal_handle* handles,
     size_t handle_count,
     double* output,
