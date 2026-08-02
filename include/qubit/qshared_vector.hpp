@@ -113,6 +113,9 @@ public:
     }
     [[nodiscard]] storage_type copy() const { return read(); }
 
+    operator std::span<const T>() const noexcept { return view(); }
+    operator storage_type() const { return copy(); }
+
 private:
     [[nodiscard]] const storage_type& read() const noexcept {
         if (storage_) {
