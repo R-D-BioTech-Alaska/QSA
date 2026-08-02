@@ -5,6 +5,7 @@ from typing import Optional
 
 from .causal import CausalParameterizedPlan, CausalRegister, CausalRuntimeError
 from .causal_batch import apply_many, fork_many
+from .causal_component_grad import ComponentParameterShiftResult
 from .causal_components import (
     extract_component_closure,
     parameterized_plan_qubits,
@@ -13,6 +14,7 @@ from .causal_components import (
     support_plan_qubits,
 )
 from .causal_support import CausalPauliSupportPlan
+from .causal_support_grad import CausalSupportParameterShift
 
 
 class CausalComponentCandidateBatch:
@@ -124,6 +126,7 @@ class CausalComponentCandidateRuntime:
         self._generation = 0
         self._active_batch: Optional[CausalComponentCandidateBatch] = None
         self._local_plans = {}
+        self._local_gradients = {}
         self._closed = False
 
     @classmethod
@@ -187,22 +190,35 @@ class CausalComponentCandidateRuntime:
         cached = self._local_plans.get(key)
         if cached is not None:
             return cached
+
         local_by_global = {
             global_qubit: local_qubit
             for local_qubit, global_qubit in enumerate(key)
         }
+        local_plan = remap_parameterized_plan(self.plan, local_by_global)
         try:
-            local_plan = remap_parameterized_plan(self.plan, local_by_global)
             local_observables = remap_support_plan(
                 self.observables,
                 local_by_global,
             )
         except Exception:
-            if "local_plan" in locals():
-                local_plan.close()
+            local_plan.close()
             raise
         self._local_plans[key] = (local_plan, local_observables)
         return local_plan, local_observables
+
+    def _local_gradient(self, global_qubits):
+        key = tuple(global_qubits)
+        cached = self._local_gradients.get(key)
+        if cached is not None:
+            return cached
+        local_plan, local_observables = self._local_runtime(key)
+        gradient = CausalSupportParameterShift(
+            local_plan,
+            local_observables,
+        )
+        self._local_gradients[key] = gradient
+        return gradient
 
     def evaluate(
         self,
@@ -246,6 +262,85 @@ class CausalComponentCandidateRuntime:
                 branch.close()
             extracted.close()
             raise
+
+    def selected_gradient(
+        self,
+        batch: CausalComponentCandidateBatch,
+        selected_index: int,
+        *,
+        workers: Optional[int] = None,
+    ) -> ComponentParameterShiftResult:
+        self._ensure_open()
+        if not isinstance(batch, CausalComponentCandidateBatch):
+            raise TypeError("batch must be a CausalComponentCandidateBatch")
+        batch._ensure_owner(self)
+        if self._active_batch is not batch:
+            raise CausalRuntimeError("component candidate batch is not active")
+        index = int(selected_index)
+        if index < 0 or index >= len(batch):
+            raise IndexError("selected candidate index is out of range")
+
+        gradient = self._local_gradient(batch.global_qubits)
+        rows = gradient._rows(batch.parameter_row(index))
+        shifted_rows = rows[1:]
+        shifted_branches = fork_many(batch._extracted.state, len(shifted_rows))
+        selected_workers = self.workers if workers is None else max(0, int(workers))
+        try:
+            apply_many(
+                gradient.plan,
+                shifted_branches,
+                shifted_rows,
+                workers=selected_workers,
+            )
+            shifted_values = gradient.observables.execute_many(
+                shifted_branches,
+                workers=selected_workers,
+            )
+        finally:
+            for branch in shifted_branches:
+                branch.close()
+
+        base_values = tuple(batch.observations[index])
+        parameter_count = len(self.plan.parameter_names)
+        observable_count = len(base_values)
+        columns = []
+        for parameter in range(parameter_count):
+            positive = shifted_values[2 * parameter]
+            negative = shifted_values[2 * parameter + 1]
+            columns.append(
+                tuple(
+                    gradient.coefficient * (positive[row] - negative[row])
+                    for row in range(observable_count)
+                )
+            )
+        jacobian = tuple(
+            tuple(
+                columns[column][row]
+                for column in range(parameter_count)
+            )
+            for row in range(observable_count)
+        )
+        return ComponentParameterShiftResult(
+            values=base_values,
+            jacobian=jacobian,
+            parameter_names=tuple(self.plan.parameter_names),
+            observable_supports=tuple(self.observables.observables),
+            global_qubits=batch.global_qubits,
+        )
+
+    def selected_vjp(
+        self,
+        batch: CausalComponentCandidateBatch,
+        selected_index: int,
+        cotangent: Sequence[float],
+        *,
+        workers: Optional[int] = None,
+    ) -> tuple[float, ...]:
+        return self.selected_gradient(
+            batch,
+            selected_index,
+            workers=workers,
+        ).vjp(cotangent)
 
     def commit(
         self,
@@ -291,6 +386,7 @@ class CausalComponentCandidateRuntime:
             return
         if self._active_batch is not None:
             self._active_batch.close()
+        self._local_gradients.clear()
         for local_plan, local_observables in self._local_plans.values():
             local_observables.close()
             local_plan.close()
