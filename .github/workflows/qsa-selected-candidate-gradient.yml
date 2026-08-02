@@ -1,0 +1,105 @@
+name: QSA Selected Candidate Gradient
+
+on:
+  pull_request:
+    paths:
+      - "python/qsa/causal_component_candidates.py"
+      - "tests/test_selected_candidate_gradient_python.py"
+      - "benchmarks/selected_candidate_gradient.py"
+      - ".github/workflows/qsa-selected-candidate-gradient.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-selected-gradient-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selected-gradient-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Test selected candidate gradients
+        run: python tests/test_selected_candidate_gradient_python.py
+
+  selected-gradient-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Benchmark selected candidate gradients
+        run: python benchmarks/selected_candidate_gradient.py | tee selected-gradient.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("selected-gradient.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "selected_candidate_gradient":
+              raise SystemExit("unexpected selected gradient output")
+          receipt = {"schema_version": "qsa.selected-candidate-gradient.v1"}
+          integer_fields = {
+              "qubits",
+              "local_qubits",
+              "candidates",
+              "steps",
+              "operations",
+              "parameters",
+              "observables",
+              "separate_evaluations",
+              "reused_shifted_evaluations",
+          }
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["qubits"] == 10_000
+              and receipt["local_qubits"] == 3
+              and receipt["candidates"] == 64
+              and receipt["steps"] == 6
+              and receipt["operations"] == 25
+              and receipt["parameters"] == 18
+              and receipt["observables"] == 14
+              and receipt["separate_evaluations"] == 37
+              and receipt["reused_shifted_evaluations"] == 36
+              and receipt["max_error"] <= 2.0e-12
+              and all(
+                  math.isfinite(receipt[name]) and receipt[name] > 0.0
+                  for name in ("separate_ms", "reused_ms", "speedup")
+              )
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"selected gradient gate failed: {receipt}")
+          Path("selected-gradient.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-selected-gradient-${{ github.run_id }}
+          path: |
+            selected-gradient.txt
+            selected-gradient.json
+          if-no-files-found: error
