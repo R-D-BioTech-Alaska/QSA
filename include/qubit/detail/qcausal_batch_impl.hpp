@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <exception>
@@ -11,6 +12,36 @@
 #include <vector>
 
 namespace {
+
+template <class Function>
+int run_causal_inline(
+    std::size_t item_count,
+    std::size_t* completed_count,
+    Function&& function) {
+    std::size_t completed = 0U;
+    try {
+        for (; completed < item_count; ++completed) {
+            function(completed);
+        }
+        if (completed_count != nullptr) {
+            *completed_count = completed;
+        }
+        causal_last_error.clear();
+        return 0;
+    } catch (const std::exception& error) {
+        if (completed_count != nullptr) {
+            *completed_count = completed;
+        }
+        causal_last_error = error.what();
+        return -1;
+    } catch (...) {
+        if (completed_count != nullptr) {
+            *completed_count = completed;
+        }
+        causal_last_error = "Unknown QSA causal batch error";
+        return -1;
+    }
+}
 
 template <class Function>
 int run_causal_parallel(
@@ -26,11 +57,20 @@ int run_causal_parallel(
         return 0;
     }
 
+    constexpr std::size_t minimum_parallel_items = 64U;
     std::size_t workers = worker_count;
     if (workers == 0U) {
-        workers = static_cast<std::size_t>(std::thread::hardware_concurrency());
+        workers = item_count < minimum_parallel_items
+            ? 1U
+            : static_cast<std::size_t>(std::thread::hardware_concurrency());
     }
     workers = std::max<std::size_t>(1U, std::min(workers, item_count));
+    if (workers == 1U) {
+        return run_causal_inline(
+            item_count,
+            completed_count,
+            std::forward<Function>(function));
+    }
 
     std::atomic<std::size_t> next{0U};
     std::atomic<std::size_t> completed{0U};
