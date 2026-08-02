@@ -18,4 +18,5 @@
 #include "qubit/detail/qcausal_c_api_impl.hpp"
 #include "qubit/detail/qcausal_batch_impl.hpp"
 #include "qubit/detail/qcausal_pauli_support_impl.hpp"
+#include "qubit/detail/qcausal_component_impl.hpp"
 #endif
