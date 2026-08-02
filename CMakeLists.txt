@@ -172,6 +172,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_scaling_fast_paths_tests PRIVATE qstate_core)
     add_test(NAME qstate_scaling_fast_paths_tests COMMAND qstate_scaling_fast_paths_tests)
 
+    add_executable(qstate_causal_runtime_tests tests/test_qcausal.cpp)
+    target_link_libraries(qstate_causal_runtime_tests PRIVATE qstate_core)
+    add_test(NAME qstate_causal_runtime_tests COMMAND qstate_causal_runtime_tests)
+
     if(QSTATE_BUILD_PYTHON_TESTS)
         find_package(Python3 COMPONENTS Interpreter)
         if(Python3_Interpreter_FOUND)
@@ -277,6 +281,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_scaling_fast_paths_benchmark benchmarks/scaling_fast_paths.cpp)
     target_link_libraries(qstate_scaling_fast_paths_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_causal_runtime_benchmark benchmarks/causal_runtime.cpp)
+    target_link_libraries(qstate_causal_runtime_benchmark PRIVATE qstate_core)
 endif()
 
 include(CMakePackageConfigHelpers)

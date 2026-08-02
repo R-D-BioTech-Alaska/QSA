@@ -1,0 +1,79 @@
+name: QSA Causal Runtime
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qcausal.hpp"
+      - "tests/test_qcausal.cpp"
+      - "benchmarks/causal_runtime.cpp"
+      - "docs/CAUSAL_RUNTIME.md"
+      - "CMakeLists.txt"
+      - ".github/workflows/qsa-causal-runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-causal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  causal-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure exact causal runtime
+        run: >-
+          cmake -S . -B build-causal -DCMAKE_BUILD_TYPE=Release
+          -DQSTATE_BUILD_EXAMPLES=OFF
+          -DQSTATE_BUILD_BENCHMARKS=ON
+          -DQSTATE_BUILD_PYTHON_TESTS=OFF
+      - name: Build causal test and benchmark
+        run: >-
+          cmake --build build-causal --parallel
+          --target qstate_causal_runtime_tests qstate_causal_runtime_benchmark
+      - name: Run exact causal tests
+        run: ./build-causal/qstate_causal_runtime_tests
+      - name: Measure QSC versus causal branching
+        run: ./build-causal/qstate_causal_runtime_benchmark | tee causal-runtime.txt
+      - name: Convert benchmark receipt to JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          line = Path("causal-runtime.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "causal_runtime":
+              raise SystemExit("unexpected causal benchmark output")
+          receipt = {"schema_version": "qsa.causal-runtime-benchmark.v1"}
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              if key in {"qubits", "branches", "qsc_bytes", "components"}:
+                  receipt[key] = int(value)
+              else:
+                  receipt[key] = float(value)
+          receipt["global_statevector_materialized"] = False
+          receipt["qsc_persisted"] = False
+          receipt["passed"] = (
+              receipt["fork_speedup"] > 1.0
+              and receipt["components"] == receipt["qubits"]
+              and abs(receipt["observable_value"] + 1.0) <= 1.0e-12
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"causal benchmark gate failed: {receipt}")
+          Path("causal-runtime.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-causal-runtime-${{ github.run_id }}
+          path: |
+            causal-runtime.txt
+            causal-runtime.json
+          if-no-files-found: error
