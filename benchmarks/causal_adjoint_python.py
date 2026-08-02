@@ -108,6 +108,7 @@ def main() -> None:
                 "shift_evaluations=37",
                 "adjoint_forward_sweeps=1",
                 "adjoint_reverse_sweeps=1",
+                f"stored_forward_states={exact.stored_forward_states}",
                 f"parameter_shift_ms={parameter_shift_ms:.9f}",
                 f"adjoint_ms={adjoint_ms:.9f}",
                 f"speedup={speedup:.9f}",
