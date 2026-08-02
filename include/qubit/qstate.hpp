@@ -283,7 +283,13 @@ public:
     [[nodiscard]] StorageMode component_storage_mode(QubitId qubit) const;
     [[nodiscard]] ComponentKind component_kind(QubitId qubit) const;
     [[nodiscard]] std::size_t component_nonzero_count(QubitId qubit) const;
-    [[nodiscard]] long component_storage_owner_count(QubitId qubit) const;
+    [[nodiscard]] long component_storage_owner_count(QubitId qubit) const {
+        const StateComponent& component = components_[component_index(qubit)];
+        if (component.is_cell()) {
+            return 1L;
+        }
+        return std::get<AmplitudeStore>(component.state).storage_owner_count();
+    }
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
     [[nodiscard]] std::string describe() const;
     [[nodiscard]] bool validate(std::string* reason = nullptr) const;
