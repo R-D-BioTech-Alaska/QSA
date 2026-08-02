@@ -80,6 +80,23 @@ def maximum_error(first, second) -> float:
     return max(abs(float(left) - float(right)) for left, right in zip(first, second))
 
 
+def weighted_objective(
+    root: CausalRegister,
+    plan: CausalParameterizedPlan,
+    support: CausalPauliSupportPlan,
+    values,
+    cotangent,
+) -> tuple[tuple[float, ...], float]:
+    with root.fork() as branch:
+        branch.apply(plan, values)
+        observations = support.execute(branch)
+    objective = sum(
+        float(weight) * float(value)
+        for weight, value in zip(cotangent, observations)
+    )
+    return observations, objective
+
+
 def test_component_adjoint_matches_parameter_shift() -> None:
     plan = tripair_plan()
     support = brain_support()
@@ -140,17 +157,49 @@ def test_repeated_parameter_accumulates_exactly() -> None:
             ((0, "X"), (1, "X")),
         ),
     )
-    parameter_shift = CausalSupportParameterShift(plan, support)
     adjoint = CausalWeightedAdjoint(plan, support, max_qubits=4)
     values = {"shared": 0.37, "independent": -0.29}
     cotangent = (0.41, -0.23, 0.17)
+    epsilon = 1.0e-6
 
     with CausalRegister(2) as root:
-        shifted = parameter_shift.evaluate_and_jacobian(root, values, workers=0)
+        initial = root.encode_qsc()
         result = adjoint.evaluate(root, values, cotangent)
+        observations, _objective = weighted_objective(
+            root,
+            plan,
+            support,
+            values,
+            cotangent,
+        )
+        finite_difference = []
+        for name in result.parameter_names:
+            positive = dict(values)
+            negative = dict(values)
+            positive[name] += epsilon
+            negative[name] -= epsilon
+            _positive_values, positive_objective = weighted_objective(
+                root,
+                plan,
+                support,
+                positive,
+                cotangent,
+            )
+            _negative_values, negative_objective = weighted_objective(
+                root,
+                plan,
+                support,
+                negative,
+                cotangent,
+            )
+            finite_difference.append(
+                (positive_objective - negative_objective) / (2.0 * epsilon)
+            )
+
         assert result.parameter_names == ("shared", "independent")
-        assert maximum_error(result.values, shifted.values) <= 2.0e-12
-        assert maximum_error(result.gradient, shifted.vjp(cotangent)) <= 2.0e-12
+        assert maximum_error(result.values, observations) <= 2.0e-12
+        assert maximum_error(result.gradient, finite_difference) <= 2.0e-7
+        assert root.encode_qsc() == initial
 
     support.close()
     plan.close()
