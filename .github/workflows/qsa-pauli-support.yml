@@ -1,0 +1,94 @@
+name: QSA Compact Pauli Support
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qpauli_support.hpp"
+      - "tests/pauli_support/**"
+      - ".github/workflows/qsa-pauli-support.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-pauli-support-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pauli-support-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure compact Pauli tests
+        run: cmake -S tests/pauli_support -B build-pauli -DCMAKE_BUILD_TYPE=Release
+      - name: Build compact Pauli test
+        run: cmake --build build-pauli --config Release --parallel --target qstate_pauli_support_test
+      - name: Run compact Pauli test
+        run: ctest --test-dir build-pauli -C Release --output-on-failure
+
+  pauli-support-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure compact Pauli benchmark
+        run: cmake -S tests/pauli_support -B build-pauli -DCMAKE_BUILD_TYPE=Release
+      - name: Build compact Pauli benchmark
+        run: cmake --build build-pauli --parallel --target qstate_pauli_support_benchmark
+      - name: Measure compact Pauli support
+        run: ./build-pauli/qstate_pauli_support_benchmark | tee pauli-support.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("pauli-support.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "pauli_support":
+              raise SystemExit("unexpected Pauli support benchmark output")
+          receipt = {"schema_version": "qsa.pauli-support-benchmark.v1"}
+          integer_fields = {
+              "qubits",
+              "components",
+              "observables",
+              "support_terms",
+              "full_word_bytes",
+          }
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["qubits"] == 10_000
+              and receipt["components"] == 9_998
+              and receipt["observables"] == 14
+              and receipt["support_terms"] == 21
+              and receipt["full_word_bytes"] == 140_000
+              and receipt["max_error"] <= 2.0e-12
+              and all(
+                  math.isfinite(receipt[name]) and receipt[name] > 0.0
+                  for name in ("full_ms", "support_ms", "speedup")
+              )
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"Pauli support gate failed: {receipt}")
+          Path("pauli-support.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-pauli-support-${{ github.run_id }}
+          path: |
+            pauli-support.txt
+            pauli-support.json
+          if-no-files-found: error
