@@ -86,9 +86,12 @@ public:
 
     void pop_back() { write().pop_back(); }
     iterator erase(const_iterator position) {
+        const storage_type& current = read();
+        const size_type offset =
+            static_cast<size_type>(position - current.cbegin());
         storage_type& values = write();
-        const size_type offset = static_cast<size_type>(position - read().cbegin());
-        return values.erase(values.cbegin() + static_cast<std::ptrdiff_t>(offset));
+        return values.erase(
+            values.cbegin() + static_cast<std::ptrdiff_t>(offset));
     }
     iterator erase(const_iterator first, const_iterator last) {
         const storage_type& current = read();
