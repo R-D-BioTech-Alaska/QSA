@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -35,6 +36,7 @@ int main() {
     for (std::size_t qubit = 0; qubit < 32U; ++qubit) {
         prototype.apply_h(static_cast<qubit::QubitId>(qubit));
     }
+    prototype.apply_x(static_cast<qubit::QubitId>(qubits - 1U));
     const std::vector<std::uint8_t> qsc = prototype.encode_qsc();
     CausalState root(prototype);
 
