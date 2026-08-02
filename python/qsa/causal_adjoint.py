@@ -68,6 +68,7 @@ class WeightedAdjointResult:
     forward_sweeps: int = 1
     reverse_sweeps: int = 1
     shifted_evaluations: int = 0
+    stored_forward_states: int = 0
 
     @property
     def local_qubit_count(self) -> int:
