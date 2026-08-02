@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,7 +18,6 @@ inline std::vector<std::vector<qubit::PauliSupportTerm>> tripair_support(
     qubit::QubitId first,
     qubit::QubitId second,
     qubit::QubitId third) {
-    using Term = qubit::PauliSupportTerm;
     return {
         {{first, 'X'}},
         {{first, 'Y'}},
