@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 
-from .causal import CausalParameterizedPlan, CausalRegister
+from .causal import (
+    CausalParameterizedPlan,
+    CausalRegister,
+    CausalRuntimeError,
+)
 from .causal_components import (
     extract_component_closure,
     parameterized_plan_qubits,
@@ -52,7 +56,7 @@ class ComponentParameterShiftResult:
         )
 
 
-class CausalComponentParameterShift:
+class CausalComponentParameterShift(CausalSupportParameterShift):
     """Exact parameter-shift gradients over a complete component closure."""
 
     def __init__(
@@ -62,18 +66,12 @@ class CausalComponentParameterShift:
         *,
         max_local_qubits: int = 24,
     ) -> None:
-        if not isinstance(plan, CausalParameterizedPlan):
-            raise TypeError("plan must be a CausalParameterizedPlan")
-        if not isinstance(observables, CausalPauliSupportPlan):
-            raise TypeError("observables must be a CausalPauliSupportPlan")
+        super().__init__(plan, observables)
         limit = int(max_local_qubits)
         if limit <= 0 or limit > 24:
             raise ValueError("max_local_qubits must be between 1 and 24")
 
-        self.plan = plan
-        self.observables = observables
         self.max_local_qubits = limit
-        self.parameter_names = tuple(plan.parameter_names)
         self._requested_qubits = tuple(
             sorted(
                 set(parameterized_plan_qubits(plan))
@@ -83,13 +81,12 @@ class CausalComponentParameterShift:
         if not self._requested_qubits:
             raise ValueError("component gradient has no requested qubits")
 
-        CausalSupportParameterShift(plan, observables)
         self._local_gradients = {}
         self._closed = False
 
     def _ensure_open(self) -> None:
         if self._closed:
-            raise RuntimeError("component gradient is closed")
+            raise CausalRuntimeError("component gradient is closed")
 
     def _local_gradient(self, global_qubits):
         key = tuple(global_qubits)
