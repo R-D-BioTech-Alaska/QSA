@@ -17,4 +17,5 @@
 #if defined(QSTATE_BUILD_SHARED) && defined(__cplusplus)
 #include "qubit/detail/qcausal_c_api_impl.hpp"
 #include "qubit/detail/qcausal_batch_impl.hpp"
+#include "qubit/detail/qcausal_pauli_support_impl.hpp"
 #endif
