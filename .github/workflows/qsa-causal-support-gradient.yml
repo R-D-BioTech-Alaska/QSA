@@ -1,0 +1,101 @@
+name: QSA Causal Support Gradient
+
+on:
+  pull_request:
+    paths:
+      - "python/qsa/causal_support_grad.py"
+      - "tests/test_causal_support_grad_python.py"
+      - "benchmarks/causal_support_gradient.py"
+      - ".github/workflows/qsa-causal-support-gradient.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-causal-support-gradient-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  support-gradient-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Test compact support gradients
+        run: python tests/test_causal_support_grad_python.py
+
+  support-gradient-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Benchmark compact support gradients
+        run: python benchmarks/causal_support_gradient.py | tee support-gradient.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("support-gradient.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "causal_support_gradient":
+              raise SystemExit("unexpected support gradient output")
+          receipt = {"schema_version": "qsa.causal-support-gradient.v1"}
+          integer_fields = {
+              "qubits",
+              "parameters",
+              "observables",
+              "evaluations",
+              "operations",
+              "support_terms",
+              "full_word_bytes",
+          }
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["qubits"] == 10_000
+              and receipt["parameters"] == 18
+              and receipt["observables"] == 14
+              and receipt["evaluations"] == 37
+              and receipt["operations"] == 25
+              and receipt["support_terms"] == 21
+              and receipt["full_word_bytes"] == 140_000
+              and receipt["max_error"] <= 2.0e-12
+              and all(
+                  math.isfinite(receipt[name]) and receipt[name] > 0.0
+                  for name in ("full_gradient_ms", "support_gradient_ms", "speedup")
+              )
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"support gradient gate failed: {receipt}")
+          Path("support-gradient.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-causal-support-gradient-${{ github.run_id }}
+          path: |
+            support-gradient.txt
+            support-gradient.json
+          if-no-files-found: error
