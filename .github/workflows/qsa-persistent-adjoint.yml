@@ -1,0 +1,125 @@
+name: QSA Persistent Weighted Adjoint
+
+on:
+  pull_request:
+    paths:
+      - "python/qsa/causal_persistent_workspace.py"
+      - "tests/test_persistent_adjoint_python.py"
+      - "benchmarks/persistent_adjoint_python.py"
+      - ".github/workflows/qsa-persistent-adjoint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-persistent-adjoint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  persistent-adjoint-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Test retained-workspace adjoints
+        run: |
+          python tests/test_persistent_component_workspace_python.py
+          python tests/test_persistent_adjoint_python.py
+
+  persistent-adjoint-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA
+        run: python -m pip install --upgrade pip .
+      - name: Benchmark retained-workspace adjoints
+        run: python benchmarks/persistent_adjoint_python.py | tee persistent-adjoint.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("persistent-adjoint.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "persistent_adjoint":
+              raise SystemExit("unexpected persistent adjoint output")
+          receipt = {"schema_version": "qsa.persistent-adjoint-benchmark.v1"}
+          integer_fields = {
+              "logical_qubits",
+              "local_qubits",
+              "steps",
+              "candidates_per_step",
+              "operations",
+              "parameters",
+              "observables",
+              "support_terms",
+              "shift_evaluations_per_step",
+              "adjoint_forward_sweeps_per_step",
+              "adjoint_reverse_sweeps_per_step",
+              "stored_forward_states",
+          }
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["logical_qubits"] == 10_000
+              and receipt["local_qubits"] == 4
+              and receipt["steps"] == 6
+              and receipt["candidates_per_step"] == 64
+              and receipt["operations"] == 25
+              and receipt["parameters"] == 18
+              and receipt["observables"] == 14
+              and receipt["support_terms"] == 20
+              and receipt["shift_evaluations_per_step"] == 36
+              and receipt["adjoint_forward_sweeps_per_step"] == 1
+              and receipt["adjoint_reverse_sweeps_per_step"] == 1
+              and receipt["stored_forward_states"] == 0
+              and receipt["max_candidate_error"] <= 2.0e-12
+              and receipt["max_value_error"] <= 2.0e-12
+              and receipt["max_gradient_error"] <= 2.0e-12
+              and receipt["max_final_error"] <= 2.0e-12
+              and all(
+                  math.isfinite(receipt[name]) and receipt[name] > 0.0
+                  for name in (
+                      "shift_pullback_ms",
+                      "adjoint_pullback_ms",
+                      "pullback_speedup",
+                      "shift_complete_ms",
+                      "adjoint_complete_ms",
+                      "complete_speedup",
+                  )
+              )
+              and receipt["pullback_speedup"] > 5.0
+              and receipt["complete_speedup"] > 1.10
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"persistent adjoint gate failed: {receipt}")
+          Path("persistent-adjoint.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-persistent-adjoint-${{ github.run_id }}
+          path: |
+            persistent-adjoint.txt
+            persistent-adjoint.json
+          if-no-files-found: error

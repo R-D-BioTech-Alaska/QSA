@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Optional
 
 from .causal import CausalParameterizedPlan, CausalRegister, CausalRuntimeError
+from .causal_adjoint import CausalWeightedAdjoint, WeightedAdjointResult
 from .causal_batch import apply_many, fork_many
 from .causal_component_grad import ComponentParameterShiftResult
 from .causal_components import (
@@ -138,6 +139,7 @@ class CausalPersistentComponentRuntime:
         self._workspace_extractions = 0
         self._local_plans = {}
         self._local_gradients = {}
+        self._local_adjoints = {}
         self._closed = False
 
     @classmethod
@@ -261,6 +263,20 @@ class CausalPersistentComponentRuntime:
         self._local_gradients[key] = gradient
         return gradient
 
+    def _local_adjoint(self, global_qubits):
+        key = tuple(global_qubits)
+        cached = self._local_adjoints.get(key)
+        if cached is not None:
+            return cached
+        local_plan, local_observables = self._local_runtime(key)
+        adjoint = CausalWeightedAdjoint(
+            local_plan,
+            local_observables,
+            max_qubits=self.max_local_qubits,
+        )
+        self._local_adjoints[key] = adjoint
+        return adjoint
+
     def evaluate(
         self,
         parameter_rows: Sequence[Mapping[str, float] | Sequence[float]],
@@ -364,6 +380,50 @@ class CausalPersistentComponentRuntime:
             global_qubits=batch.global_qubits,
         )
 
+    def selected_pullback(
+        self,
+        batch: PersistentComponentBatch,
+        selected_index: int,
+        cotangent: Sequence[float],
+    ) -> WeightedAdjointResult:
+        self._ensure_open()
+        if not isinstance(batch, PersistentComponentBatch):
+            raise TypeError("batch must be a PersistentComponentBatch")
+        batch._ensure_owner(self)
+        if self._active_batch is not batch:
+            raise CausalRuntimeError("persistent component batch is not active")
+        index = int(selected_index)
+        if index < 0 or index >= len(batch):
+            raise IndexError("selected candidate index is out of range")
+
+        workspace = self._ensure_workspace()
+        adjoint = self._local_adjoint(batch.global_qubits)
+        result = adjoint.evaluate(
+            workspace.state,
+            batch.parameter_row(index),
+            cotangent,
+        )
+        base_values = tuple(float(value) for value in batch.observations[index])
+        maximum_error = max(
+            abs(left - right)
+            for left, right in zip(base_values, result.values)
+        )
+        if maximum_error > 2.0e-12:
+            raise CausalRuntimeError(
+                "selected adjoint values differ from the evaluated candidate"
+            )
+        return WeightedAdjointResult(
+            values=base_values,
+            gradient=result.gradient,
+            parameter_names=tuple(self.plan.parameter_names),
+            observable_supports=tuple(self.observables.observables),
+            global_qubits=batch.global_qubits,
+            forward_sweeps=result.forward_sweeps,
+            reverse_sweeps=result.reverse_sweeps,
+            shifted_evaluations=result.shifted_evaluations,
+            stored_forward_states=result.stored_forward_states,
+        )
+
     def selected_vjp(
         self,
         batch: PersistentComponentBatch,
@@ -372,11 +432,12 @@ class CausalPersistentComponentRuntime:
         *,
         workers: Optional[int] = None,
     ) -> tuple[float, ...]:
-        return self.selected_gradient(
+        del workers
+        return self.selected_pullback(
             batch,
             selected_index,
-            workers=workers,
-        ).vjp(cotangent)
+            cotangent,
+        ).gradient
 
     def commit(
         self,
@@ -434,6 +495,7 @@ class CausalPersistentComponentRuntime:
             self._workspace.close()
             self._workspace = None
         self._local_gradients.clear()
+        self._local_adjoints.clear()
         for local_plan, local_observables in self._local_plans.values():
             local_observables.close()
             local_plan.close()
