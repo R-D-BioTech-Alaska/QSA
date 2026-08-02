@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace qubit {
@@ -34,7 +35,8 @@ using StateVector = std::vector<QComplex>;
         case OperationCode::Ry: return gates::ry(operation.parameter);
         case OperationCode::Rz: return gates::rz(operation.parameter);
         default:
-            throw QStateError("Adjoint operation is not a supported single-qubit gate");
+            throw QStateError(
+                "Adjoint operation is not a supported single-qubit gate");
     }
 }
 
@@ -42,7 +44,8 @@ using StateVector = std::vector<QComplex>;
     QMatrix2 result{};
     for (std::size_t row = 0; row < 2U; ++row) {
         for (std::size_t column = 0; column < 2U; ++column) {
-            result.values[row * 2U + column] = matrix(column, row).conjugate();
+            result.values[row * 2U + column] =
+                matrix(column, row).conjugate();
         }
     }
     return result;
@@ -91,7 +94,8 @@ using StateVector = std::vector<QComplex>;
 
 inline void validate_qubit(std::size_t qubit_count, QubitId qubit) {
     if (static_cast<std::size_t>(qubit) >= qubit_count) {
-        throw QStateError("Adjoint operation qubit is outside the local register");
+        throw QStateError(
+            "Adjoint operation qubit is outside the local register");
     }
 }
 
@@ -153,7 +157,8 @@ inline void apply_cz(
     }
     const BasisIndex first_mask = BasisIndex{1} << first;
     const BasisIndex second_mask = BasisIndex{1} << second;
-    for (BasisIndex basis = 0; basis < static_cast<BasisIndex>(state.size()); ++basis) {
+    const BasisIndex dimension = static_cast<BasisIndex>(state.size());
+    for (BasisIndex basis = 0; basis < dimension; ++basis) {
         if ((basis & first_mask) != 0U && (basis & second_mask) != 0U) {
             state[static_cast<std::size_t>(basis)] *= -1.0;
         }
@@ -172,7 +177,8 @@ inline void apply_swap(
     }
     const BasisIndex first_mask = BasisIndex{1} << first;
     const BasisIndex second_mask = BasisIndex{1} << second;
-    for (BasisIndex basis = 0; basis < static_cast<BasisIndex>(state.size()); ++basis) {
+    const BasisIndex dimension = static_cast<BasisIndex>(state.size());
+    for (BasisIndex basis = 0; basis < dimension; ++basis) {
         const bool first_one = (basis & first_mask) != 0U;
         const bool second_one = (basis & second_mask) != 0U;
         if (first_one || !second_one) {
@@ -222,7 +228,8 @@ inline void apply_operation(
         case OperationCode::PhaseFlipTrajectory:
         case OperationCode::DepolarizingTrajectory:
         case OperationCode::AmplitudeDampingTrajectory:
-            throw QStateError("Adjoint differentiation does not support trajectory noise");
+            throw QStateError(
+                "Adjoint differentiation does not support trajectory noise");
         default:
             throw QStateError("Adjoint operation contains an unknown opcode");
     }
@@ -281,7 +288,8 @@ inline void apply_operation(
                 }
                 break;
             default:
-                throw QStateError("Adjoint Pauli support contains an invalid axis");
+                throw QStateError(
+                    "Adjoint Pauli support contains an invalid axis");
         }
     }
     return coefficient;
@@ -293,25 +301,29 @@ inline void weighted_pauli_action(
     std::span<const double> cotangent,
     StateVector& adjoint) {
     if (cotangent.size() != observables.observable_count()) {
-        throw QStateError("Adjoint cotangent width differs from observable count");
+        throw QStateError(
+            "Adjoint cotangent width differs from observable count");
     }
     adjoint.assign(state.size(), QComplex{});
     const auto& supports = observables.observables();
-    for (std::size_t observable = 0; observable < supports.size(); ++observable) {
+    for (std::size_t observable = 0;
+         observable < supports.size();
+         ++observable) {
         const double weight = cotangent[observable];
         if (!std::isfinite(weight)) {
-            throw QStateError("Adjoint cotangent contains a non-finite value");
+            throw QStateError(
+                "Adjoint cotangent contains a non-finite value");
         }
         if (weight == 0.0) {
             continue;
         }
-        for (BasisIndex source = 0;
-             source < static_cast<BasisIndex>(state.size());
-             ++source) {
+        const auto& support = supports[observable];
+        const BasisIndex dimension = static_cast<BasisIndex>(state.size());
+        for (BasisIndex source = 0; source < dimension; ++source) {
             BasisIndex target = 0;
             const QComplex coefficient = pauli_coefficient(
                 source,
-                supports[observable],
+                support,
                 target);
             adjoint[static_cast<std::size_t>(target)] +=
                 weight * coefficient * state[static_cast<std::size_t>(source)];
@@ -336,14 +348,17 @@ inline void weighted_pauli_action(
         throw QStateError("Adjoint local register exceeds max_qubits");
     }
     if (observables.qubit_count() != qubit_count) {
-        throw QStateError("Adjoint observable width differs from local register");
+        throw QStateError(
+            "Adjoint observable width differs from local register");
     }
     if (parameters.size() != plan.parameter_count()) {
-        throw QStateError("Adjoint parameter width differs from plan parameter count");
+        throw QStateError(
+            "Adjoint parameter width differs from plan parameter count");
     }
     for (double value : parameters) {
         if (!std::isfinite(value)) {
-            throw QStateError("Adjoint parameter vector contains a non-finite value");
+            throw QStateError(
+                "Adjoint parameter vector contains a non-finite value");
         }
     }
 
@@ -352,13 +367,16 @@ inline void weighted_pauli_action(
     operations.reserve(templates.size());
     for (const ParameterizedOperation& templated : templates) {
         if (templated.sample_slot >= 0) {
-            throw QStateError("Adjoint differentiation does not support sample slots");
+            throw QStateError(
+                "Adjoint differentiation does not support sample slots");
         }
         Operation operation = templated.operation;
         if (templated.parameter_slot >= 0) {
-            const std::size_t slot = static_cast<std::size_t>(templated.parameter_slot);
+            const std::size_t slot =
+                static_cast<std::size_t>(templated.parameter_slot);
             if (slot >= parameters.size()) {
-                throw QStateError("Adjoint parameter slot is outside the parameter vector");
+                throw QStateError(
+                    "Adjoint parameter slot is outside the parameter vector");
             }
             switch (operation.code) {
                 case OperationCode::Rx:
@@ -375,25 +393,27 @@ inline void weighted_pauli_action(
     }
 
     using adjoint_detail::StateVector;
-    std::vector<StateVector> forward;
-    forward.reserve(operations.size() + 1U);
-    forward.push_back(initial.materialize(max_qubits));
+    StateVector primal = initial.materialize(max_qubits);
     for (const Operation& operation : operations) {
-        StateVector next = forward.back();
-        adjoint_detail::apply_operation(next, qubit_count, operation, false);
-        forward.push_back(std::move(next));
+        adjoint_detail::apply_operation(
+            primal,
+            qubit_count,
+            operation,
+            false);
     }
 
-    QRegister final_register = QRegister::from_amplitudes(
-        forward.back(),
-        initial.config());
     WeightedAdjointResult result;
-    result.values = observables.execute(final_register);
+    {
+        QRegister final_register = QRegister::from_amplitudes(
+            primal,
+            initial.config());
+        result.values = observables.execute(final_register);
+    }
     result.gradient.assign(plan.parameter_count(), 0.0);
 
     StateVector adjoint;
     adjoint_detail::weighted_pauli_action(
-        forward.back(),
+        primal,
         observables,
         cotangent,
         adjoint);
@@ -403,17 +423,24 @@ inline void weighted_pauli_action(
         const std::size_t index = reverse_index - 1U;
         const Operation& operation = operations[index];
         const ParameterizedOperation& templated = templates[index];
+
+        adjoint_detail::apply_operation(
+            primal,
+            qubit_count,
+            operation,
+            true);
         if (templated.parameter_slot >= 0) {
             const QMatrix2 derivative = adjoint_detail::derivative_matrix(
                 operation.code,
                 operation.parameter);
             const QComplex inner = adjoint_detail::derivative_inner_product(
-                forward[index],
+                primal,
                 adjoint,
                 qubit_count,
                 operation.first,
                 derivative);
-            result.gradient[static_cast<std::size_t>(templated.parameter_slot)] +=
+            result.gradient[
+                static_cast<std::size_t>(templated.parameter_slot)] +=
                 2.0 * inner.re;
         }
         adjoint_detail::apply_operation(
