@@ -150,6 +150,22 @@ QCAUSAL_API int qcausal_pauli_support_plan_execute_many(
     size_t worker_count,
     size_t* completed_handle_count);
 
+// Computes exact observable values and one weighted reverse-mode pullback over
+// a bounded local unitary register. The input state is never mutated.
+QCAUSAL_API int qcausal_weighted_adjoint(
+    qcausal_handle initial,
+    qcausal_parameterized_plan_handle plan,
+    qcausal_pauli_support_plan_handle observables,
+    const double* parameters,
+    size_t parameter_count,
+    const double* cotangent,
+    size_t cotangent_count,
+    size_t max_qubits,
+    double* values_output,
+    size_t values_output_size,
+    double* gradient_output,
+    size_t gradient_output_size);
+
 #ifdef __cplusplus
 }
 #endif
