@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <memory>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -182,12 +181,14 @@ private:
 
     [[nodiscard]] static QComplex source_coefficient(
         BasisIndex source,
-        std::span<const char> local_operators,
+        std::span<const QubitId> component_qubits,
+        const std::string& word,
         BasisIndex& target) {
         QComplex coefficient{1.0, 0.0};
         target = source;
-        for (std::size_t position = 0; position < local_operators.size(); ++position) {
-            const char symbol = local_operators[position];
+        for (std::size_t position = 0; position < component_qubits.size(); ++position) {
+            const QubitId qubit = component_qubits[position];
+            const char symbol = word[static_cast<std::size_t>(qubit)];
             const bool one = ((source >> position) & BasisIndex{1}) != 0U;
             switch (symbol) {
                 case 'I':
@@ -227,13 +228,12 @@ private:
     [[nodiscard]] static QComplex component_expectation(
         const QComponentReadView& view,
         const std::string& word) {
-        std::vector<char> local_operators;
-        local_operators.reserve(view.qubits.size());
         bool identity_only = true;
         for (QubitId qubit : view.qubits) {
-            const char symbol = word[static_cast<std::size_t>(qubit)];
-            local_operators.push_back(symbol);
-            identity_only = identity_only && symbol == 'I';
+            if (word[static_cast<std::size_t>(qubit)] != 'I') {
+                identity_only = false;
+                break;
+            }
         }
         if (identity_only) {
             return {1.0, 0.0};
@@ -243,7 +243,8 @@ private:
             if (view.cell == nullptr || view.qubits.size() != 1U) {
                 throw QStateError("Invalid Bloch-cell read view");
             }
-            switch (local_operators.front()) {
+            const char symbol = word[static_cast<std::size_t>(view.qubits.front())];
+            switch (symbol) {
                 case 'I': return {1.0, 0.0};
                 case 'X': return {view.cell->x, 0.0};
                 case 'Y': return {view.cell->y, 0.0};
@@ -260,7 +261,7 @@ private:
             for (BasisIndex source = 0; source < view.dimension; ++source) {
                 BasisIndex target = 0;
                 const QComplex coefficient = source_coefficient(
-                    source, local_operators, target);
+                    source, view.qubits, word, target);
                 expectation += view.dense[static_cast<std::size_t>(target)].conjugate()
                     * coefficient
                     * view.dense[static_cast<std::size_t>(source)];
@@ -272,7 +273,7 @@ private:
             for (const auto& [source, source_amplitude] : view.sparse) {
                 BasisIndex target = 0;
                 const QComplex coefficient = source_coefficient(
-                    source, local_operators, target);
+                    source, view.qubits, word, target);
                 const QComplex target_amplitude = sparse_amplitude(view.sparse, target);
                 if (target_amplitude.norm2() == 0.0) {
                     continue;
