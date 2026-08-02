@@ -1,0 +1,108 @@
+name: QSA Dense Storage Copy On Write
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qshared_vector.hpp"
+      - "include/qubit/qstate.hpp"
+      - "tests/dense_storage_cow/**"
+      - ".github/workflows/qsa-dense-storage-cow.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-dense-storage-cow-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dense-storage-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure dense storage tests
+        run: cmake -S tests/dense_storage_cow -B build-dense -DCMAKE_BUILD_TYPE=Release
+      - name: Build dense storage test
+        run: cmake --build build-dense --config Release --parallel --target qstate_dense_storage_cow_test
+      - name: Run dense storage test
+        run: ctest --test-dir build-dense -C Release --output-on-failure
+
+  dense-storage-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure dense storage benchmark
+        run: cmake -S tests/dense_storage_cow -B build-dense -DCMAKE_BUILD_TYPE=Release
+      - name: Build dense storage benchmark
+        run: cmake --build build-dense --parallel --target qstate_dense_storage_cow_benchmark
+      - name: Measure dense copy-on-write
+        run: ./build-dense/qstate_dense_storage_cow_benchmark | tee dense-storage-cow.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("dense-storage-cow.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "dense_storage_cow":
+              raise SystemExit("unexpected dense storage benchmark output")
+          receipt = {"schema_version": "qsa.dense-storage-cow-benchmark.v1"}
+          integer_fields = {
+              "groups",
+              "group_width",
+              "components",
+              "dense_payload_bytes",
+              "qsc_bytes",
+              "touched_root_owners",
+              "touched_branch_owners",
+              "untouched_root_owners",
+              "untouched_branch_owners",
+              "exact",
+          }
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["groups"] == 16
+              and receipt["group_width"] == 16
+              and receipt["components"] == 16
+              and receipt["exact"] == 1
+              and receipt["touched_root_owners"] == 1
+              and receipt["touched_branch_owners"] == 1
+              and receipt["untouched_root_owners"] == 2
+              and receipt["untouched_branch_owners"] == 2
+              and receipt["dense_payload_bytes"] > 0
+              and receipt["qsc_bytes"] > 0
+              and all(
+                  math.isfinite(receipt[name]) and receipt[name] > 0.0
+                  for name in (
+                      "qsc_clone_mutate_ms",
+                      "dense_cow_mutate_ms",
+                      "speedup",
+                  )
+              )
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"dense storage gate failed: {receipt}")
+          Path("dense-storage-cow.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-dense-storage-cow-${{ github.run_id }}
+          path: |
+            dense-storage-cow.txt
+            dense-storage-cow.json
+          if-no-files-found: error
