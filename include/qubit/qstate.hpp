@@ -133,9 +133,7 @@ public:
     [[nodiscard]] std::vector<QComplex> dense_copy() const;
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
     [[nodiscard]] long storage_owner_count() const noexcept {
-        return mode_ == StorageMode::Dense
-            ? dense_.owner_count()
-            : sparse_.owner_count();
+        return mode_ == StorageMode::Dense ? dense_.owner_count() : 1L;
     }
 
     void normalize(double epsilon = 1e-12);
@@ -167,7 +165,7 @@ private:
     BasisIndex dimension_{0};
     StorageMode mode_{StorageMode::Sparse};
     detail::SharedVector<QComplex> dense_{};
-    detail::SharedVector<SparseEntry> sparse_{};
+    std::vector<SparseEntry> sparse_{};
 
     void assign_entries(
         BasisIndex dimension,
