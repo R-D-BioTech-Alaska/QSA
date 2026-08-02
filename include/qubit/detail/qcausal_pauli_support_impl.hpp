@@ -179,9 +179,19 @@ int qcausal_pauli_support_plan_execute_many(
         if (output_size < required || (required != 0U && output == nullptr)) {
             throw qubit::QStateError("Causal Pauli support output is too small");
         }
+
+        std::size_t selected_workers = worker_count;
+        const std::size_t term_count = support->plan.term_count();
+        if (selected_workers == 0U &&
+            (term_count == 0U ||
+             handle_count <= std::numeric_limits<std::size_t>::max() / term_count) &&
+            handle_count * term_count < 4'096U) {
+            selected_workers = 1U;
+        }
+
         return run_causal_parallel(
             handle_count,
-            worker_count,
+            selected_workers,
             completed_handle_count,
             [&](std::size_t index) {
                 const std::vector<double> values = support->plan.execute(
