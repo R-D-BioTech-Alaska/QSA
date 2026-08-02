@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace {
