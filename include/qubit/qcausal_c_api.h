@@ -34,6 +34,10 @@ QCAUSAL_API const char* qcausal_last_error(void);
 QCAUSAL_API qcausal_handle qcausal_create(size_t qubit_count);
 QCAUSAL_API qcausal_handle qcausal_from_qsc(const uint8_t* data, size_t data_size);
 QCAUSAL_API qcausal_handle qcausal_fork(qcausal_handle source);
+QCAUSAL_API int qcausal_fork_many(
+    qcausal_handle source,
+    qcausal_handle* output,
+    size_t branch_count);
 QCAUSAL_API int qcausal_adopt(qcausal_handle target, qcausal_handle selected);
 QCAUSAL_API void qcausal_destroy(qcausal_handle handle);
 
@@ -73,6 +77,17 @@ QCAUSAL_API int qcausal_parameterized_plan_execute(
     size_t parameter_count,
     size_t* completed_operation_count);
 
+// Executes one shared plan with a distinct parameter row for each state.
+// Parameters are row-major with handle_count * parameter_count values.
+QCAUSAL_API int qcausal_parameterized_plan_execute_many(
+    qcausal_parameterized_plan_handle plan,
+    qcausal_handle* handles,
+    size_t handle_count,
+    const double* parameters,
+    size_t parameter_count,
+    size_t worker_count,
+    size_t* completed_handle_count);
+
 // Pauli words are supplied as one contiguous word_count * qubit_count byte
 // buffer using ASCII I, X, Y, or Z without terminators between words.
 QCAUSAL_API qcausal_pauli_plan_handle qcausal_pauli_plan_create(
@@ -88,6 +103,16 @@ QCAUSAL_API int qcausal_pauli_plan_execute(
     qcausal_handle handle,
     double* output,
     size_t output_size);
+
+// Writes handle_count * observable_count row-major values.
+QCAUSAL_API int qcausal_pauli_plan_execute_many(
+    qcausal_pauli_plan_handle plan,
+    qcausal_handle* handles,
+    size_t handle_count,
+    double* output,
+    size_t output_size,
+    size_t worker_count,
+    size_t* completed_handle_count);
 
 #ifdef __cplusplus
 }

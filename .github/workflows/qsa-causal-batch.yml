@@ -1,0 +1,99 @@
+name: QSA Causal Batch Runtime
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qcausal_c_api.h"
+      - "include/qubit/detail/qcausal_batch_impl.hpp"
+      - "include/qubit/version.h"
+      - "python/qsa/causal_batch.py"
+      - "tests/test_causal_batch_python.py"
+      - "benchmarks/causal_batch_python.py"
+      - ".github/workflows/qsa-causal-batch.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-causal-batch-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  batch-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install causal QSA package
+        run: python -m pip install --upgrade pip .
+      - name: Run native causal batch contracts
+        run: python tests/test_causal_batch_python.py
+
+  batch-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install causal QSA package
+        run: python -m pip install --upgrade pip .
+      - name: Measure Phase41A-shaped causal batches
+        run: python benchmarks/causal_batch_python.py | tee causal-batch.txt
+      - name: Seal benchmark receipt
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          line = Path("causal-batch.txt").read_text(encoding="utf-8").strip()
+          fields = line.split()
+          if not fields or fields[0] != "causal_batch":
+              raise SystemExit("unexpected causal batch benchmark output")
+          receipt = {"schema_version": "qsa.causal-batch-benchmark.v1"}
+          integer_fields = {"branches", "operations", "parameters", "observables"}
+          for field in fields[1:]:
+              key, value = field.split("=", 1)
+              receipt[key] = int(value) if key in integer_fields else float(value)
+          receipt["passed"] = (
+              receipt["branches"] == 128
+              and receipt["operations"] == 25
+              and receipt["parameters"] == 18
+              and receipt["observables"] == 14
+              and receipt["max_error"] <= 1.0e-12
+              and all(
+                  math.isfinite(receipt[name]) and receipt[name] > 0.0
+                  for name in (
+                      "qsc_ms",
+                      "scalar_causal_ms",
+                      "batch_causal_ms",
+                      "batch_vs_qsc",
+                      "batch_vs_scalar",
+                  )
+              )
+          )
+          if not receipt["passed"]:
+              raise SystemExit(f"causal batch benchmark gate failed: {receipt}")
+          Path("causal-batch.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-causal-batch-${{ github.run_id }}
+          path: |
+            causal-batch.txt
+            causal-batch.json
+          if-no-files-found: error

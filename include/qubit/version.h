@@ -16,4 +16,5 @@
 // implementation is linked once while installed headers remain declaration-only.
 #if defined(QSTATE_BUILD_SHARED) && defined(__cplusplus)
 #include "qubit/detail/qcausal_c_api_impl.hpp"
+#include "qubit/detail/qcausal_batch_impl.hpp"
 #endif
