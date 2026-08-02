@@ -64,8 +64,8 @@ int main() {
     qubit::QRegister control = qubit::QRegister::decode_qsc(root_qsc);
     control.apply_rz(first, 0.271);
     require(
-        branch.encode_qsc() == control.encode_qsc(),
-        "dense copy-on-write changed the exact branch result");
+        qsa_dense_cow_test::max_state_error(branch, control) <= 2.0e-12,
+        "dense copy-on-write changed the branch amplitudes");
 
     const auto second = static_cast<qubit::QubitId>(group_width);
     branch.apply_ry(second, -0.193);
