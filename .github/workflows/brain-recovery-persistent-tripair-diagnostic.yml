@@ -1,0 +1,132 @@
+name: Brain Recovery Persistent Tripair Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_tripair_optimizer_step.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v2.py"
+      - "benchmarks/brain_recovery_persistent_tripair_value_diagnostic.py"
+      - "python/qsa/causal_persistent_workspace.py"
+      - "python/qsa/causal_batch.py"
+      - "python/qsa/causal_adjoint.py"
+      - "include/qubit/qadjoint.hpp"
+      - ".github/workflows/brain-recovery-persistent-tripair-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-persistent-tripair-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-persistent-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONFAULTHANDLER: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile diagnostic
+        run: |
+          python -m py_compile \
+            benchmarks/brain_recovery_tripair_optimizer_step.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v2.py \
+            benchmarks/brain_recovery_persistent_tripair_value_diagnostic.py
+
+      - name: Re-run inherited persistent contracts
+        run: |
+          python tests/test_causal_adjoint_python.py
+          python tests/test_persistent_adjoint_python.py
+
+      - name: Isolate persistent value-parity boundary
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_persistent_tripair_value_diagnostic.py \
+            --output brain-recovery-persistent-tripair-value-diagnostic.json \
+            2>&1 | tee brain-recovery-persistent-tripair-value-diagnostic.txt
+          diagnostic_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_PERSISTENT_DIAGNOSTIC_EXIT=$diagnostic_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize diagnostic evidence
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-persistent-tripair-value-diagnostic.json")
+          if not path.is_file():
+              raise SystemExit("persistent diagnostic did not emit a JSON receipt")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("diagnosis=", receipt["diagnosis"])
+          print("runtime=", receipt["runtime"])
+          for case in receipt["cases"]:
+              print(
+                  "persistent_diagnostic",
+                  "row_kind=", case["row_kind"],
+                  "scale=", case["scale"],
+                  "stored_vs_retained=", case["errors"]["stored_vs_retained_branch"],
+                  "stored_vs_single=", case["errors"]["stored_vs_single_execute"],
+                  "stored_vs_adjoint=", case["errors"]["stored_vs_adjoint"],
+                  "single_vs_adjoint=", case["errors"]["single_execute_vs_adjoint"],
+                  "single_vs_global=", case["errors"]["single_execute_vs_global_execute"],
+                  "bound_error=", case["bound_original_vs_local_max_error"],
+              )
+          print("passed=", receipt["passed"])
+          raise SystemExit(0 if receipt["passed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_PERSISTENT_DIAGNOSTIC_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-persistent-tripair-diagnostic-${{ github.run_id }}
+          path: |
+            brain-recovery-persistent-tripair-value-diagnostic.json
+            brain-recovery-persistent-tripair-value-diagnostic.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce diagnostic completeness
+        if: always()
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_PERSISTENT_DIAGNOSTIC_EXIT:-1}" -ne 0 ]; then
+            echo "The persistent value diagnostic did not complete."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_PERSISTENT_DIAGNOSTIC_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The diagnostic receipt was missing, malformed, or incomplete."
+            exit 1
+          fi
