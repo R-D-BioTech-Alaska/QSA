@@ -1,0 +1,75 @@
+name: Apply Exact Component Factorization Repair
+
+on:
+  pull_request:
+    paths:
+      - "tools/apply_exact_component_factorization_repair.py"
+      - ".github/workflows/apply-exact-component-factorization-repair.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-exact-component-factorization-repair-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  apply-and-verify:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/qsa-exact-component-factorization-repair-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/qsa-exact-component-factorization-repair-v1
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Apply minimal runtime correction
+        run: python tools/apply_exact_component_factorization_repair.py
+
+      - name: Validate patch shape
+        run: |
+          git diff --check
+          git diff -- src/qstate.cpp
+
+      - name: Build patched QSA
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install .
+
+      - name: Run inherited and exact regression contracts
+        run: |
+          python tests/test_causal_adjoint_python.py
+          python tests/brain_recovery_exact_component_factorization.py
+
+      - name: Remove one-time patch machinery
+        run: |
+          git rm tools/apply_exact_component_factorization_repair.py
+          git rm .github/workflows/apply-exact-component-factorization-repair.yml
+
+      - name: Commit verified runtime repair
+        run: |
+          git config user.name "Brain Quantum Mechanism Recovery Laboratory"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/qstate.cpp
+          git commit -m "Require exact reconstruction before component factorization"
+          git push origin HEAD:agent/qsa-exact-component-factorization-repair-v1
