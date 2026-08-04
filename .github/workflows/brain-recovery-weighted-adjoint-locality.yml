@@ -1,0 +1,110 @@
+name: Brain Recovery Weighted Adjoint and Locality
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_weighted_adjoint_locality.py"
+      - "python/qsa/causal_adjoint.py"
+      - "python/qsa/causal_components.py"
+      - "python/qsa/causal_support_grad.py"
+      - "include/qubit/qadjoint.hpp"
+      - "include/qubit/detail/qcausal_adjoint_impl.hpp"
+      - "include/qubit/detail/qcausal_component_impl.hpp"
+      - ".github/workflows/brain-recovery-weighted-adjoint-locality.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-weighted-adjoint-locality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-reproduction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONFAULTHANDLER: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA source
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Compile recovery benchmark
+        run: |
+          python -m py_compile benchmarks/brain_recovery_weighted_adjoint_locality.py
+
+      - name: Re-run inherited exact adjoint contracts
+        run: |
+          python tests/test_causal_adjoint_python.py
+
+      - name: Reproduce weighted adjoint and component locality evidence
+        run: |
+          python benchmarks/brain_recovery_weighted_adjoint_locality.py \
+            --repeats 7 \
+            --output brain-recovery-weighted-adjoint-locality.json \
+            | tee brain-recovery-weighted-adjoint-locality.txt
+
+      - name: Summarize comparison
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(
+              Path("brain-recovery-weighted-adjoint-locality.json")
+              .read_text(encoding="utf-8")
+          )
+          print("source_identity_passed=", receipt["source_identity"]["passed"])
+          for row in receipt["gradient_sweep"]:
+              print(
+                  "gradient",
+                  "parameters=", row["parameters"],
+                  "adjoint_ms=", row["qsa_adjoint_ms"],
+                  "shift_ms=", row["qsa_parameter_shift_ms"],
+                  "finite_ms=", row["finite_difference_ms"],
+                  "shift_over_adjoint=", row["parameter_shift_over_adjoint"],
+                  "finite_over_adjoint=", row["finite_difference_over_adjoint"],
+                  "max_gradient_error=", row["max_gradient_error_vs_parameter_shift"],
+              )
+          for row in receipt["component_locality_sweep"]:
+              print(
+                  "locality",
+                  "total_qubits=", row["total_qubits"],
+                  "local_qubits=", row["local_qubits"],
+                  "forced_ms=", row["forced_global_ms"],
+                  "component_ms=", row["component_local_ms"],
+                  "forced_over_component=", row["forced_over_component"],
+                  "working_state_ratio=", row["component_over_forced_working_state_ratio"],
+              )
+          print("fully_connected=", receipt["fully_connected_failure_boundary"])
+          print("passed=", receipt["passed"])
+          if not receipt["passed"]:
+              raise SystemExit("recovery receipt did not pass")
+          PY
+
+      - name: Upload exact reproduction evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-weighted-adjoint-locality-${{ github.run_id }}
+          path: |
+            brain-recovery-weighted-adjoint-locality.json
+            brain-recovery-weighted-adjoint-locality.txt
+          if-no-files-found: error
+          retention-days: 90
