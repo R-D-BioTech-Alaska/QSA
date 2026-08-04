@@ -1,0 +1,133 @@
+name: Brain Recovery Persistent Tripair Cotangent Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_tripair_optimizer_step.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v2.py"
+      - "benchmarks/brain_recovery_persistent_tripair_cotangent_diagnostic.py"
+      - "python/qsa/causal_persistent_workspace.py"
+      - "python/qsa/causal_batch.py"
+      - "python/qsa/causal_adjoint.py"
+      - "include/qubit/qadjoint.hpp"
+      - ".github/workflows/brain-recovery-persistent-tripair-cotangent-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-persistent-tripair-cotangent-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-cotangent-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONFAULTHANDLER: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile cotangent diagnostic
+        run: |
+          python -m py_compile \
+            benchmarks/brain_recovery_tripair_optimizer_step.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v2.py \
+            benchmarks/brain_recovery_persistent_tripair_cotangent_diagnostic.py
+
+      - name: Re-run inherited exact and persistent contracts
+        run: |
+          python tests/test_causal_adjoint_python.py
+          python tests/test_persistent_adjoint_python.py
+
+      - name: Reproduce exact optimizer-derived cotangents
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_persistent_tripair_cotangent_diagnostic.py \
+            --output brain-recovery-persistent-tripair-cotangent-diagnostic.json \
+            2>&1 | tee brain-recovery-persistent-tripair-cotangent-diagnostic.txt
+          diagnostic_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_COTANGENT_DIAGNOSTIC_EXIT=$diagnostic_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize cotangent diagnostic evidence
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-persistent-tripair-cotangent-diagnostic.json")
+          if not path.is_file():
+              raise SystemExit("cotangent diagnostic did not emit a JSON receipt")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("contract=", receipt["contract"])
+          print("diagnosis=", receipt["diagnosis"])
+          for case in receipt["cases"]:
+              print(
+                  "cotangent_diagnostic",
+                  "batch=", case["batch_size"],
+                  "observation_error=", case["qsa_vs_torch_observation_max_error"],
+                  "loss_error=", case["qsa_vs_torch_loss_error"],
+                  "actual_cotangent_error=", case["qsa_vs_torch_actual_cotangent_max_error"],
+                  "actual_cotangent_stats=", case["actual_cotangent_stats"],
+                  "maximum_value_error=", case["maximum_stored_vs_adjoint_value_error"],
+                  "selected_failures=", case["selected_pullback_failures"],
+                  "workspace_extractions=", case["workspace_extractions"],
+                  "diagnostic_complete=", case["diagnostic_complete"],
+              )
+          print("passed=", receipt["passed"])
+          raise SystemExit(0 if receipt["passed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_COTANGENT_DIAGNOSTIC_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Upload cotangent diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-persistent-tripair-cotangent-${{ github.run_id }}
+          path: |
+            brain-recovery-persistent-tripair-cotangent-diagnostic.json
+            brain-recovery-persistent-tripair-cotangent-diagnostic.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce cotangent diagnostic completeness
+        if: always()
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_COTANGENT_DIAGNOSTIC_EXIT:-1}" -ne 0 ]; then
+            echo "The optimizer-derived cotangent diagnostic did not complete."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_COTANGENT_DIAGNOSTIC_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The cotangent diagnostic receipt was missing, malformed, or incomplete."
+            exit 1
+          fi

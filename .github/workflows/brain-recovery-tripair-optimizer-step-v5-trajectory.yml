@@ -1,0 +1,157 @@
+name: Brain Recovery Tripair Optimizer Step v5 Trajectory
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_tripair_optimizer_step.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v3.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v4_safe.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v5_trajectory.py"
+      - "python/qsa/causal_adjoint.py"
+      - "python/qsa/causal_components.py"
+      - "include/qubit/qadjoint.hpp"
+      - "include/qubit/detail/qcausal_adjoint_impl.hpp"
+      - "include/qubit/detail/qcausal_component_impl.hpp"
+      - ".github/workflows/brain-recovery-tripair-optimizer-step-v5-trajectory.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-tripair-optimizer-step-v5-trajectory-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  cpu-trajectory-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6 psutil==7.0.0
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile diagnostic and predecessors
+        run: |
+          python -m py_compile \
+            benchmarks/brain_recovery_tripair_optimizer_step.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v4_safe.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v5_trajectory.py
+
+      - name: Re-run inherited exact adjoint contracts
+        run: python tests/test_causal_adjoint_python.py
+
+      - name: Run step-resolved safe trajectory diagnostic
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_tripair_optimizer_step_v5_trajectory.py \
+            2>&1 | tee brain-recovery-tripair-optimizer-step-v5-trajectory.txt
+          diagnostic_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_OPTIMIZER_V5_TRAJECTORY_EXIT=$diagnostic_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize causal boundary
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-tripair-optimizer-step-v5-trajectory.json")
+          if not path.is_file():
+              raise SystemExit("trajectory diagnostic did not emit JSON")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("diagnostic_completed=", receipt["diagnostic_completed"])
+          print("all_cases_passed=", receipt["all_cases_passed"])
+          for case in receipt["cases"]:
+              print(
+                  "trajectory_case",
+                  "batch=", case["batch_size"],
+                  "steps=", case["steps"],
+                  "passed=", case["passed"],
+                  "same_state_failure=", case["first_same_state_backend_failure"],
+                  "trajectory_failure=", case["first_trajectory_failure"],
+                  "final_parameter_error=", case["final_parameter_error"],
+                  "final_optimizer_error=", case["final_optimizer_error"],
+                  "speed=", case["timing"]["baseline_over_candidate_total_median"],
+              )
+          zero = receipt["zero_learning_rate_control"]
+          print(
+              "zero_lr",
+              "passed=", zero["passed"],
+              "same_state_failure=", zero["first_same_state_backend_failure"],
+              "trajectory_failure=", zero["first_trajectory_failure"],
+          )
+          print("deterministic_rerun=", receipt["deterministic_rerun"]["equal"])
+          raise SystemExit(0 if receipt["diagnostic_completed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_OPTIMIZER_V5_TRAJECTORY_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Hash diagnostic evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -f brain-recovery-tripair-optimizer-step-v5-trajectory.json ]; then
+            sha256sum brain-recovery-tripair-optimizer-step-v5-trajectory.json \
+              > brain-recovery-tripair-optimizer-step-v5-trajectory.sha256
+          fi
+          sha256sum \
+            benchmarks/brain_recovery_tripair_optimizer_step.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v4_safe.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v5_trajectory.py \
+            .github/workflows/brain-recovery-tripair-optimizer-step-v5-trajectory.yml \
+            > brain-recovery-tripair-optimizer-step-v5-sources.sha256
+
+      - name: Upload trajectory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-tripair-optimizer-step-v5-trajectory-${{ github.run_id }}
+          path: |
+            brain-recovery-tripair-optimizer-step-v5-trajectory.json
+            brain-recovery-tripair-optimizer-step-v5-trajectory.txt
+            brain-recovery-tripair-optimizer-step-v5-trajectory.sha256
+            brain-recovery-tripair-optimizer-step-v5-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce diagnostic completion
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_OPTIMIZER_V5_TRAJECTORY_EXIT:-1}" -ne 0 ]; then
+            echo "The step-resolved diagnostic did not complete."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_OPTIMIZER_V5_TRAJECTORY_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The diagnostic receipt was missing, malformed, or incomplete."
+            exit 1
+          fi

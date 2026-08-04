@@ -1,0 +1,146 @@
+name: Brain Recovery Tripair Optimizer Step v6 Compaction Boundary
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_tripair_optimizer_step.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v3.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v4_safe.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v5_trajectory.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v6_compaction_boundary.py"
+      - "include/qubit/qstate.hpp"
+      - "src/qstate.cpp"
+      - ".github/workflows/brain-recovery-tripair-optimizer-step-v6-compaction-boundary.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-tripair-optimizer-step-v6-compaction-boundary-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  cpu-compaction-boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6 psutil==7.0.0
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile diagnostic and predecessors
+        run: |
+          python -m py_compile \
+            benchmarks/brain_recovery_tripair_optimizer_step.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v4_safe.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v5_trajectory.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v6_compaction_boundary.py
+
+      - name: Re-run inherited exact adjoint contracts
+        run: python tests/test_causal_adjoint_python.py
+
+      - name: Run exact compaction-boundary diagnostic
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_tripair_optimizer_step_v6_compaction_boundary.py \
+            2>&1 | tee brain-recovery-tripair-optimizer-step-v6-compaction-boundary.txt
+          diagnostic_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_OPTIMIZER_V6_COMPACTION_EXIT=$diagnostic_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize exact boundary
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-tripair-optimizer-step-v6-compaction-boundary.json")
+          if not path.is_file():
+              raise SystemExit("compaction diagnostic did not emit JSON")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("diagnostic_completed=", receipt["diagnostic_completed"])
+          print("hypothesis_supported=", receipt["hypothesis"]["supported"])
+          print("plan_optimizer_excluded=", receipt["hypothesis"]["plan_optimizer_excluded"])
+          print("dense_adjoint_exact=", receipt["hypothesis"]["dense_adjoint_exact"])
+          print("offending_sample=", receipt["offending_sample"])
+          print("offending_observable=", receipt["offending_observable"])
+          print("maximum_errors=", receipt["maximum_errors"])
+          print("first_component_increase=", receipt["first_component_increase_from_one"])
+          print("first_material_error=", receipt["first_material_observable_error"])
+          raise SystemExit(0 if receipt["diagnostic_completed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_OPTIMIZER_V6_COMPACTION_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Hash diagnostic evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -f brain-recovery-tripair-optimizer-step-v6-compaction-boundary.json ]; then
+            sha256sum brain-recovery-tripair-optimizer-step-v6-compaction-boundary.json \
+              > brain-recovery-tripair-optimizer-step-v6-compaction-boundary.sha256
+          fi
+          sha256sum \
+            benchmarks/brain_recovery_tripair_optimizer_step.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v4_safe.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v5_trajectory.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v6_compaction_boundary.py \
+            include/qubit/qstate.hpp \
+            src/qstate.cpp \
+            .github/workflows/brain-recovery-tripair-optimizer-step-v6-compaction-boundary.yml \
+            > brain-recovery-tripair-optimizer-step-v6-sources.sha256
+
+      - name: Upload compaction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-tripair-optimizer-step-v6-compaction-boundary-${{ github.run_id }}
+          path: |
+            brain-recovery-tripair-optimizer-step-v6-compaction-boundary.json
+            brain-recovery-tripair-optimizer-step-v6-compaction-boundary.txt
+            brain-recovery-tripair-optimizer-step-v6-compaction-boundary.sha256
+            brain-recovery-tripair-optimizer-step-v6-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce diagnostic completion
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_OPTIMIZER_V6_COMPACTION_EXIT:-1}" -ne 0 ]; then
+            echo "The compaction-boundary diagnostic did not complete."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_OPTIMIZER_V6_COMPACTION_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The compaction receipt was missing, malformed, or incomplete."
+            exit 1
+          fi
