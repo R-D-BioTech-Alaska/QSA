@@ -1,5 +1,6 @@
 name: Brain Recovery Exact Component Factorization Repair
 
+# This workflow is the source-bound acceptance gate for the isolated runtime repair.
 on:
   pull_request:
     paths:
