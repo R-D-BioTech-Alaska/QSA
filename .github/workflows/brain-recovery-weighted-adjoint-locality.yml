@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "benchmarks/brain_recovery_weighted_adjoint_locality.py"
+      - "benchmarks/brain_recovery_tripair_vjp_contract.py"
       - "python/qsa/causal_adjoint.py"
       - "python/qsa/causal_components.py"
       - "python/qsa/causal_support_grad.py"
@@ -47,9 +48,11 @@ jobs:
           python -m pip install numpy==2.2.6
           python -m pip install .
 
-      - name: Compile recovery benchmark
+      - name: Compile recovery benchmarks
         run: |
-          python -m py_compile benchmarks/brain_recovery_weighted_adjoint_locality.py
+          python -m py_compile \
+            benchmarks/brain_recovery_weighted_adjoint_locality.py \
+            benchmarks/brain_recovery_tripair_vjp_contract.py
 
       - name: Re-run inherited exact adjoint contracts
         run: |
@@ -68,7 +71,20 @@ jobs:
           echo "BRAIN_RECOVERY_BENCHMARK_EXIT=$benchmark_exit" >> "$GITHUB_ENV"
           exit 0
 
-      - name: Summarize comparison
+      - name: Reproduce exact Brain Tripair VJP contract
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_tripair_vjp_contract.py \
+            --repeats 5 \
+            --output brain-recovery-tripair-vjp-contract.json \
+            2>&1 | tee brain-recovery-tripair-vjp-contract.txt
+          tripair_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_TRIPAIR_EXIT=$tripair_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize comparisons
         shell: bash
         run: |
           set +e
@@ -76,12 +92,17 @@ jobs:
           import json
           from pathlib import Path
 
-          path = Path("brain-recovery-weighted-adjoint-locality.json")
-          if not path.is_file():
-              raise SystemExit("recovery benchmark did not emit its JSON receipt")
-          receipt = json.loads(path.read_text(encoding="utf-8"))
-          print("source_identity_passed=", receipt["source_identity"]["passed"])
-          for row in receipt["gradient_sweep"]:
+          first_path = Path("brain-recovery-weighted-adjoint-locality.json")
+          second_path = Path("brain-recovery-tripair-vjp-contract.json")
+          if not first_path.is_file():
+              raise SystemExit("weighted-adjoint receipt was not emitted")
+          if not second_path.is_file():
+              raise SystemExit("Tripair VJP receipt was not emitted")
+
+          first = json.loads(first_path.read_text(encoding="utf-8"))
+          second = json.loads(second_path.read_text(encoding="utf-8"))
+          print("source_identity_passed=", first["source_identity"]["passed"])
+          for row in first["gradient_sweep"]:
               print(
                   "gradient",
                   "parameters=", row["parameters"],
@@ -93,7 +114,7 @@ jobs:
                   "finite_over_adjoint=", row["finite_difference_over_adjoint"],
                   "max_gradient_error=", row["max_gradient_error_vs_parameter_shift"],
               )
-          for row in receipt["component_locality_sweep"]:
+          for row in first["component_locality_sweep"]:
               print(
                   "locality",
                   "total_qubits=", row["total_qubits"],
@@ -103,9 +124,23 @@ jobs:
                   "forced_over_component=", row["forced_over_component"],
                   "working_state_ratio=", row["component_over_forced_working_state_ratio"],
               )
-          print("fully_connected=", receipt["fully_connected_failure_boundary"])
-          print("passed=", receipt["passed"])
-          raise SystemExit(0 if receipt["passed"] else 1)
+          print("fully_connected=", first["fully_connected_failure_boundary"])
+
+          for row in second["batch_sweep"]:
+              print(
+                  "tripair_vjp",
+                  "batch=", row["batch_size"],
+                  "component_ms=", row["persistent_component_adjoint_ms"],
+                  "component_ms_per_sample=", row["component_adjoint_ms_per_sample"],
+                  "shift_over_component=", row["parameter_shift_over_component_adjoint"],
+                  "finite_over_component=", row["finite_difference_over_component_adjoint"],
+                  "rebuild_over_persistent=", row["rebuild_over_persistent_component_adjoint"],
+                  "shared_gradient_error_vs_shift=", row["errors"]["shift_gradient_bundle_vs_direct"],
+                  "shared_gradient_error_vs_dense=", row["errors"]["dense_gradient_bundle_vs_direct"],
+              )
+          print("weighted_adjoint_passed=", first["passed"])
+          print("tripair_vjp_passed=", second["passed"])
+          raise SystemExit(0 if first["passed"] and second["passed"] else 1)
           PY
           summary_exit=$?
           echo "BRAIN_RECOVERY_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
@@ -119,18 +154,24 @@ jobs:
           path: |
             brain-recovery-weighted-adjoint-locality.json
             brain-recovery-weighted-adjoint-locality.txt
+            brain-recovery-tripair-vjp-contract.json
+            brain-recovery-tripair-vjp-contract.txt
           if-no-files-found: error
           retention-days: 90
 
-      - name: Enforce reproduction contract
+      - name: Enforce reproduction contracts
         if: always()
         shell: bash
         run: |
           if [ "${BRAIN_RECOVERY_BENCHMARK_EXIT:-1}" -ne 0 ]; then
-            echo "The source-bound benchmark process failed or a scientific gate did not pass."
+            echo "The weighted-adjoint benchmark process failed or its scientific gate did not pass."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_TRIPAIR_EXIT:-1}" -ne 0 ]; then
+            echo "The exact Brain Tripair VJP contract failed."
             exit 1
           fi
           if [ "${BRAIN_RECOVERY_SUMMARY_EXIT:-1}" -ne 0 ]; then
-            echo "The recovery receipt was missing, malformed, or did not pass."
+            echo "A recovery receipt was missing, malformed, or did not pass."
             exit 1
           fi
