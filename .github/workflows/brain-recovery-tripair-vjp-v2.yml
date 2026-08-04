@@ -1,0 +1,135 @@
+name: Brain Recovery Tripair VJP Contract v2
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_weighted_adjoint_locality.py"
+      - "benchmarks/brain_recovery_tripair_vjp_contract.py"
+      - "benchmarks/brain_recovery_tripair_vjp_contract_v2.py"
+      - "python/qsa/causal_adjoint.py"
+      - "python/qsa/causal_components.py"
+      - "python/qsa/causal_support_grad.py"
+      - "include/qubit/qadjoint.hpp"
+      - "include/qubit/detail/qcausal_adjoint_impl.hpp"
+      - "include/qubit/detail/qcausal_component_impl.hpp"
+      - ".github/workflows/brain-recovery-tripair-vjp-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-tripair-vjp-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-tripair-vjp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONFAULTHANDLER: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA source and pinned benchmark dependency
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install .
+
+      - name: Compile predecessor and successor contracts
+        run: |
+          python -m py_compile \
+            benchmarks/brain_recovery_weighted_adjoint_locality.py \
+            benchmarks/brain_recovery_tripair_vjp_contract.py \
+            benchmarks/brain_recovery_tripair_vjp_contract_v2.py
+
+      - name: Re-run inherited exact adjoint contracts
+        run: |
+          python tests/test_causal_adjoint_python.py
+
+      - name: Run causally corrected Brain Tripair VJP contract
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_tripair_vjp_contract_v2.py \
+            --repeats 5 \
+            --output brain-recovery-tripair-vjp-contract-v2.json \
+            2>&1 | tee brain-recovery-tripair-vjp-contract-v2.txt
+          contract_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_TRIPAIR_V2_EXIT=$contract_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize exact VJP evidence
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-tripair-vjp-contract-v2.json")
+          if not path.is_file():
+              raise SystemExit("Tripair VJP v2 did not emit a JSON receipt")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("source_identity_passed=", receipt["source_identity"]["passed"])
+          print("iteration=", receipt["iteration"])
+          print("input_binding=", receipt["brain_contract"]["input_binding"])
+          for row in receipt["batch_sweep"]:
+              print(
+                  "tripair_vjp_v2",
+                  "batch=", row["batch_size"],
+                  "component_ms=", row["persistent_component_adjoint_ms"],
+                  "component_ms_per_sample=", row["component_adjoint_ms_per_sample"],
+                  "shift_over_component=", row["parameter_shift_over_component_adjoint"],
+                  "finite_over_component=", row["finite_difference_over_component_adjoint"],
+                  "dense_over_component=", row["independent_dense_reverse_over_component_adjoint"],
+                  "rebuild_over_persistent=", row["rebuild_over_persistent_component_adjoint"],
+                  "shift_gradient_error=", row["errors"]["shift_gradient_bundle_vs_direct"],
+                  "finite_gradient_error=", row["errors"]["finite_gradient_bundle_vs_direct"],
+                  "dense_gradient_error=", row["errors"]["dense_gradient_bundle_vs_direct"],
+                  "passed=", row["passed"],
+              )
+          print("passed=", receipt["passed"])
+          raise SystemExit(0 if receipt["passed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_TRIPAIR_V2_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Upload successor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-tripair-vjp-v2-${{ github.run_id }}
+          path: |
+            brain-recovery-tripair-vjp-contract-v2.json
+            brain-recovery-tripair-vjp-contract-v2.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce successor contract
+        if: always()
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_TRIPAIR_V2_EXIT:-1}" -ne 0 ]; then
+            echo "The causally corrected Tripair VJP contract did not pass."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_TRIPAIR_V2_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The successor receipt was missing, malformed, or did not pass."
+            exit 1
+          fi
