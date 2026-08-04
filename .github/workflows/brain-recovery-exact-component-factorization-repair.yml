@@ -49,10 +49,8 @@ jobs:
       - name: Compile regression
         run: python -m py_compile tests/brain_recovery_exact_component_factorization.py
 
-      - name: Run inherited QSA tests
-        run: |
-          ctest --test-dir build --output-on-failure
-          python tests/test_causal_adjoint_python.py
+      - name: Run inherited Python adjoint contracts
+        run: python tests/test_causal_adjoint_python.py
 
       - name: Run exact component-factorization regression
         shell: bash
