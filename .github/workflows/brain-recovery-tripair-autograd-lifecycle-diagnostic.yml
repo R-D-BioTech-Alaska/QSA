@@ -1,0 +1,137 @@
+name: Brain Recovery Tripair Autograd Lifecycle Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_tripair_optimizer_step.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v2.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v3.py"
+      - "benchmarks/brain_recovery_tripair_autograd_lifecycle_diagnostic.py"
+      - "python/qsa/causal_persistent_workspace.py"
+      - "python/qsa/causal_batch.py"
+      - "python/qsa/causal_adjoint.py"
+      - "include/qubit/qadjoint.hpp"
+      - ".github/workflows/brain-recovery-tripair-autograd-lifecycle-diagnostic.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-tripair-autograd-lifecycle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-autograd-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONFAULTHANDLER: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile lifecycle diagnostic
+        run: |
+          python -m py_compile \
+            benchmarks/brain_recovery_tripair_optimizer_step.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v2.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
+            benchmarks/brain_recovery_tripair_autograd_lifecycle_diagnostic.py
+
+      - name: Re-run inherited exact and persistent contracts
+        run: |
+          python tests/test_causal_adjoint_python.py
+          python tests/test_persistent_adjoint_python.py
+
+      - name: Trace exact torch.autograd.Function lifecycle
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_tripair_autograd_lifecycle_diagnostic.py \
+            --output brain-recovery-tripair-autograd-lifecycle-diagnostic.json \
+            2>&1 | tee brain-recovery-tripair-autograd-lifecycle-diagnostic.txt
+          diagnostic_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_AUTOGRAD_LIFECYCLE_EXIT=$diagnostic_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize lifecycle evidence
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-tripair-autograd-lifecycle-diagnostic.json")
+          if not path.is_file():
+              raise SystemExit("lifecycle diagnostic did not emit a JSON receipt")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("contract=", receipt["contract"])
+          print("baseline=", receipt["baseline"])
+          print("candidate=", receipt["candidate"])
+          print("backward_entry=", receipt["trace"].get("backward_entry"))
+          for sample in receipt["trace"].get("samples", []):
+              print(
+                  "autograd_lifecycle",
+                  "sample=", sample["sample"],
+                  "cotangent_stats=", sample["cotangent_stats"],
+                  "errors=", sample["errors"],
+                  "selected_success=", sample["selected_pullback_success"],
+                  "selected_error=", sample["selected_pullback_error"],
+                  "actual_gradient_max=", sample["actual_gradient_maximum_absolute"],
+              )
+          print("super_backward=", receipt["trace"].get("super_backward"))
+          print("state=", receipt["state"])
+          print("reproduced_failure=", receipt["selected_pullback_reproduced_failure"])
+          print("passed=", receipt["passed"])
+          raise SystemExit(0 if receipt["passed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_AUTOGRAD_LIFECYCLE_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Upload lifecycle diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-tripair-autograd-lifecycle-${{ github.run_id }}
+          path: |
+            brain-recovery-tripair-autograd-lifecycle-diagnostic.json
+            brain-recovery-tripair-autograd-lifecycle-diagnostic.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce lifecycle diagnostic completeness
+        if: always()
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_AUTOGRAD_LIFECYCLE_EXIT:-1}" -ne 0 ]; then
+            echo "The autograd lifecycle diagnostic did not complete."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_AUTOGRAD_LIFECYCLE_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The lifecycle receipt was missing, malformed, or incomplete."
+            exit 1
+          fi
