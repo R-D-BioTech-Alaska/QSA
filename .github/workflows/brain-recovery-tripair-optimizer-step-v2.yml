@@ -1,0 +1,144 @@
+name: Brain Recovery Tripair Optimizer Step v2
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_tripair_optimizer_step.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v2.py"
+      - "python/qsa/causal_persistent_workspace.py"
+      - "python/qsa/causal_adjoint.py"
+      - "python/qsa/causal_components.py"
+      - "include/qubit/qadjoint.hpp"
+      - "include/qubit/detail/qcausal_adjoint_impl.hpp"
+      - "include/qubit/detail/qcausal_component_impl.hpp"
+      - ".github/workflows/brain-recovery-tripair-optimizer-step-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-tripair-optimizer-step-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-optimizer-step-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONFAULTHANDLER: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONHASHSEED: "0"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile predecessor and successor optimizer-step contracts
+        run: |
+          python -m py_compile \
+            benchmarks/brain_recovery_tripair_optimizer_step.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v2.py
+
+      - name: Re-run inherited adjoint and persistent-workspace contracts
+        run: |
+          python tests/test_causal_adjoint_python.py
+          python tests/test_persistent_adjoint_python.py
+
+      - name: Run lazy-workspace-corrected matched AdamW comparison
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_tripair_optimizer_step_v2.py \
+            --steps 12 \
+            --output brain-recovery-tripair-optimizer-step-v2.json \
+            2>&1 | tee brain-recovery-tripair-optimizer-step-v2.txt
+          benchmark_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_OPTIMIZER_V2_EXIT=$benchmark_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize complete-step successor evidence
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-tripair-optimizer-step-v2.json")
+          if not path.is_file():
+              raise SystemExit("optimizer-step v2 did not emit a JSON receipt")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("iteration=", receipt["iteration"])
+          print("environment=", receipt["environment"])
+          print("contract=", receipt["contract"])
+          for case in receipt["cases"]:
+              print(
+                  "optimizer_step_v2",
+                  "batch=", case["batch_size"],
+                  "parameters=", case["active_trainable_parameters"],
+                  "baseline_forward_ms=", case["baseline"]["timing"]["forward"]["median_ms"],
+                  "qsa_forward_ms=", case["candidate"]["timing"]["forward"]["median_ms"],
+                  "baseline_backward_ms=", case["baseline"]["timing"]["backward"]["median_ms"],
+                  "qsa_backward_ms=", case["candidate"]["timing"]["backward"]["median_ms"],
+                  "baseline_total_ms=", case["baseline"]["timing"]["total"]["median_ms"],
+                  "qsa_total_ms=", case["candidate"]["timing"]["total"]["median_ms"],
+                  "baseline_over_qsa=", case["baseline_over_candidate_total_speed"],
+                  "qsa_faster=", case["candidate_faster_than_pytorch"],
+                  "max_observable_error=", case["maximum_observable_error"],
+                  "max_gradient_error=", case["maximum_gradient_error"],
+                  "max_clip_norm_error=", case["maximum_clip_norm_error"],
+                  "max_parameter_error=", case["maximum_parameter_error_after_step"],
+                  "qsa_state=", case["candidate"]["qsa"],
+                  "rollback=", case["rollback"],
+                  "passed=", case["passed"],
+              )
+          print("candidate_faster_batch_sizes=", receipt["candidate_faster_batch_sizes"])
+          print("passed=", receipt["passed"])
+          raise SystemExit(0 if receipt["passed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_OPTIMIZER_V2_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Upload complete-step successor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-tripair-optimizer-step-v2-${{ github.run_id }}
+          path: |
+            brain-recovery-tripair-optimizer-step-v2.json
+            brain-recovery-tripair-optimizer-step-v2.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce complete-step successor correctness contract
+        if: always()
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_OPTIMIZER_V2_EXIT:-1}" -ne 0 ]; then
+            echo "The lazy-workspace-corrected optimizer-step contract did not pass."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_OPTIMIZER_V2_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The optimizer-step v2 receipt was missing, malformed, or did not pass."
+            exit 1
+          fi
