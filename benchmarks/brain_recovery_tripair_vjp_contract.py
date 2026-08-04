@@ -4,11 +4,9 @@ import argparse
 import json
 import math
 import platform
-import statistics
 import sys
-import time
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Sequence
 
 import numpy as np
 
@@ -33,10 +31,10 @@ from brain_recovery_weighted_adjoint_locality import (
 
 BRAIN_PARENT = "f9a183e7bdbffc3d838e8774da548a053f883152"
 QSA_SOURCE = "78cc67d6c52469486976bb75e9471b87da1fc7fd"
-TRIPAIR_INPUT_VALUES = 6
-TRIPAIR_SHARED_VALUES = 12
-TRIPAIR_TOTAL_VALUES = TRIPAIR_INPUT_VALUES + TRIPAIR_SHARED_VALUES
-TRIPAIR_OBSERVABLE_NAMES = (
+INPUT_VALUES = 6
+SHARED_VALUES = 12
+TOTAL_VALUES = INPUT_VALUES + SHARED_VALUES
+OBSERVABLE_NAMES = (
     "X0",
     "Y0",
     "Z0",
@@ -52,7 +50,7 @@ TRIPAIR_OBSERVABLE_NAMES = (
     "Z1 Z2",
     "X0 X1 X2",
 )
-TRIPAIR_OBSERVABLES: tuple[Observable, ...] = (
+OBSERVABLES: tuple[Observable, ...] = (
     ((0, "X"),),
     ((0, "Y"),),
     ((0, "Z"),),
@@ -68,6 +66,7 @@ TRIPAIR_OBSERVABLES: tuple[Observable, ...] = (
     ((1, "Z"), (2, "Z")),
     ((0, "X"), (1, "X"), (2, "X")),
 )
+GradientBundle = tuple[tuple[tuple[float, ...], ...], tuple[float, ...]]
 
 
 def tripair_spec() -> tuple[Operation, ...]:
@@ -76,33 +75,24 @@ def tripair_spec() -> tuple[Operation, ...]:
         operations.append(("ry", qubit, qubit))
         operations.append(("rz", qubit, 3 + qubit))
     operations.extend(
-        (
-            ("cnot", 0, 1),
-            ("cnot", 1, 2),
-            ("cnot", 2, 0),
-        )
+        (("cnot", 0, 1), ("cnot", 1, 2), ("cnot", 2, 0))
     )
-    slot = TRIPAIR_INPUT_VALUES
+    slot = INPUT_VALUES
     for _layer in range(2):
         for qubit in range(3):
             operations.append(("ry", qubit, slot))
             slot += 1
             operations.append(("rz", qubit, slot))
             slot += 1
-        operations.extend(
-            (
-                ("cnot", 0, 1),
-                ("cnot", 1, 2),
-            )
-        )
-    if slot != TRIPAIR_TOTAL_VALUES:
+        operations.extend((("cnot", 0, 1), ("cnot", 1, 2)))
+    if slot != TOTAL_VALUES:
         raise RuntimeError("Tripair parameter surface changed")
     return tuple(operations)
 
 
-def tripair_plan(spec: Sequence[Operation]) -> CausalParameterizedPlan:
+def make_plan(spec: Sequence[Operation]) -> CausalParameterizedPlan:
+    parameters = [Parameter(f"tripair_{index}") for index in range(TOTAL_VALUES)]
     operations = []
-    parameters = [Parameter(f"tripair_{index}") for index in range(TRIPAIR_TOTAL_VALUES)]
     for name, first, third in spec:
         if name in ("ry", "rz"):
             if third is None:
@@ -113,7 +103,7 @@ def tripair_plan(spec: Sequence[Operation]) -> CausalParameterizedPlan:
                 raise RuntimeError("CNOT lacks a target")
             operations.append((name, first, int(third)))
         else:
-            raise ValueError(name)
+            raise ValueError(f"unsupported operation {name}")
     return CausalParameterizedPlan(tuple(operations))
 
 
@@ -121,62 +111,53 @@ def shared_values() -> tuple[float, ...]:
     return tuple(
         0.17 * math.sin((index + 1) * 0.43)
         - 0.09 * math.cos((index + 1) * 0.27)
-        for index in range(TRIPAIR_SHARED_VALUES)
+        for index in range(SHARED_VALUES)
     )
 
 
-def sample_values(sample: int, shared: Sequence[float]) -> tuple[float, ...]:
+def values_for_sample(sample: int, shared: Sequence[float]) -> tuple[float, ...]:
     inputs = tuple(
         math.pi
         * math.tanh(
             0.31 * math.sin((sample + 1) * (index + 2) * 0.17)
             + 0.13 * math.cos((sample + 3) * (index + 1) * 0.11)
         )
-        for index in range(TRIPAIR_INPUT_VALUES)
+        for index in range(INPUT_VALUES)
     )
     return inputs + tuple(float(value) for value in shared)
 
 
-def sample_cotangent(sample: int) -> tuple[float, ...]:
+def cotangent_for_sample(sample: int) -> tuple[float, ...]:
     return tuple(
         0.19 * math.cos((sample + 1) * (index + 1) * 0.23)
         - 0.08 * math.sin((sample + 2) * (index + 1) * 0.13)
-        for index in range(len(TRIPAIR_OBSERVABLES))
+        for index in range(len(OBSERVABLES))
     )
 
 
-def batch_inputs(batch_size: int) -> tuple[tuple[float, ...], ...]:
+def batch_data(
+    batch_size: int,
+) -> tuple[tuple[tuple[float, ...], ...], tuple[tuple[float, ...], ...]]:
     shared = shared_values()
-    return tuple(sample_values(sample, shared) for sample in range(batch_size))
+    return (
+        tuple(values_for_sample(sample, shared) for sample in range(batch_size)),
+        tuple(cotangent_for_sample(sample) for sample in range(batch_size)),
+    )
 
 
-def batch_cotangents(batch_size: int) -> tuple[tuple[float, ...], ...]:
-    return tuple(sample_cotangent(sample) for sample in range(batch_size))
-
-
-def combine_gradients(
-    gradients: Sequence[Sequence[float]],
-) -> tuple[tuple[tuple[float, ...], ...], tuple[float, ...]]:
-    input_gradients = tuple(
-        tuple(float(value) for value in gradient[:TRIPAIR_INPUT_VALUES])
+def aggregate_gradients(gradients: Sequence[Sequence[float]]) -> GradientBundle:
+    inputs = tuple(
+        tuple(float(value) for value in gradient[:INPUT_VALUES])
         for gradient in gradients
     )
-    shared_gradient = tuple(
-        float(
-            sum(
-                gradient[TRIPAIR_INPUT_VALUES + index]
-                for gradient in gradients
-            )
-        )
-        for index in range(TRIPAIR_SHARED_VALUES)
+    shared = tuple(
+        float(sum(gradient[INPUT_VALUES + index] for gradient in gradients))
+        for index in range(SHARED_VALUES)
     )
-    return input_gradients, shared_gradient
+    return inputs, shared
 
 
-def bundle_error(
-    left: tuple[tuple[tuple[float, ...], ...], tuple[float, ...]],
-    right: tuple[tuple[tuple[float, ...], ...], tuple[float, ...]],
-) -> float:
+def bundle_error(left: GradientBundle, right: GradientBundle) -> float:
     left_inputs, left_shared = left
     right_inputs, right_shared = right
     errors = [maximum_error(left_shared, right_shared)]
@@ -187,25 +168,26 @@ def bundle_error(
     return max(errors)
 
 
-def root_identity(root: CausalRegister) -> bytes:
-    return bytes(root.encode_qsc())
+def output_error(
+    left: Sequence[Sequence[float]], right: Sequence[Sequence[float]]
+) -> float:
+    return max(
+        maximum_error(left_row, right_row)
+        for left_row, right_row in zip(left, right)
+    )
 
 
-def evaluate_adjoint_batch(
+def direct_batch(
     root: CausalRegister,
-    adjoint: CausalWeightedAdjoint,
+    engine: CausalWeightedAdjoint,
     values: Sequence[Sequence[float]],
     cotangents: Sequence[Sequence[float]],
-) -> tuple[
-    tuple[tuple[float, ...], ...],
-    tuple[tuple[tuple[float, ...], ...], tuple[float, ...]],
-    dict[str, int],
-]:
+) -> tuple[tuple[tuple[float, ...], ...], GradientBundle, dict[str, int]]:
     outputs = []
     gradients = []
     forward = reverse = shifted = 0
     for row_values, row_cotangent in zip(values, cotangents):
-        result = adjoint.evaluate(root, row_values, row_cotangent)
+        result = engine.evaluate(root, row_values, row_cotangent)
         outputs.append(tuple(float(value) for value in result.values))
         gradients.append(tuple(float(value) for value in result.gradient))
         forward += int(result.forward_sweeps)
@@ -213,7 +195,7 @@ def evaluate_adjoint_batch(
         shifted += int(result.shifted_evaluations)
     return (
         tuple(outputs),
-        combine_gradients(gradients),
+        aggregate_gradients(gradients),
         {
             "forward_sweeps": forward,
             "reverse_sweeps": reverse,
@@ -222,116 +204,96 @@ def evaluate_adjoint_batch(
     )
 
 
-def evaluate_component_batch(
+def component_batch(
     root: CausalRegister,
-    adjoint: CausalComponentWeightedAdjoint,
+    engine: CausalComponentWeightedAdjoint,
     values: Sequence[Sequence[float]],
     cotangents: Sequence[Sequence[float]],
-) -> tuple[
-    tuple[tuple[float, ...], ...],
-    tuple[tuple[tuple[float, ...], ...], tuple[float, ...]],
-    dict[str, object],
-]:
+) -> tuple[tuple[tuple[float, ...], ...], GradientBundle, dict[str, object]]:
     outputs = []
     gradients = []
-    local_widths: list[int] = []
-    global_qubits: list[list[int]] = []
+    widths = []
+    global_qubits = []
     forward = reverse = shifted = 0
     for row_values, row_cotangent in zip(values, cotangents):
-        result = adjoint.evaluate(root, row_values, row_cotangent)
+        result = engine.evaluate(root, row_values, row_cotangent)
         outputs.append(tuple(float(value) for value in result.values))
         gradients.append(tuple(float(value) for value in result.gradient))
-        local_widths.append(int(result.local_qubit_count))
+        widths.append(int(result.local_qubit_count))
         global_qubits.append([int(value) for value in result.global_qubits])
         forward += int(result.forward_sweeps)
         reverse += int(result.reverse_sweeps)
         shifted += int(result.shifted_evaluations)
     return (
         tuple(outputs),
-        combine_gradients(gradients),
+        aggregate_gradients(gradients),
         {
             "forward_sweeps": forward,
             "reverse_sweeps": reverse,
             "shifted_evaluations": shifted,
-            "local_widths": local_widths,
+            "local_widths": widths,
             "global_qubits": global_qubits,
         },
     )
 
 
-def evaluate_shift_batch(
+def shift_batch(
     root: CausalRegister,
-    shift: CausalSupportParameterShift,
+    engine: CausalSupportParameterShift,
     values: Sequence[Sequence[float]],
     cotangents: Sequence[Sequence[float]],
-) -> tuple[
-    tuple[tuple[float, ...], ...],
-    tuple[tuple[tuple[float, ...], ...], tuple[float, ...]],
-    int,
-]:
+) -> tuple[tuple[tuple[float, ...], ...], GradientBundle, int]:
     outputs = []
     gradients = []
-    evaluations = 0
     for row_values, row_cotangent in zip(values, cotangents):
-        result = shift.evaluate_and_jacobian(root, row_values, workers=1)
+        result = engine.evaluate_and_jacobian(root, row_values, workers=1)
         outputs.append(tuple(float(value) for value in result.values))
         gradients.append(tuple(float(value) for value in result.vjp(row_cotangent)))
-        evaluations += 1 + 2 * TRIPAIR_TOTAL_VALUES
-    return tuple(outputs), combine_gradients(gradients), evaluations
+    return (
+        tuple(outputs),
+        aggregate_gradients(gradients),
+        len(values) * (1 + 2 * TOTAL_VALUES),
+    )
 
 
-def evaluate_finite_batch(
+def finite_batch(
     root: CausalRegister,
     plan: CausalParameterizedPlan,
     support: CausalPauliSupportPlan,
     values: Sequence[Sequence[float]],
     cotangents: Sequence[Sequence[float]],
-) -> tuple[
-    tuple[tuple[float, ...], ...],
-    tuple[tuple[tuple[float, ...], ...], tuple[float, ...]],
-    int,
-]:
+) -> tuple[tuple[tuple[float, ...], ...], GradientBundle, int]:
     outputs = []
     gradients = []
-    evaluations = 0
     for row_values, row_cotangent in zip(values, cotangents):
         observed, gradient = finite_difference_vjp(
-            root,
-            plan,
-            support,
-            row_values,
-            row_cotangent,
+            root, plan, support, row_values, row_cotangent
         )
         outputs.append(tuple(float(value) for value in observed))
         gradients.append(tuple(float(value) for value in gradient))
-        evaluations += 1 + 2 * TRIPAIR_TOTAL_VALUES
-    return tuple(outputs), combine_gradients(gradients), evaluations
+    return (
+        tuple(outputs),
+        aggregate_gradients(gradients),
+        len(values) * (1 + 2 * TOTAL_VALUES),
+    )
 
 
-def evaluate_dense_batch(
+def dense_batch(
     spec: Sequence[Operation],
     values: Sequence[Sequence[float]],
     cotangents: Sequence[Sequence[float]],
-) -> tuple[
-    tuple[tuple[float, ...], ...],
-    tuple[tuple[tuple[float, ...], ...], tuple[float, ...]],
-    int,
-]:
+) -> tuple[tuple[tuple[float, ...], ...], GradientBundle, int]:
     outputs = []
     gradients = []
     working_bytes = 0
     for row_values, row_cotangent in zip(values, cotangents):
-        observed, gradient, local_bytes = dense_reverse_vjp(
-            3,
-            spec,
-            TRIPAIR_OBSERVABLES,
-            row_values,
-            row_cotangent,
+        observed, gradient, sample_bytes = dense_reverse_vjp(
+            3, spec, OBSERVABLES, row_values, row_cotangent
         )
         outputs.append(tuple(float(value) for value in observed))
         gradients.append(tuple(float(value) for value in gradient))
-        working_bytes = max(working_bytes, int(local_bytes))
-    return tuple(outputs), combine_gradients(gradients), working_bytes
+        working_bytes = max(working_bytes, int(sample_bytes))
+    return tuple(outputs), aggregate_gradients(gradients), working_bytes
 
 
 def rebuild_component_batch(
@@ -341,29 +303,17 @@ def rebuild_component_batch(
     cotangents: Sequence[Sequence[float]],
 ) -> None:
     for row_values, row_cotangent in zip(values, cotangents):
-        plan = tripair_plan(spec)
-        support = CausalPauliSupportPlan(3, TRIPAIR_OBSERVABLES)
-        component = CausalComponentWeightedAdjoint(
-            plan,
-            support,
-            max_local_qubits=3,
+        plan = make_plan(spec)
+        support = CausalPauliSupportPlan(3, OBSERVABLES)
+        engine = CausalComponentWeightedAdjoint(
+            plan, support, max_local_qubits=3
         )
         try:
-            component.evaluate(root, row_values, row_cotangent)
+            engine.evaluate(root, row_values, row_cotangent)
         finally:
-            component.close()
+            engine.close()
             support.close()
             plan.close()
-
-
-def compare_output_batches(
-    left: Sequence[Sequence[float]],
-    right: Sequence[Sequence[float]],
-) -> float:
-    return max(
-        maximum_error(left_row, right_row)
-        for left_row, right_row in zip(left, right)
-    )
 
 
 def batch_case(
@@ -374,94 +324,80 @@ def batch_case(
     spec: Sequence[Operation],
     plan: CausalParameterizedPlan,
     support: CausalPauliSupportPlan,
-    adjoint: CausalWeightedAdjoint,
+    direct: CausalWeightedAdjoint,
     component: CausalComponentWeightedAdjoint,
     shift: CausalSupportParameterShift,
 ) -> dict[str, object]:
-    values = batch_inputs(batch_size)
-    cotangents = batch_cotangents(batch_size)
-    identity_before = root_identity(root)
+    values, cotangents = batch_data(batch_size)
+    initial_root = bytes(root.encode_qsc())
 
-    direct_outputs, direct_bundle, direct_counts = evaluate_adjoint_batch(
-        root, adjoint, values, cotangents
+    direct_outputs, direct_gradient, direct_counts = direct_batch(
+        root, direct, values, cotangents
     )
-    component_outputs, component_bundle, component_counts = evaluate_component_batch(
+    component_outputs, component_gradient, component_counts = component_batch(
         root, component, values, cotangents
     )
-    shift_outputs, shift_bundle, shift_evaluations = evaluate_shift_batch(
+    shift_outputs, shift_gradient, shift_evaluations = shift_batch(
         root, shift, values, cotangents
     )
-    finite_outputs, finite_bundle, finite_evaluations = evaluate_finite_batch(
+    finite_outputs, finite_gradient, finite_evaluations = finite_batch(
         root, plan, support, values, cotangents
     )
-    dense_outputs, dense_bundle, dense_working_bytes = evaluate_dense_batch(
+    dense_outputs, dense_gradient, dense_bytes = dense_batch(
         spec, values, cotangents
     )
 
-    if root_identity(root) != identity_before:
-        raise RuntimeError("Tripair VJP contract mutated the root register")
+    errors = {
+        "component_output_vs_direct": output_error(
+            component_outputs, direct_outputs
+        ),
+        "component_gradient_bundle_vs_direct": bundle_error(
+            component_gradient, direct_gradient
+        ),
+        "shift_output_vs_direct": output_error(shift_outputs, direct_outputs),
+        "shift_gradient_bundle_vs_direct": bundle_error(
+            shift_gradient, direct_gradient
+        ),
+        "finite_output_vs_direct": output_error(finite_outputs, direct_outputs),
+        "finite_gradient_bundle_vs_direct": bundle_error(
+            finite_gradient, direct_gradient
+        ),
+        "dense_output_vs_direct": output_error(dense_outputs, direct_outputs),
+        "dense_gradient_bundle_vs_direct": bundle_error(
+            dense_gradient, direct_gradient
+        ),
+    }
 
     direct_ms = median_ms(
-        lambda: evaluate_adjoint_batch(root, adjoint, values, cotangents),
-        repeats,
+        lambda: direct_batch(root, direct, values, cotangents), repeats
     )
     component_ms = median_ms(
-        lambda: evaluate_component_batch(root, component, values, cotangents),
-        repeats,
+        lambda: component_batch(root, component, values, cotangents), repeats
     )
     shift_ms = median_ms(
-        lambda: evaluate_shift_batch(root, shift, values, cotangents),
+        lambda: shift_batch(root, shift, values, cotangents),
         max(3, repeats // 2),
     )
     finite_ms = median_ms(
-        lambda: evaluate_finite_batch(
-            root, plan, support, values, cotangents
-        ),
+        lambda: finite_batch(root, plan, support, values, cotangents),
         max(3, repeats // 2),
     )
     dense_ms = median_ms(
-        lambda: evaluate_dense_batch(spec, values, cotangents),
-        repeats,
+        lambda: dense_batch(spec, values, cotangents), repeats
     )
     rebuild_ms = median_ms(
         lambda: rebuild_component_batch(root, spec, values, cotangents),
         max(3, repeats // 2),
     )
 
-    errors = {
-        "component_output_vs_direct": compare_output_batches(
-            component_outputs, direct_outputs
-        ),
-        "shift_output_vs_direct": compare_output_batches(
-            shift_outputs, direct_outputs
-        ),
-        "finite_output_vs_direct": compare_output_batches(
-            finite_outputs, direct_outputs
-        ),
-        "dense_output_vs_direct": compare_output_batches(
-            dense_outputs, direct_outputs
-        ),
-        "component_gradient_bundle_vs_direct": bundle_error(
-            component_bundle, direct_bundle
-        ),
-        "shift_gradient_bundle_vs_direct": bundle_error(
-            shift_bundle, direct_bundle
-        ),
-        "finite_gradient_bundle_vs_direct": bundle_error(
-            finite_bundle, direct_bundle
-        ),
-        "dense_gradient_bundle_vs_direct": bundle_error(
-            dense_bundle, direct_bundle
-        ),
-    }
-
+    root_immutable = bytes(root.encode_qsc()) == initial_root
     row: dict[str, object] = {
         "batch_size": batch_size,
         "logical_qubits_per_component": 3,
         "independent_component_count": batch_size,
-        "input_values_per_sample": TRIPAIR_INPUT_VALUES,
-        "shared_trainable_values": TRIPAIR_SHARED_VALUES,
-        "observable_cotangents_per_sample": len(TRIPAIR_OBSERVABLES),
+        "input_values_per_sample": INPUT_VALUES,
+        "shared_trainable_values": SHARED_VALUES,
+        "observable_cotangents_per_sample": len(OBSERVABLES),
         "persistent_direct_adjoint_ms": direct_ms,
         "persistent_component_adjoint_ms": component_ms,
         "parameter_shift_ms": shift_ms,
@@ -484,13 +420,13 @@ def batch_case(
         "component_local_widths": component_counts["local_widths"],
         "component_global_qubits": component_counts["global_qubits"],
         "direct_counts": direct_counts,
-        "dense_reverse_working_state_bytes_per_sample": dense_working_bytes,
-        "root_qsc_bytes": len(identity_before),
-        "root_immutable": root_identity(root) == identity_before,
+        "dense_reverse_working_state_bytes_per_sample": dense_bytes,
+        "root_qsc_bytes": len(initial_root),
+        "root_immutable": root_immutable,
         "errors": errors,
     }
     row["passed"] = (
-        row["root_immutable"] is True
+        root_immutable
         and component_counts["forward_sweeps"] == batch_size
         and component_counts["reverse_sweeps"] == batch_size
         and component_counts["shifted_evaluations"] == 0
@@ -506,10 +442,7 @@ def batch_case(
             float(errors["shift_gradient_bundle_vs_direct"]),
         )
         <= 2.0e-12
-        and max(
-            float(errors["finite_output_vs_direct"]),
-        )
-        <= 2.0e-12
+        and float(errors["finite_output_vs_direct"]) <= 2.0e-12
         and float(errors["finite_gradient_bundle_vs_direct"]) <= 2.0e-7
         and max(
             float(errors["dense_output_vs_direct"]),
@@ -525,13 +458,11 @@ def batch_case(
 def build_receipt(repeats: int) -> dict[str, object]:
     identity = source_identity()
     spec = tripair_spec()
-    plan = tripair_plan(spec)
-    support = CausalPauliSupportPlan(3, TRIPAIR_OBSERVABLES)
-    adjoint = CausalWeightedAdjoint(plan, support, max_qubits=3)
+    plan = make_plan(spec)
+    support = CausalPauliSupportPlan(3, OBSERVABLES)
+    direct = CausalWeightedAdjoint(plan, support, max_qubits=3)
     component = CausalComponentWeightedAdjoint(
-        plan,
-        support,
-        max_local_qubits=3,
+        plan, support, max_local_qubits=3
     )
     shift = CausalSupportParameterShift(plan, support)
     rows = []
@@ -546,7 +477,7 @@ def build_receipt(repeats: int) -> dict[str, object]:
                         spec=spec,
                         plan=plan,
                         support=support,
-                        adjoint=adjoint,
+                        direct=direct,
                         component=component,
                         shift=shift,
                     )
@@ -564,13 +495,13 @@ def build_receipt(repeats: int) -> dict[str, object]:
             "qsa_source": QSA_SOURCE,
             "active_systems": ["language", "qelm", "brainq"],
             "feature_width": 256,
-            "input_angle_values_per_sample": TRIPAIR_INPUT_VALUES,
-            "shared_trainable_circuit_values": TRIPAIR_SHARED_VALUES,
-            "total_qsa_values_per_sample": TRIPAIR_TOTAL_VALUES,
+            "input_angle_values_per_sample": INPUT_VALUES,
+            "shared_trainable_circuit_values": SHARED_VALUES,
+            "total_qsa_values_per_sample": TOTAL_VALUES,
             "logical_qubits": 3,
             "trainable_layers": 2,
-            "observable_names": list(TRIPAIR_OBSERVABLE_NAMES),
-            "observable_count": len(TRIPAIR_OBSERVABLES),
+            "observable_names": list(OBSERVABLE_NAMES),
+            "observable_count": len(OBSERVABLES),
             "component_policy": (
                 "One independent fully connected three-qubit component per "
                 "sample; components never merge across samples."
