@@ -1,0 +1,220 @@
+name: Brain Recovery Exact Factorization Full Optimizer
+
+on:
+  pull_request:
+    paths:
+      - "src/qstate.cpp"
+      - ".github/workflows/brain-recovery-exact-factorization-full-optimizer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-exact-factorization-full-optimizer-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  cpu-full-optimizer-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out repaired runtime
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out frozen recovery evidence branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/brain-recovery-weighted-adjoint-locality-v1
+          path: recovery-evidence
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install repaired QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6 psutil==7.0.0
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Run frozen V5 matrix against repaired runtime
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python - <<'PY' 2>&1 | tee brain-recovery-exact-factorization-full-optimizer.txt
+          import hashlib
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path("recovery-evidence/benchmarks").resolve()))
+          import brain_recovery_tripair_optimizer_step_v5_trajectory as v5
+
+          def repair_source_identity():
+              paths = [
+                  Path("src/qstate.cpp"),
+                  Path("include/qubit/qstate.hpp"),
+                  Path("tests/brain_recovery_exact_component_factorization.py"),
+                  Path(".github/workflows/brain-recovery-exact-factorization-full-optimizer.yml"),
+              ]
+              return {
+                  "checkout_head": subprocess.run(
+                      ("git", "rev-parse", "HEAD"),
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                  ).stdout.strip(),
+                  "base": subprocess.run(
+                      ("git", "rev-parse", "HEAD^1"),
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                  ).stdout.strip(),
+                  "frozen_evidence_branch": "agent/brain-recovery-weighted-adjoint-locality-v1",
+                  "frozen_evidence_head": subprocess.run(
+                      ("git", "-C", "recovery-evidence", "rev-parse", "HEAD"),
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                  ).stdout.strip(),
+                  "files": {
+                      str(path): {
+                          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                          "bytes": path.stat().st_size,
+                      }
+                      for path in paths
+                  },
+              }
+
+          v5.source_identity = repair_source_identity
+          v5.torch.set_num_threads(1)
+          v5.torch.set_num_interop_threads(1)
+          receipt = v5.build_receipt()
+          receipt["schema_version"] = (
+              "qsa.brain-recovery-tripair-optimizer-step.v5-trajectory."
+              "exact-factorization-repair"
+          )
+          receipt["repair_validation"] = {
+              "runtime_branch": "agent/qsa-exact-component-factorization-repair-v1",
+              "runtime_source_changed": True,
+              "expected_result": (
+                  "all 1/5/20-step cases exact after rejecting approximate "
+                  "near-separable component splits"
+              ),
+              "gpu_used": False,
+          }
+          output = Path("brain-recovery-exact-factorization-full-optimizer.json")
+          output.write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          passed = bool(
+              receipt["diagnostic_completed"]
+              and receipt["all_cases_passed"]
+              and receipt["zero_learning_rate_control"]["passed"]
+              and receipt["deterministic_rerun"]["equal"]
+          )
+          raise SystemExit(0 if passed else 1)
+          PY
+          matrix_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_EXACT_FACTORIZATION_MATRIX_EXIT=$matrix_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize repaired matrix
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-exact-factorization-full-optimizer.json")
+          if not path.is_file():
+              raise SystemExit("full optimizer receipt was not emitted")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("all_cases_passed=", receipt["all_cases_passed"])
+          for case in receipt["cases"]:
+              print(
+                  "case",
+                  "batch=", case["batch_size"],
+                  "steps=", case["steps"],
+                  "passed=", case["passed"],
+                  "same_state_failure=", case["first_same_state_backend_failure"],
+                  "trajectory_failure=", case["first_trajectory_failure"],
+                  "final_parameter_error=", case["final_parameter_error"],
+                  "final_optimizer_error=", case["final_optimizer_error"],
+                  "speed=", case["timing"]["baseline_over_candidate_total_median"],
+              )
+          print("zero_lr_passed=", receipt["zero_learning_rate_control"]["passed"])
+          print("deterministic=", receipt["deterministic_rerun"]["equal"])
+          raise SystemExit(
+              0
+              if receipt["diagnostic_completed"]
+              and receipt["all_cases_passed"]
+              and receipt["zero_learning_rate_control"]["passed"]
+              and receipt["deterministic_rerun"]["equal"]
+              else 1
+          )
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_EXACT_FACTORIZATION_MATRIX_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Hash full optimizer evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -f brain-recovery-exact-factorization-full-optimizer.json ]; then
+            sha256sum brain-recovery-exact-factorization-full-optimizer.json \
+              > brain-recovery-exact-factorization-full-optimizer.sha256
+          fi
+          sha256sum \
+            src/qstate.cpp \
+            include/qubit/qstate.hpp \
+            tests/brain_recovery_exact_component_factorization.py \
+            .github/workflows/brain-recovery-exact-factorization-full-optimizer.yml \
+            > brain-recovery-exact-factorization-full-optimizer-sources.sha256
+
+      - name: Upload full optimizer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-exact-factorization-full-optimizer-${{ github.run_id }}
+          path: |
+            brain-recovery-exact-factorization-full-optimizer.json
+            brain-recovery-exact-factorization-full-optimizer.txt
+            brain-recovery-exact-factorization-full-optimizer.sha256
+            brain-recovery-exact-factorization-full-optimizer-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce repaired full matrix
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_EXACT_FACTORIZATION_MATRIX_EXIT:-1}" -ne 0 ]; then
+            echo "Repaired runtime failed the frozen V5 optimizer matrix."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_EXACT_FACTORIZATION_MATRIX_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "Repaired full optimizer receipt was incomplete or failed."
+            exit 1
+          fi

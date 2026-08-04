@@ -1,0 +1,133 @@
+name: Brain Recovery Exact Component Factorization Repair
+
+# This workflow is the source-bound acceptance gate for the isolated runtime repair.
+on:
+  pull_request:
+    paths:
+      - "src/qstate.cpp"
+      - "include/qubit/qstate.hpp"
+      - "tests/brain_recovery_exact_component_factorization.py"
+      - ".github/workflows/brain-recovery-exact-component-factorization-repair.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-exact-component-factorization-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  cpu-exact-factorization:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact branch history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact QSA
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install .
+
+      - name: Compile regression
+        run: python -m py_compile tests/brain_recovery_exact_component_factorization.py
+
+      - name: Run inherited Python adjoint contracts
+        run: python tests/test_causal_adjoint_python.py
+
+      - name: Run exact component-factorization regression
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python tests/brain_recovery_exact_component_factorization.py \
+            2>&1 | tee brain-recovery-exact-component-factorization-regression.txt
+          regression_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_EXACT_FACTORIZATION_EXIT=$regression_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize regression
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-exact-component-factorization-regression.json")
+          if not path.is_file():
+              raise SystemExit("factorization regression did not emit JSON")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("passed=", receipt["passed"])
+          for case in receipt["cases"]:
+              print(
+                  "case=", case["name"],
+                  "passed=", case["passed"],
+                  "expected_components=", case["expected_component_count"],
+                  "actual_components=", case["actual_component_count"],
+                  "amplitude_error=", case["maximum_aligned_amplitude_error"],
+                  "determinants=", case["exact_singleton_determinants"],
+              )
+          raise SystemExit(0 if receipt["passed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_EXACT_FACTORIZATION_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Hash regression evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -f brain-recovery-exact-component-factorization-regression.json ]; then
+            sha256sum brain-recovery-exact-component-factorization-regression.json \
+              > brain-recovery-exact-component-factorization-regression.sha256
+          fi
+          sha256sum \
+            src/qstate.cpp \
+            include/qubit/qstate.hpp \
+            tests/brain_recovery_exact_component_factorization.py \
+            .github/workflows/brain-recovery-exact-component-factorization-repair.yml \
+            > brain-recovery-exact-component-factorization-sources.sha256
+
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-exact-component-factorization-${{ github.run_id }}
+          path: |
+            brain-recovery-exact-component-factorization-regression.json
+            brain-recovery-exact-component-factorization-regression.txt
+            brain-recovery-exact-component-factorization-regression.sha256
+            brain-recovery-exact-component-factorization-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce exact factorization
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_EXACT_FACTORIZATION_EXIT:-1}" -ne 0 ]; then
+            echo "Weakly entangled state was factorized approximately."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_EXACT_FACTORIZATION_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "Exact factorization receipt failed."
+            exit 1
+          fi
