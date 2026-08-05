@@ -1,0 +1,168 @@
+name: Brain Recovery Tripair Learning Pilot v11
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/brain_recovery_tripair_learning_pilot_v11.py"
+      - "benchmarks/brain_recovery_tripair_learning_pilot_v11_entry.py"
+      - ".github/workflows/brain-recovery-tripair-learning-pilot-v11.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-tripair-learning-pilot-v11-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  cpu-learning-pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out learning-pilot runtime
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out frozen recovery evidence
+        uses: actions/checkout@v4
+        with:
+          ref: 454c6d2b03502c0dd3a602885f3fb8f06a268a98
+          path: recovery-evidence
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6 psutil==7.0.0
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile learning pilot
+        run: |
+          python -m py_compile \
+            benchmarks/brain_recovery_tripair_optimizer_step_v7_batch_native.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v8_fused_dense.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v9_vectorized.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v10_contiguous.py \
+            benchmarks/brain_recovery_tripair_learning_pilot_v11.py \
+            benchmarks/brain_recovery_tripair_learning_pilot_v11_entry.py
+
+      - name: Run bounded nonzero-learning pilot
+        shell: bash
+        env:
+          QSA_RECOVERY_EVIDENCE_BENCHMARKS: ${{ github.workspace }}/recovery-evidence/benchmarks
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_tripair_learning_pilot_v11_entry.py \
+            --output brain-recovery-tripair-learning-pilot-v11.json \
+            2>&1 | tee brain-recovery-tripair-learning-pilot-v11.txt
+          pilot_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_LEARNING_PILOT_V11_EXIT=$pilot_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize learning evidence
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-tripair-learning-pilot-v11.json")
+          if not path.is_file():
+              raise SystemExit("learning pilot did not emit JSON")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("source=", receipt["source"])
+          print("environment=", receipt["environment"])
+          print("contract=", receipt["contract"])
+          print("data=", receipt["data"])
+          for name, arm in receipt["arms"].items():
+              print(
+                  "learning_arm",
+                  "name=", name,
+                  "backend=", arm["backend"],
+                  "lr=", arm["learning_rate"],
+                  "gradients=", arm["gradients_enabled"],
+                  "initial_train=", arm["initial_train"]["mean_loss"],
+                  "final_train=", arm["final_train"]["mean_loss"],
+                  "initial_heldout=", arm["initial_heldout"]["mean_loss"],
+                  "final_heldout=", arm["final_heldout"]["mean_loss"],
+                  "movement=", arm["parameter_movement"],
+                  "median_step_ms=", arm["timing"]["median_step_ms"],
+                  "examples_per_second=", arm["timing"]["examples_per_second"],
+                  "peak_rss=", arm["memory"]["peak_process_rss_bytes"],
+                  "rollback=", arm["rollback"],
+                  "qsa=", arm["qsa"],
+              )
+          print("comparisons=", receipt["comparisons"])
+          print(
+              "deterministic_contiguous_rerun=",
+              receipt["deterministic_contiguous_rerun"]["equal"],
+          )
+          print("common_contract_passed=", receipt["common_contract_passed"])
+          print("learning_preserved=", receipt["learning_preserved"])
+          print("controls_passed=", receipt["controls_passed"])
+          print("qsa_contract_passed=", receipt["qsa_contract_passed"])
+          print("passed=", receipt["passed"])
+          raise SystemExit(0 if receipt["passed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_LEARNING_PILOT_V11_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Hash learning evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -f brain-recovery-tripair-learning-pilot-v11.json ]; then
+            sha256sum brain-recovery-tripair-learning-pilot-v11.json \
+              > brain-recovery-tripair-learning-pilot-v11.sha256
+          fi
+          sha256sum \
+            benchmarks/brain_recovery_tripair_learning_pilot_v11.py \
+            benchmarks/brain_recovery_tripair_learning_pilot_v11_entry.py \
+            .github/workflows/brain-recovery-tripair-learning-pilot-v11.yml \
+            > brain-recovery-tripair-learning-pilot-v11-sources.sha256
+
+      - name: Upload learning evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-tripair-learning-pilot-v11-${{ github.run_id }}
+          path: |
+            brain-recovery-tripair-learning-pilot-v11.json
+            brain-recovery-tripair-learning-pilot-v11.txt
+            brain-recovery-tripair-learning-pilot-v11.sha256
+            brain-recovery-tripair-learning-pilot-v11-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce learning preservation contract
+        if: always()
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_LEARNING_PILOT_V11_EXIT:-1}" -ne 0 ]; then
+            echo "The bounded learning pilot did not pass."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_LEARNING_PILOT_V11_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The learning receipt was missing, malformed, or failed."
+            exit 1
+          fi

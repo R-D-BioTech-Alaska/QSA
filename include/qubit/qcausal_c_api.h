@@ -166,6 +166,70 @@ QCAUSAL_API int qcausal_weighted_adjoint(
     double* gradient_output,
     size_t gradient_output_size);
 
+// Evaluates all exact primal rows directly from one materialized local root.
+// No structural branches or QRegister reconstruction are created per row.
+QCAUSAL_API int qcausal_observables_many_dense(
+    qcausal_handle initial,
+    qcausal_parameterized_plan_handle plan,
+    qcausal_pauli_support_plan_handle observables,
+    const double* parameter_rows,
+    size_t row_count,
+    size_t parameter_count,
+    size_t max_qubits,
+    double* values_output,
+    size_t values_output_size,
+    size_t* completed_row_count);
+
+// Batch form of qcausal_weighted_adjoint. Parameter and cotangent rows are
+// contiguous and row-major. Values and gradients are written row-major. The
+// implementation materializes the root and validates the plan once, performs
+// no persistent-candidate reuse, and preserves deterministic reduction order.
+QCAUSAL_API int qcausal_weighted_adjoint_many(
+    qcausal_handle initial,
+    qcausal_parameterized_plan_handle plan,
+    qcausal_pauli_support_plan_handle observables,
+    const double* parameter_rows,
+    size_t row_count,
+    size_t parameter_count,
+    const double* cotangent_rows,
+    size_t cotangent_count,
+    size_t max_qubits,
+    double* values_output,
+    size_t values_output_size,
+    double* gradient_output,
+    size_t gradient_output_size,
+    size_t* completed_row_count);
+
+// Operation-major, amplitude-major exact batch kernels. All rows share one
+// schedule and are evolved together in contiguous amplitude blocks.
+QCAUSAL_API int qcausal_observables_many_vectorized(
+    qcausal_handle initial,
+    qcausal_parameterized_plan_handle plan,
+    qcausal_pauli_support_plan_handle observables,
+    const double* parameter_rows,
+    size_t row_count,
+    size_t parameter_count,
+    size_t max_qubits,
+    double* values_output,
+    size_t values_output_size,
+    size_t* completed_row_count);
+
+QCAUSAL_API int qcausal_weighted_adjoint_many_vectorized(
+    qcausal_handle initial,
+    qcausal_parameterized_plan_handle plan,
+    qcausal_pauli_support_plan_handle observables,
+    const double* parameter_rows,
+    size_t row_count,
+    size_t parameter_count,
+    const double* cotangent_rows,
+    size_t cotangent_count,
+    size_t max_qubits,
+    double* values_output,
+    size_t values_output_size,
+    double* gradient_output,
+    size_t gradient_output_size,
+    size_t* completed_row_count);
+
 #ifdef __cplusplus
 }
 #endif

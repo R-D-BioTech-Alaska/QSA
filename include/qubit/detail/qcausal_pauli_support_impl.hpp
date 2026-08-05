@@ -14,13 +14,15 @@ struct CausalPauliSupportPlanHandle {
     CausalPauliSupportPlanHandle(
         std::size_t qubit_count,
         std::span<const std::vector<qubit::PauliSupportTerm>> observables,
-        double imaginary_tolerance)
+        double tolerance)
         : plan(
               qubit_count,
               observables,
-              qubit::PauliSupportConfig{imaginary_tolerance}) {}
+              qubit::PauliSupportConfig{tolerance}),
+          imaginary_tolerance(tolerance) {}
 
     qubit::PauliSupportPlan plan;
+    double imaginary_tolerance{1.0e-10};
 };
 
 CausalPauliSupportPlanHandle* as_causal_pauli_support_plan(
