@@ -6,6 +6,7 @@ on:
       - "python/qsa/causal_persistent_workspace.py"
       - "tests/test_persistent_adjoint_python.py"
       - "benchmarks/persistent_adjoint_python.py"
+      - "benchmarks/persistent_pullback_lifecycle_diagnostic_v1.py"
       - ".github/workflows/qsa-persistent-adjoint.yml"
   workflow_dispatch:
 
@@ -123,3 +124,49 @@ jobs:
             persistent-adjoint.txt
             persistent-adjoint.json
           if-no-files-found: error
+
+  persistent-lifecycle-red-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONFAULTHANDLER: "1"
+      PYTHONHASHSEED: "0"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install exact-repair QSA
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install .
+      - name: Run repeated-pullback lifecycle diagnostic
+        shell: bash
+        run: |
+          set -o pipefail
+          python benchmarks/persistent_pullback_lifecycle_diagnostic_v1.py \
+            --output persistent-pullback-lifecycle-diagnostic-v1.json \
+            2>&1 | tee persistent-pullback-lifecycle-diagnostic-v1.txt
+      - name: Hash red diagnostic evidence
+        run: |
+          sha256sum persistent-pullback-lifecycle-diagnostic-v1.json \
+            > persistent-pullback-lifecycle-diagnostic-v1.sha256
+          sha256sum \
+            benchmarks/persistent_pullback_lifecycle_diagnostic_v1.py \
+            .github/workflows/qsa-persistent-adjoint.yml \
+            > persistent-pullback-lifecycle-diagnostic-v1-sources.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-persistent-lifecycle-red-${{ github.run_id }}
+          path: |
+            persistent-pullback-lifecycle-diagnostic-v1.json
+            persistent-pullback-lifecycle-diagnostic-v1.txt
+            persistent-pullback-lifecycle-diagnostic-v1.sha256
+            persistent-pullback-lifecycle-diagnostic-v1-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
