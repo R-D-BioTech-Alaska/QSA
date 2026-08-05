@@ -68,10 +68,27 @@ jobs:
         run: |
           set -o pipefail
           for steps in 1 5 20; do
-            python recovery-evidence/benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
-              --steps "${steps}" \
-              --output "persistent-tripair-optimizer-steps-${steps}.json" \
-              2>&1 | tee "persistent-tripair-optimizer-steps-${steps}.txt"
+            STEPS="${steps}" OUTPUT="persistent-tripair-optimizer-steps-${steps}.json" \
+              python - <<'PY' 2>&1 | tee "persistent-tripair-optimizer-steps-${steps}.txt"
+          import json
+          import os
+          from pathlib import Path
+          import brain_recovery_tripair_optimizer_step_v3 as v3
+
+          steps = int(os.environ["STEPS"])
+          v3.v1.torch.set_num_threads(1)
+          v3.v1.torch.set_num_interop_threads(1)
+          receipt = v3.build_receipt(steps)
+          Path(os.environ["OUTPUT"]).write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(receipt, sort_keys=True))
+          if not receipt.get("passed"):
+              raise SystemExit(
+                  f"persistent optimizer matrix failed for {steps} steps"
+              )
+          PY
           done
 
       - name: Verify and combine current receipts
@@ -113,9 +130,7 @@ jobs:
                   key = (int(case["batch_size"]), int(case["steps"]))
                   observed.append(key)
                   if key[1] != steps:
-                      raise SystemExit(
-                          f"step-count mismatch in {path}: {key[1]} != {steps}"
-                      )
+                      raise SystemExit(f"step-count mismatch in {path}: {key}")
                   if not case.get("passed"):
                       raise SystemExit(f"failed persistent case {key}: {case}")
                   qsa = case.get("candidate", {}).get("qsa", {})
@@ -161,8 +176,7 @@ jobs:
               ).stdout.strip(),
               "branch_head": subprocess.run(
                   (
-                      "git",
-                      "rev-parse",
+                      "git", "rev-parse",
                       "origin/agent/qsa-persistent-pullback-lifecycle-recovery-v2",
                   ),
                   check=True,
