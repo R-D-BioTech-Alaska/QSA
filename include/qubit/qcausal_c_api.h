@@ -176,7 +176,6 @@ QCAUSAL_API int qcausal_observables_many_dense(
     size_t row_count,
     size_t parameter_count,
     size_t max_qubits,
-    double imaginary_tolerance,
     double* values_output,
     size_t values_output_size,
     size_t* completed_row_count);
@@ -195,7 +194,6 @@ QCAUSAL_API int qcausal_weighted_adjoint_many(
     const double* cotangent_rows,
     size_t cotangent_count,
     size_t max_qubits,
-    double imaginary_tolerance,
     double* values_output,
     size_t values_output_size,
     double* gradient_output,
