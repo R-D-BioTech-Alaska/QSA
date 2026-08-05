@@ -139,6 +139,70 @@ def test_component_adjoint_matches_parameter_shift() -> None:
     plan.close()
 
 
+def test_batch_component_adjoint_matches_scalar() -> None:
+    plan = tripair_plan()
+    support = brain_support()
+    prepare = CausalParameterizedPlan((("h", EXTRA), ("cnot", EXTRA, FIRST)))
+    adjoint = CausalComponentWeightedAdjoint(
+        plan,
+        support,
+        max_local_qubits=8,
+    )
+    rows = tuple(
+        tuple(
+            0.19 * math.sin((row + 1) * (index + 1) * 0.17)
+            for index in range(plan.parameter_count)
+        )
+        for row in range(7)
+    )
+    cotangents = tuple(
+        tuple(
+            0.11 * math.cos((row + 2) * (index + 1) * 0.23)
+            for index in range(support.observable_count)
+        )
+        for row in range(7)
+    )
+
+    with CausalRegister(QUBITS) as root:
+        root.apply(prepare, ())
+        initial = root.encode_qsc()
+        batch = adjoint.evaluate_many(root, rows, cotangents)
+        scalar = tuple(
+            adjoint.evaluate(root, row, cotangent)
+            for row, cotangent in zip(rows, cotangents)
+        )
+
+        assert batch.row_count == len(rows)
+        assert batch.local_qubit_count == 4
+        assert set(batch.global_qubits) == {EXTRA, FIRST, SECOND, THIRD}
+        assert batch.forward_sweeps == len(rows)
+        assert batch.reverse_sweeps == len(rows)
+        assert batch.shifted_evaluations == 0
+        assert batch.stored_forward_states == 0
+        assert batch.native_calls == 1
+        for batch_values, batch_gradient, scalar_result in zip(
+            batch.values,
+            batch.gradients,
+            scalar,
+        ):
+            assert maximum_error(batch_values, scalar_result.values) <= 2.0e-12
+            assert maximum_error(batch_gradient, scalar_result.gradient) <= 2.0e-12
+        assert root.encode_qsc() == initial
+        assert root.validate()
+
+        try:
+            adjoint.evaluate_many(root, rows, cotangents[:-1])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("mismatched batch rows were accepted")
+
+    adjoint.close()
+    prepare.close()
+    support.close()
+    plan.close()
+
+
 def test_repeated_parameter_accumulates_exactly() -> None:
     shared = Parameter("shared")
     plan = CausalParameterizedPlan(
@@ -258,6 +322,7 @@ def test_noise_and_oversized_components_fail_closed() -> None:
 
 def main() -> None:
     test_component_adjoint_matches_parameter_shift()
+    test_batch_component_adjoint_matches_scalar()
     test_repeated_parameter_accumulates_exactly()
     test_noise_and_oversized_components_fail_closed()
     print("QSA weighted adjoint tests passed.")
