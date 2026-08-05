@@ -1,0 +1,125 @@
+name: Persistent Pullback Lifecycle Diagnostic v1
+
+on:
+  push:
+    branches:
+      - agent/qsa-persistent-pullback-lifecycle-repair-v1
+    paths:
+      - "benchmarks/persistent_pullback_lifecycle_diagnostic_v1.py"
+      - ".github/workflows/persistent-pullback-lifecycle-diagnostic-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persistent-pullback-lifecycle-diagnostic-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  cpu-persistent-red-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out persistent lifecycle branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install exact-repair QSA
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install .
+
+      - name: Compile diagnostic
+        run: python -m py_compile benchmarks/persistent_pullback_lifecycle_diagnostic_v1.py
+
+      - name: Run persistent lifecycle red diagnostic
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/persistent_pullback_lifecycle_diagnostic_v1.py \
+            --output persistent-pullback-lifecycle-diagnostic-v1.json \
+            2>&1 | tee persistent-pullback-lifecycle-diagnostic-v1.txt
+          diagnostic_exit=${PIPESTATUS[0]}
+          echo "PERSISTENT_PULLBACK_DIAGNOSTIC_EXIT=$diagnostic_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize diagnostic
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("persistent-pullback-lifecycle-diagnostic-v1.json")
+          if not path.is_file():
+              raise SystemExit("persistent diagnostic did not emit JSON")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("source=", receipt["source"])
+          print("environment=", receipt["environment"])
+          print("contract=", receipt["contract"])
+          print("red_reproduced=", receipt["red_reproduced"])
+          for name, case in receipt["lifecycle"].items():
+              print("lifecycle_case", name, case)
+          raise SystemExit(0 if receipt["red_reproduced"] else 1)
+          PY
+          summary_exit=$?
+          echo "PERSISTENT_PULLBACK_DIAGNOSTIC_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Hash diagnostic evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -f persistent-pullback-lifecycle-diagnostic-v1.json ]; then
+            sha256sum persistent-pullback-lifecycle-diagnostic-v1.json \
+              > persistent-pullback-lifecycle-diagnostic-v1.sha256
+          fi
+          sha256sum \
+            benchmarks/persistent_pullback_lifecycle_diagnostic_v1.py \
+            .github/workflows/persistent-pullback-lifecycle-diagnostic-v1.yml \
+            > persistent-pullback-lifecycle-diagnostic-v1-sources.sha256
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: persistent-pullback-lifecycle-diagnostic-v1-${{ github.run_id }}
+          path: |
+            persistent-pullback-lifecycle-diagnostic-v1.json
+            persistent-pullback-lifecycle-diagnostic-v1.txt
+            persistent-pullback-lifecycle-diagnostic-v1.sha256
+            persistent-pullback-lifecycle-diagnostic-v1-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce red diagnostic reproduction
+        if: always()
+        shell: bash
+        run: |
+          if [ "${PERSISTENT_PULLBACK_DIAGNOSTIC_EXIT:-1}" -ne 0 ]; then
+            echo "The known persistent lifecycle red defect was not reproduced."
+            exit 1
+          fi
+          if [ "${PERSISTENT_PULLBACK_DIAGNOSTIC_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The persistent diagnostic receipt was missing, malformed, or not red."
+            exit 1
+          fi
