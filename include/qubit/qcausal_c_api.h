@@ -166,6 +166,26 @@ QCAUSAL_API int qcausal_weighted_adjoint(
     double* gradient_output,
     size_t gradient_output_size);
 
+// Batch form of qcausal_weighted_adjoint. Parameter and cotangent rows are
+// contiguous and row-major. Values and gradients are written row-major. The
+// implementation is deliberately deterministic and preserves input-state
+// immutability while collapsing all rows into one Python/native transition.
+QCAUSAL_API int qcausal_weighted_adjoint_many(
+    qcausal_handle initial,
+    qcausal_parameterized_plan_handle plan,
+    qcausal_pauli_support_plan_handle observables,
+    const double* parameter_rows,
+    size_t row_count,
+    size_t parameter_count,
+    const double* cotangent_rows,
+    size_t cotangent_count,
+    size_t max_qubits,
+    double* values_output,
+    size_t values_output_size,
+    double* gradient_output,
+    size_t gradient_output_size,
+    size_t* completed_row_count);
+
 #ifdef __cplusplus
 }
 #endif
