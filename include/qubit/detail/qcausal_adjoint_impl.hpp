@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qadjoint.hpp"
+#include "qubit/qadjoint_batch.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -58,6 +59,66 @@ int qcausal_weighted_adjoint(
     });
 }
 
+int qcausal_observables_many_dense(
+    qcausal_handle initial,
+    qcausal_parameterized_plan_handle plan,
+    qcausal_pauli_support_plan_handle observables,
+    const double* parameter_rows,
+    size_t row_count,
+    size_t parameter_count,
+    size_t max_qubits,
+    double imaginary_tolerance,
+    double* values_output,
+    size_t values_output_size,
+    size_t* completed_row_count) {
+    return guarded_causal([&] {
+        if (completed_row_count == nullptr) {
+            throw qubit::QStateError(
+                "Batch primal completed-row output is null");
+        }
+        *completed_row_count = 0U;
+        CausalHandle* causal = as_causal(initial);
+        CausalParameterizedPlanHandle* parameterized =
+            as_causal_parameterized_plan(plan);
+        CausalPauliSupportPlanHandle* support =
+            as_causal_pauli_support_plan(observables);
+
+        const std::size_t required_parameter_count =
+            parameterized->plan.parameter_count();
+        const std::size_t observable_count = support->plan.observable_count();
+        if (parameter_count != required_parameter_count) {
+            throw qubit::QStateError(
+                "Batch primal parameter width differs from plan parameter count");
+        }
+        const std::size_t limit = std::numeric_limits<std::size_t>::max();
+        if ((parameter_count != 0U && row_count > limit / parameter_count) ||
+            (observable_count != 0U && row_count > limit / observable_count)) {
+            throw qubit::QStateError("Batch primal size overflow");
+        }
+        const std::size_t required_parameters = row_count * parameter_count;
+        const std::size_t required_values = row_count * observable_count;
+        if (required_parameters != 0U && parameter_rows == nullptr) {
+            throw qubit::QStateError("Batch primal parameter buffer is null");
+        }
+        if (values_output_size < required_values ||
+            (required_values != 0U && values_output == nullptr)) {
+            throw qubit::QStateError(
+                "Batch primal value output buffer is too small");
+        }
+
+        qubit::observables_many_dense(
+            causal->state.read(),
+            parameterized->plan,
+            std::span<const double>(parameter_rows, required_parameters),
+            row_count,
+            support->plan,
+            max_qubits,
+            imaginary_tolerance,
+            std::span<double>(values_output, required_values));
+        *completed_row_count = row_count;
+    });
+}
+
 int qcausal_weighted_adjoint_many(
     qcausal_handle initial,
     qcausal_parameterized_plan_handle plan,
@@ -68,6 +129,7 @@ int qcausal_weighted_adjoint_many(
     const double* cotangent_rows,
     size_t cotangent_count,
     size_t max_qubits,
+    double imaginary_tolerance,
     double* values_output,
     size_t values_output_size,
     double* gradient_output,
@@ -133,28 +195,22 @@ int qcausal_weighted_adjoint_many(
                 "Batch adjoint gradient output buffer is too small");
         }
 
-        for (std::size_t row = 0U; row < row_count; ++row) {
-            const qubit::WeightedAdjointResult result = qubit::weighted_adjoint(
-                causal->state.read(),
-                parameterized->plan,
-                std::span<const double>(
-                    parameter_rows + row * parameter_count,
-                    parameter_count),
-                support->plan,
-                std::span<const double>(
-                    cotangent_rows + row * cotangent_count,
-                    cotangent_count),
-                max_qubits);
-            std::copy(
-                result.values.begin(),
-                result.values.end(),
-                values_output + row * required_values_per_row);
-            std::copy(
-                result.gradient.begin(),
-                result.gradient.end(),
-                gradient_output + row * required_gradient_per_row);
-            *completed_row_count = row + 1U;
-        }
+        qubit::weighted_adjoint_many_dense(
+            causal->state.read(),
+            parameterized->plan,
+            std::span<const double>(
+                parameter_rows,
+                required_parameter_values),
+            row_count,
+            support->plan,
+            std::span<const double>(
+                cotangent_rows,
+                required_cotangent_values),
+            max_qubits,
+            imaginary_tolerance,
+            std::span<double>(values_output, required_values),
+            std::span<double>(gradient_output, required_gradients));
+        *completed_row_count = row_count;
     });
 }
 
