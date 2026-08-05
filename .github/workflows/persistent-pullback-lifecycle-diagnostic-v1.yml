@@ -1,9 +1,7 @@
 name: Persistent Pullback Lifecycle Diagnostic v1
 
 on:
-  push:
-    branches:
-      - agent/qsa-persistent-pullback-lifecycle-repair-v1
+  pull_request:
     paths:
       - "benchmarks/persistent_pullback_lifecycle_diagnostic_v1.py"
       - ".github/workflows/persistent-pullback-lifecycle-diagnostic-v1.yml"
