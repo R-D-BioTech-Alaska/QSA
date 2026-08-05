@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <span>
 
 extern "C" {
@@ -54,6 +55,106 @@ int qcausal_weighted_adjoint(
             max_qubits);
         std::copy(result.values.begin(), result.values.end(), values_output);
         std::copy(result.gradient.begin(), result.gradient.end(), gradient_output);
+    });
+}
+
+int qcausal_weighted_adjoint_many(
+    qcausal_handle initial,
+    qcausal_parameterized_plan_handle plan,
+    qcausal_pauli_support_plan_handle observables,
+    const double* parameter_rows,
+    size_t row_count,
+    size_t parameter_count,
+    const double* cotangent_rows,
+    size_t cotangent_count,
+    size_t max_qubits,
+    double* values_output,
+    size_t values_output_size,
+    double* gradient_output,
+    size_t gradient_output_size,
+    size_t* completed_row_count) {
+    return guarded_causal([&] {
+        if (completed_row_count == nullptr) {
+            throw qubit::QStateError(
+                "Batch adjoint completed-row output is null");
+        }
+        *completed_row_count = 0U;
+
+        CausalHandle* causal = as_causal(initial);
+        CausalParameterizedPlanHandle* parameterized =
+            as_causal_parameterized_plan(plan);
+        CausalPauliSupportPlanHandle* support =
+            as_causal_pauli_support_plan(observables);
+
+        const std::size_t required_values_per_row =
+            support->plan.observable_count();
+        const std::size_t required_gradient_per_row =
+            parameterized->plan.parameter_count();
+        if (parameter_count != required_gradient_per_row) {
+            throw qubit::QStateError(
+                "Batch adjoint parameter width differs from plan parameter count");
+        }
+        if (cotangent_count != required_values_per_row) {
+            throw qubit::QStateError(
+                "Batch adjoint cotangent width differs from observable count");
+        }
+
+        const std::size_t limit = std::numeric_limits<std::size_t>::max();
+        if ((parameter_count != 0U && row_count > limit / parameter_count) ||
+            (cotangent_count != 0U && row_count > limit / cotangent_count) ||
+            (required_values_per_row != 0U &&
+             row_count > limit / required_values_per_row) ||
+            (required_gradient_per_row != 0U &&
+             row_count > limit / required_gradient_per_row)) {
+            throw qubit::QStateError("Batch adjoint size overflow");
+        }
+
+        const std::size_t required_parameter_values = row_count * parameter_count;
+        const std::size_t required_cotangent_values = row_count * cotangent_count;
+        const std::size_t required_values =
+            row_count * required_values_per_row;
+        const std::size_t required_gradients =
+            row_count * required_gradient_per_row;
+
+        if (required_parameter_values != 0U && parameter_rows == nullptr) {
+            throw qubit::QStateError("Batch adjoint parameter buffer is null");
+        }
+        if (required_cotangent_values != 0U && cotangent_rows == nullptr) {
+            throw qubit::QStateError("Batch adjoint cotangent buffer is null");
+        }
+        if (values_output_size < required_values ||
+            (required_values != 0U && values_output == nullptr)) {
+            throw qubit::QStateError(
+                "Batch adjoint value output buffer is too small");
+        }
+        if (gradient_output_size < required_gradients ||
+            (required_gradients != 0U && gradient_output == nullptr)) {
+            throw qubit::QStateError(
+                "Batch adjoint gradient output buffer is too small");
+        }
+
+        for (std::size_t row = 0U; row < row_count; ++row) {
+            const qubit::WeightedAdjointResult result = qubit::weighted_adjoint(
+                causal->state.read(),
+                parameterized->plan,
+                std::span<const double>(
+                    parameter_rows + row * parameter_count,
+                    parameter_count),
+                support->plan,
+                std::span<const double>(
+                    cotangent_rows + row * cotangent_count,
+                    cotangent_count),
+                max_qubits);
+            std::copy(
+                result.values.begin(),
+                result.values.end(),
+                values_output + row * required_values_per_row);
+            std::copy(
+                result.gradient.begin(),
+                result.gradient.end(),
+                gradient_output + row * required_gradient_per_row);
+            *completed_row_count = row + 1U;
+        }
     });
 }
 
