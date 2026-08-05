@@ -67,50 +67,175 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/recovery-evidence/benchmarks
         run: |
           set -o pipefail
-          python recovery-evidence/benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
-            --steps 20 \
-            --output persistent-tripair-optimizer-current-v3.json \
-            2>&1 | tee persistent-tripair-optimizer-current-v3.txt
+          for steps in 1 5 20; do
+            python recovery-evidence/benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
+              --steps "${steps}" \
+              --output "persistent-tripair-optimizer-steps-${steps}.json" \
+              2>&1 | tee "persistent-tripair-optimizer-steps-${steps}.txt"
+          done
 
-      - name: Verify current receipts
+      - name: Verify and combine current receipts
         run: |
           python - <<'PY'
+          import hashlib
           import json
+          import subprocess
           from pathlib import Path
 
-          lifecycle = json.loads(
-              Path("persistent-pullback-lifecycle-regression-v2.json").read_text(
-                  encoding="utf-8"
-              )
-          )
-          optimizer = json.loads(
-              Path("persistent-tripair-optimizer-current-v3.json").read_text(
-                  encoding="utf-8"
-              )
-          )
+          def sha256(path: Path) -> str:
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          lifecycle_path = Path("persistent-pullback-lifecycle-regression-v2.json")
+          lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
           if not lifecycle.get("passed"):
               raise SystemExit(f"lifecycle regression failed: {lifecycle}")
-          if not optimizer.get("passed"):
-              raise SystemExit(f"persistent optimizer failed: {optimizer}")
-          cases = optimizer.get("result_window", {}).get("cases", [])
-          observed = sorted(
-              (int(case["batch_size"]), int(case["steps"])) for case in cases
-          )
+
           expected = sorted(
               (batch, steps)
               for batch in (1, 4, 16, 64)
               for steps in (1, 5, 20)
           )
+          observed = []
+          optimizer_receipts = []
+          for steps in (1, 5, 20):
+              path = Path(f"persistent-tripair-optimizer-steps-{steps}.json")
+              receipt = json.loads(path.read_text(encoding="utf-8"))
+              if not receipt.get("passed"):
+                  raise SystemExit(
+                      f"persistent optimizer failed for {steps} steps: {receipt}"
+                  )
+              cases = receipt.get("cases", [])
+              if len(cases) != 4:
+                  raise SystemExit(
+                      f"expected four batch cases for {steps} steps, got {len(cases)}"
+                  )
+              for case in cases:
+                  key = (int(case["batch_size"]), int(case["steps"]))
+                  observed.append(key)
+                  if key[1] != steps:
+                      raise SystemExit(
+                          f"step-count mismatch in {path}: {key[1]} != {steps}"
+                      )
+                  if not case.get("passed"):
+                      raise SystemExit(f"failed persistent case {key}: {case}")
+                  qsa = case.get("candidate", {}).get("qsa", {})
+                  rollback = case.get("rollback", {})
+                  if int(qsa.get("workspace_extractions", -1)) != 1:
+                      raise SystemExit(f"workspace extraction mismatch in {key}: {qsa}")
+                  if not qsa.get("root_immutable") or not qsa.get("workspace_immutable"):
+                      raise SystemExit(f"persistent state mutated in {key}: {qsa}")
+                  if int(qsa.get("shifted_evaluations", -1)) != 0:
+                      raise SystemExit(f"shifted evaluations occurred in {key}: {qsa}")
+                  if not rollback.get("baseline_optimizer_exact"):
+                      raise SystemExit(f"baseline rollback failed in {key}: {rollback}")
+                  if not rollback.get("candidate_optimizer_exact"):
+                      raise SystemExit(f"candidate rollback failed in {key}: {rollback}")
+                  if float(rollback.get("baseline_model_max_error", 1.0)) != 0.0:
+                      raise SystemExit(f"baseline model rollback failed in {key}: {rollback}")
+                  if float(rollback.get("candidate_model_max_error", 1.0)) != 0.0:
+                      raise SystemExit(f"candidate model rollback failed in {key}: {rollback}")
+              optimizer_receipts.append({
+                  "path": str(path),
+                  "sha256": sha256(path),
+                  "schema_version": receipt.get("schema_version"),
+                  "passed": receipt.get("passed"),
+                  "candidate_faster_batch_sizes": receipt.get(
+                      "candidate_faster_batch_sizes"
+                  ),
+                  "cases": cases,
+                  "not_established": receipt.get("not_established"),
+              })
+
+          observed = sorted(observed)
           if observed != expected:
               raise SystemExit(
                   f"persistent optimizer matrix mismatch: {observed} != {expected}"
               )
+
+          source = {
+              "checkout_head": subprocess.run(
+                  ("git", "rev-parse", "HEAD"),
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout.strip(),
+              "branch_head": subprocess.run(
+                  (
+                      "git",
+                      "rev-parse",
+                      "origin/agent/qsa-persistent-pullback-lifecycle-recovery-v2",
+                  ),
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout.strip(),
+              "base_exactness_repair": (
+                  "748e4a40483de72ea5e9092d1db45a62ec6b4a16"
+              ),
+              "frozen_harness_head": subprocess.run(
+                  ("git", "-C", "recovery-evidence", "rev-parse", "HEAD"),
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout.strip(),
+          }
+          combined = {
+              "schema_version": "qsa.persistent-full-optimizer-recovery.v3",
+              "source": source,
+              "contract": {
+                  "batches": [1, 4, 16, 64],
+                  "step_counts": [1, 5, 20],
+                  "active_trainable_parameters": 5395,
+                  "runtime_files_changed": False,
+                  "gpu_used": False,
+              },
+              "lifecycle": {
+                  "path": str(lifecycle_path),
+                  "sha256": sha256(lifecycle_path),
+                  "schema_version": lifecycle.get("schema_version"),
+                  "passed": lifecycle.get("passed"),
+                  "generation_0": lifecycle["lifecycle"]["generation_0"],
+                  "new_batch_same_generation": lifecycle["lifecycle"][
+                      "new_batch_same_generation"
+                  ],
+                  "generation_1": lifecycle["lifecycle"]["generation_1"],
+                  "after_refresh": lifecycle["lifecycle"]["after_refresh"],
+                  "decoded_rollback": lifecycle["lifecycle"][
+                      "decoded_rollback"
+                  ],
+                  "discard_rejected": lifecycle["lifecycle"][
+                      "discard_rejected"
+                  ],
+                  "rollback_root_exact": lifecycle["lifecycle"][
+                      "rollback_root_exact"
+                  ],
+              },
+              "optimizer_receipts": optimizer_receipts,
+              "observed_matrix": observed,
+              "expected_matrix": expected,
+              "passed": True,
+              "classification_candidate": (
+                  "PERSISTENT_RECOVERED_PENDING_INDEPENDENT_ARTIFACT_VERIFICATION"
+              ),
+              "selected_integration_route": "V10",
+              "claim_boundary": [
+                  "Persistent correctness does not displace V10.",
+                  "No persistent complete-system advantage is claimed.",
+                  "No Brain language, canonical, safety, production, uniqueness, or physical-QPU claim is established.",
+              ],
+          }
+          output = Path("persistent-full-optimizer-recovery-v3.json")
+          output.write_text(
+              json.dumps(combined, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
           print(json.dumps({
-              "lifecycle_passed": lifecycle["passed"],
-              "optimizer_passed": optimizer["passed"],
+              "passed": combined["passed"],
               "matrix": observed,
-              "diagnosis": optimizer.get("diagnosis"),
-              "not_established": optimizer.get("not_established"),
+              "source": source,
+              "classification_candidate": combined[
+                  "classification_candidate"
+              ],
           }, sort_keys=True))
           PY
 
@@ -118,8 +243,12 @@ jobs:
         run: |
           sha256sum persistent-pullback-lifecycle-regression-v2.json \
             > persistent-pullback-lifecycle-regression-v2.sha256
-          sha256sum persistent-tripair-optimizer-current-v3.json \
-            > persistent-tripair-optimizer-current-v3.sha256
+          for steps in 1 5 20; do
+            sha256sum "persistent-tripair-optimizer-steps-${steps}.json" \
+              > "persistent-tripair-optimizer-steps-${steps}.sha256"
+          done
+          sha256sum persistent-full-optimizer-recovery-v3.json \
+            > persistent-full-optimizer-recovery-v3.sha256
           sha256sum \
             benchmarks/persistent_pullback_lifecycle_regression_v2.py \
             recovery-evidence/benchmarks/brain_recovery_tripair_optimizer_step.py \
@@ -136,9 +265,17 @@ jobs:
             persistent-pullback-lifecycle-regression-v2.json
             persistent-pullback-lifecycle-regression-v2.txt
             persistent-pullback-lifecycle-regression-v2.sha256
-            persistent-tripair-optimizer-current-v3.json
-            persistent-tripair-optimizer-current-v3.txt
-            persistent-tripair-optimizer-current-v3.sha256
+            persistent-tripair-optimizer-steps-1.json
+            persistent-tripair-optimizer-steps-1.txt
+            persistent-tripair-optimizer-steps-1.sha256
+            persistent-tripair-optimizer-steps-5.json
+            persistent-tripair-optimizer-steps-5.txt
+            persistent-tripair-optimizer-steps-5.sha256
+            persistent-tripair-optimizer-steps-20.json
+            persistent-tripair-optimizer-steps-20.txt
+            persistent-tripair-optimizer-steps-20.sha256
+            persistent-full-optimizer-recovery-v3.json
+            persistent-full-optimizer-recovery-v3.sha256
             persistent-full-optimizer-recovery-v3-sources.sha256
           if-no-files-found: error
           retention-days: 90
