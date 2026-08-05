@@ -6,6 +6,7 @@ on:
       - "python/qsa/causal_persistent_workspace.py"
       - "tests/test_persistent_adjoint_python.py"
       - "benchmarks/persistent_adjoint_python.py"
+      - "benchmarks/persistent_pullback_lifecycle_regression_v2.py"
       - ".github/workflows/qsa-persistent-adjoint.yml"
   workflow_dispatch:
 
@@ -15,6 +16,15 @@ permissions:
 concurrency:
   group: qsa-persistent-adjoint-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
 
 jobs:
   persistent-adjoint-contract:
@@ -61,18 +71,10 @@ jobs:
               raise SystemExit("unexpected persistent adjoint output")
           receipt = {"schema_version": "qsa.persistent-adjoint-benchmark.v1"}
           integer_fields = {
-              "logical_qubits",
-              "local_qubits",
-              "steps",
-              "candidates_per_step",
-              "operations",
-              "parameters",
-              "observables",
-              "support_terms",
-              "shift_evaluations_per_step",
-              "adjoint_forward_sweeps_per_step",
-              "adjoint_reverse_sweeps_per_step",
-              "stored_forward_states",
+              "logical_qubits", "local_qubits", "steps", "candidates_per_step",
+              "operations", "parameters", "observables", "support_terms",
+              "shift_evaluations_per_step", "adjoint_forward_sweeps_per_step",
+              "adjoint_reverse_sweeps_per_step", "stored_forward_states",
           }
           for field in fields[1:]:
               key, value = field.split("=", 1)
@@ -97,12 +99,8 @@ jobs:
               and all(
                   math.isfinite(receipt[name]) and receipt[name] > 0.0
                   for name in (
-                      "shift_pullback_ms",
-                      "adjoint_pullback_ms",
-                      "pullback_speedup",
-                      "shift_complete_ms",
-                      "adjoint_complete_ms",
-                      "complete_speedup",
+                      "shift_pullback_ms", "adjoint_pullback_ms", "pullback_speedup",
+                      "shift_complete_ms", "adjoint_complete_ms", "complete_speedup",
                   )
               )
               and receipt["pullback_speedup"] > 5.0
@@ -123,3 +121,119 @@ jobs:
             persistent-adjoint.txt
             persistent-adjoint.json
           if-no-files-found: error
+          retention-days: 90
+
+  persistent-lifecycle-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install exact-repair QSA
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install .
+      - name: Run current repeated-pullback lifecycle regression
+        shell: bash
+        run: |
+          set -o pipefail
+          python benchmarks/persistent_pullback_lifecycle_regression_v2.py \
+            --output persistent-pullback-lifecycle-regression-v2.json \
+            2>&1 | tee persistent-pullback-lifecycle-regression-v2.txt
+      - name: Hash lifecycle evidence
+        run: |
+          sha256sum persistent-pullback-lifecycle-regression-v2.json \
+            > persistent-pullback-lifecycle-regression-v2.sha256
+          sha256sum \
+            benchmarks/persistent_pullback_lifecycle_regression_v2.py \
+            .github/workflows/qsa-persistent-adjoint.yml \
+            > persistent-pullback-lifecycle-regression-v2-sources.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-persistent-lifecycle-regression-${{ github.run_id }}
+          path: |
+            persistent-pullback-lifecycle-regression-v2.json
+            persistent-pullback-lifecycle-regression-v2.txt
+            persistent-pullback-lifecycle-regression-v2.sha256
+            persistent-pullback-lifecycle-regression-v2-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  persistent-full-optimizer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out current persistent runtime
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check out frozen recovery harness
+        uses: actions/checkout@v4
+        with:
+          ref: 454c6d2b03502c0dd3a602885f3fb8f06a268a98
+          path: recovery-evidence
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install QSA and matched CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6 psutil==7.0.0
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+      - name: Run original 5,395-parameter persistent optimizer matrix
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/recovery-evidence/benchmarks
+        run: |
+          set -o pipefail
+          python recovery-evidence/benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
+            --steps 8 \
+            --output persistent-tripair-optimizer-current.json \
+            2>&1 | tee persistent-tripair-optimizer-current.txt
+      - name: Verify full optimizer receipt
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("persistent-tripair-optimizer-current.json")
+          if not path.is_file():
+              raise SystemExit("persistent optimizer did not emit JSON")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          if not receipt.get("passed"):
+              raise SystemExit(f"persistent optimizer failed: {receipt}")
+          print(json.dumps({
+              "schema_version": receipt.get("schema_version"),
+              "passed": receipt.get("passed"),
+              "result_window": receipt.get("result_window"),
+              "diagnosis": receipt.get("diagnosis"),
+              "not_established": receipt.get("not_established"),
+          }, sort_keys=True))
+          PY
+      - name: Hash full optimizer evidence
+        run: |
+          sha256sum persistent-tripair-optimizer-current.json \
+            > persistent-tripair-optimizer-current.sha256
+          sha256sum \
+            recovery-evidence/benchmarks/brain_recovery_tripair_optimizer_step.py \
+            recovery-evidence/benchmarks/brain_recovery_tripair_optimizer_step_v2.py \
+            recovery-evidence/benchmarks/brain_recovery_tripair_optimizer_step_v3.py \
+            .github/workflows/qsa-persistent-adjoint.yml \
+            > persistent-tripair-optimizer-current-sources.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-persistent-full-optimizer-${{ github.run_id }}
+          path: |
+            persistent-tripair-optimizer-current.json
+            persistent-tripair-optimizer-current.txt
+            persistent-tripair-optimizer-current.sha256
+            persistent-tripair-optimizer-current-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
