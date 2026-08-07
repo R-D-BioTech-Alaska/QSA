@@ -57,18 +57,20 @@ jobs:
         run: |
           python -m py_compile benchmarks/brain_v10_row_parallel_exactness.py
 
-      - name: Run 65,040-row bitwise oracle
+      - name: Run 65,040-row 4/8/16-worker bitwise oracles
         shell: bash
         env:
           QSA_RECOVERY_EVIDENCE_BENCHMARKS: ${{ github.workspace }}/recovery-evidence/benchmarks
         run: |
           set -o pipefail
-          python benchmarks/brain_v10_row_parallel_exactness.py \
-            --rows 65040 \
-            --repetitions 3 \
-            --workers 4 \
-            --output brain-v10-row-parallel-exactness.json \
-            2>&1 | tee brain-v10-row-parallel-exactness.txt
+          for workers in 4 8 16; do
+            python benchmarks/brain_v10_row_parallel_exactness.py \
+              --rows 65040 \
+              --repetitions 3 \
+              --workers "$workers" \
+              --output "brain-v10-row-parallel-exactness-w${workers}.json" \
+              2>&1 | tee "brain-v10-row-parallel-exactness-w${workers}.txt"
+          done
 
       - name: Summarize row-parallel evidence
         shell: bash
@@ -77,31 +79,31 @@ jobs:
           import json
           from pathlib import Path
 
-          receipt = json.loads(
-              Path("brain-v10-row-parallel-exactness.json").read_text(encoding="utf-8")
-          )
-          print("rows=", receipt["rows"])
-          print("cpu_count=", receipt["cpu_count"])
-          print("requested_parallel_workers=", receipt["requested_parallel_workers"])
-          print("root_byte_identical=", receipt["root_byte_identical"])
-          print("forward_exact=", receipt["serial_parallel_forward_torch_style_exact"])
-          print("reverse_values_exact=", receipt["serial_parallel_reverse_values_exact"])
-          print("gradients_exact=", receipt["serial_parallel_gradients_exact"])
-          print("maximum_forward_absolute_error=", receipt["maximum_forward_absolute_error"])
-          print("maximum_reverse_value_absolute_error=", receipt["maximum_reverse_value_absolute_error"])
-          print("maximum_gradient_absolute_error=", receipt["maximum_gradient_absolute_error"])
-          print("timing=", receipt["timing"])
-          print("passed=", receipt["passed"])
-          raise SystemExit(0 if receipt["passed"] else 1)
+          for workers in (4, 8, 16):
+              receipt = json.loads(
+                  Path(f"brain-v10-row-parallel-exactness-w{workers}.json").read_text(encoding="utf-8")
+              )
+              print("workers=", workers)
+              print("rows=", receipt["rows"])
+              print("cpu_count=", receipt["cpu_count"])
+              print("root_byte_identical=", receipt["root_byte_identical"])
+              print("forward_exact=", receipt["serial_parallel_forward_torch_style_exact"])
+              print("reverse_values_exact=", receipt["serial_parallel_reverse_values_exact"])
+              print("gradients_exact=", receipt["serial_parallel_gradients_exact"])
+              print("maximum_forward_absolute_error=", receipt["maximum_forward_absolute_error"])
+              print("maximum_reverse_value_absolute_error=", receipt["maximum_reverse_value_absolute_error"])
+              print("maximum_gradient_absolute_error=", receipt["maximum_gradient_absolute_error"])
+              print("timing=", receipt["timing"])
+              print("passed=", receipt["passed"])
+              if not receipt["passed"]:
+                  raise SystemExit(1)
           PY
 
       - name: Hash row-parallel evidence
         if: always()
         shell: bash
         run: |
-          if [ -f brain-v10-row-parallel-exactness.json ]; then
-            sha256sum brain-v10-row-parallel-exactness.json > brain-v10-row-parallel-exactness.sha256
-          fi
+          sha256sum brain-v10-row-parallel-exactness-w*.json > brain-v10-row-parallel-exactness.sha256 || true
           sha256sum \
             include/qubit/detail/qcausal_vectorized_adjoint_impl.hpp \
             benchmarks/brain_v10_row_parallel_exactness.py \
@@ -114,8 +116,8 @@ jobs:
         with:
           name: brain-v10-row-parallel-exactness-${{ github.run_id }}
           path: |
-            brain-v10-row-parallel-exactness.json
-            brain-v10-row-parallel-exactness.txt
+            brain-v10-row-parallel-exactness-w*.json
+            brain-v10-row-parallel-exactness-w*.txt
             brain-v10-row-parallel-exactness.sha256
             brain-v10-row-parallel-sources.sha256
           if-no-files-found: error
