@@ -12,6 +12,9 @@
 namespace {
 
 using qubit::BasisIndex;
+using qubit::PauliAxis;
+using qubit::PauliFactor;
+using qubit::PauliObservable;
 using qubit::QComplex;
 using qubit::QRegister;
 using qubit::QStateError;
@@ -138,6 +141,28 @@ int main() {
             state, 100'000U, 0U, false, false, true, 128U);
         require(advisor.recommend(features).kind == RepresentationKind::PhaseGraph,
                 "advisor did not select a declared phase-graph workload");
+    }
+    {
+        QRegister state(256);
+        PauliObservable observable(256);
+        const std::vector<PauliFactor> factors{{0, PauliAxis::X}, {255, PauliAxis::Z}};
+        observable.add_term({1.0, 0.0}, factors);
+        const auto features = RepresentationAdvisor::inspect_pauli(state, observable, 1'000U);
+        require(features.pauli_term_count == 1U && features.pauli_support_qubits == 2U,
+                "advisor did not derive Pauli structure from the observable");
+        require(advisor.recommend(features).kind == RepresentationKind::Pauli,
+                "advisor did not select an exact sparse Pauli observable");
+    }
+    {
+        QRegister state(8);
+        PauliObservable observable(4);
+        bool rejected = false;
+        try {
+            (void)RepresentationAdvisor::inspect_pauli(state, observable, 10U);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "advisor accepted a Pauli observable with the wrong width");
     }
     {
         QRegister state(12);
