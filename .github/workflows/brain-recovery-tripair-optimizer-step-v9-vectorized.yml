@@ -1,0 +1,202 @@
+name: Brain Recovery Tripair Optimizer Step v9 Vectorized
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qadjoint_vectorized_batch.hpp"
+      - "include/qubit/qcausal_c_api.h"
+      - "include/qubit/detail/qcausal_vectorized_adjoint_impl.hpp"
+      - "include/qubit/version.h"
+      - "python/qsa/causal_adjoint_vectorized.py"
+      - "tests/test_causal_adjoint_vectorized_python.py"
+      - "benchmarks/brain_recovery_tripair_optimizer_step_v9_vectorized.py"
+      - ".github/workflows/brain-recovery-tripair-optimizer-step-v9-vectorized.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-recovery-tripair-optimizer-step-v9-vectorized-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  cpu-vectorized-optimizer-step:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out vectorized runtime branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out frozen recovery evidence
+        uses: actions/checkout@v4
+        with:
+          ref: 454c6d2b03502c0dd3a602885f3fb8f06a268a98
+          path: recovery-evidence
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install vectorized QSA and pinned CPU controls
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6 psutil==7.0.0
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile vectorized bridge
+        run: |
+          python -m py_compile \
+            python/qsa/causal_adjoint.py \
+            python/qsa/causal_adjoint_dense.py \
+            python/qsa/causal_adjoint_vectorized.py \
+            tests/test_causal_adjoint_python.py \
+            tests/test_causal_adjoint_dense_python.py \
+            tests/test_causal_adjoint_vectorized_python.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v7_batch_native.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v8_fused_dense.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v9_vectorized.py
+
+      - name: Run scalar, dense, and vectorized exactness contracts
+        run: |
+          python tests/test_causal_adjoint_python.py
+          python tests/test_causal_adjoint_dense_python.py
+          python tests/test_causal_adjoint_vectorized_python.py
+
+      - name: Run matched vectorized AdamW comparison
+        shell: bash
+        env:
+          QSA_RECOVERY_EVIDENCE_BENCHMARKS: ${{ github.workspace }}/recovery-evidence/benchmarks
+        run: |
+          set +e
+          set -o pipefail
+          python benchmarks/brain_recovery_tripair_optimizer_step_v9_vectorized.py \
+            --steps 16 \
+            --output brain-recovery-tripair-optimizer-step-v9-vectorized.json \
+            2>&1 | tee brain-recovery-tripair-optimizer-step-v9-vectorized.txt
+          benchmark_exit=${PIPESTATUS[0]}
+          echo "BRAIN_RECOVERY_OPTIMIZER_V9_VECTOR_EXIT=$benchmark_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Summarize vectorized evidence
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("brain-recovery-tripair-optimizer-step-v9-vectorized.json")
+          if not path.is_file():
+              raise SystemExit("vectorized optimizer benchmark did not emit JSON")
+          receipt = json.loads(path.read_text(encoding="utf-8"))
+          print("source=", receipt["source"])
+          print("environment=", receipt["environment"])
+          print("contract=", receipt["contract"])
+          for case in receipt["cases"]:
+              print(
+                  "optimizer_step_v9_vectorized",
+                  "batch=", case["batch_size"],
+                  "parameters=", case["active_trainable_parameters"],
+                  "pytorch_forward_ms=", case["baseline"]["timing"]["forward"]["median_ms"],
+                  "vector_qsa_forward_ms=", case["candidate"]["timing"]["forward"]["median_ms"],
+                  "pytorch_backward_ms=", case["baseline"]["timing"]["backward"]["median_ms"],
+                  "vector_qsa_backward_ms=", case["candidate"]["timing"]["backward"]["median_ms"],
+                  "pytorch_total_ms=", case["baseline"]["timing"]["total"]["median_ms"],
+                  "vector_qsa_total_ms=", case["candidate"]["timing"]["total"]["median_ms"],
+                  "direct_qsa_total_ms=", case["direct_dense_reference"]["timing"]["total"]["median_ms"],
+                  "safe_qsa_total_ms=", case["safe_per_sample_reference"]["timing"]["total"]["median_ms"],
+                  "safe_over_vector=", case["safe_over_vectorized_total_speed"],
+                  "direct_over_vector=", case["direct_over_vectorized_total_speed"],
+                  "pytorch_over_vector=", case["baseline_over_candidate_total_speed"],
+                  "vector_faster_than_pytorch=", case["candidate_faster_than_pytorch"],
+                  "max_observable_error=", case["maximum_observable_error"],
+                  "max_gradient_error=", case["maximum_gradient_error"],
+                  "max_parameter_error=", case["maximum_parameter_error_after_step"],
+                  "peak_rss=", case["process_peak_rss_bytes_after_case"],
+                  "qsa_state=", case["candidate"]["qsa"],
+                  "rollback=", case["rollback"],
+                  "passed=", case["passed"],
+              )
+          print("deterministic_rerun=", receipt["deterministic_rerun"])
+          print(
+              "vectorized_faster_than_safe_batch_sizes=",
+              receipt["vectorized_faster_than_safe_batch_sizes"],
+          )
+          print(
+              "vectorized_faster_than_direct_batch_sizes=",
+              receipt["vectorized_faster_than_direct_batch_sizes"],
+          )
+          print(
+              "vectorized_faster_than_pytorch_batch_sizes=",
+              receipt["vectorized_faster_than_pytorch_batch_sizes"],
+          )
+          print(
+              "complete_step_advantage_over_all_controls_batch_sizes=",
+              receipt["complete_step_advantage_over_all_controls_batch_sizes"],
+          )
+          print("passed=", receipt["passed"])
+          raise SystemExit(0 if receipt["passed"] else 1)
+          PY
+          summary_exit=$?
+          echo "BRAIN_RECOVERY_OPTIMIZER_V9_VECTOR_SUMMARY_EXIT=$summary_exit" >> "$GITHUB_ENV"
+          exit 0
+
+      - name: Hash vectorized evidence
+        if: always()
+        shell: bash
+        run: |
+          if [ -f brain-recovery-tripair-optimizer-step-v9-vectorized.json ]; then
+            sha256sum brain-recovery-tripair-optimizer-step-v9-vectorized.json \
+              > brain-recovery-tripair-optimizer-step-v9-vectorized.sha256
+          fi
+          sha256sum \
+            include/qubit/qadjoint_vectorized_batch.hpp \
+            include/qubit/qcausal_c_api.h \
+            include/qubit/detail/qcausal_vectorized_adjoint_impl.hpp \
+            include/qubit/version.h \
+            python/qsa/causal_adjoint_vectorized.py \
+            tests/test_causal_adjoint_vectorized_python.py \
+            benchmarks/brain_recovery_tripair_optimizer_step_v9_vectorized.py \
+            .github/workflows/brain-recovery-tripair-optimizer-step-v9-vectorized.yml \
+            > brain-recovery-tripair-optimizer-step-v9-vectorized-sources.sha256
+
+      - name: Upload vectorized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-recovery-tripair-optimizer-step-v9-vectorized-${{ github.run_id }}
+          path: |
+            brain-recovery-tripair-optimizer-step-v9-vectorized.json
+            brain-recovery-tripair-optimizer-step-v9-vectorized.txt
+            brain-recovery-tripair-optimizer-step-v9-vectorized.sha256
+            brain-recovery-tripair-optimizer-step-v9-vectorized-sources.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce vectorized correctness contract
+        if: always()
+        shell: bash
+        run: |
+          if [ "${BRAIN_RECOVERY_OPTIMIZER_V9_VECTOR_EXIT:-1}" -ne 0 ]; then
+            echo "The vectorized optimizer contract did not pass."
+            exit 1
+          fi
+          if [ "${BRAIN_RECOVERY_OPTIMIZER_V9_VECTOR_SUMMARY_EXIT:-1}" -ne 0 ]; then
+            echo "The vectorized receipt was missing, malformed, or failed."
+            exit 1
+          fi
