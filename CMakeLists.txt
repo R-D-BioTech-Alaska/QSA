@@ -269,6 +269,9 @@ if(QSTATE_BUILD_BENCHMARKS)
     add_executable(qstate_representation_advisor_benchmark benchmarks/representation_advisor.cpp)
     target_link_libraries(qstate_representation_advisor_benchmark PRIVATE qstate_core)
 
+    add_executable(qstate_pauli_propagation_benchmark benchmarks/pauli_propagation.cpp)
+    target_link_libraries(qstate_pauli_propagation_benchmark PRIVATE qstate_core)
+
     add_executable(qstate_stabilizer_benchmark benchmarks/stabilizer.cpp)
     target_link_libraries(qstate_stabilizer_benchmark PRIVATE qstate_core)
 
