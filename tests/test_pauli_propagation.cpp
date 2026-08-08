@@ -16,6 +16,8 @@ using qubit::PauliAxis;
 using qubit::PauliFactor;
 using qubit::PauliObservable;
 using qubit::PauliPropagationConfig;
+using qubit::PauliPropagationPlan;
+using qubit::PauliPropagationStats;
 using qubit::QComplex;
 using qubit::QRegister;
 using qubit::QStateError;
@@ -127,6 +129,53 @@ int main() {
     }
 
     {
+        constexpr std::size_t qubits = 64U;
+        std::vector<Operation> operations;
+        for (std::size_t layer = 0; layer < 128U; ++layer) {
+            for (QubitId qubit = 10U; qubit < qubits; ++qubit) {
+                operations.push_back(Operation{
+                    OperationCode::Rz,
+                    qubit,
+                    0U,
+                    0.001 * static_cast<double>((qubit + layer) % 31U),
+                    0.0,
+                });
+            }
+        }
+        operations.push_back({OperationCode::H, 0U, 0U, 0.0, 0.0});
+        operations.push_back({OperationCode::Cnot, 0U, 1U, 0.0, 0.0});
+        operations.push_back({OperationCode::T, 1U, 0U, 0.0, 0.0});
+        operations.push_back({OperationCode::Cz, 1U, 2U, 0.0, 0.0});
+        operations.push_back({OperationCode::Ry, 2U, 0U, -0.23, 0.0});
+
+        const auto observable = single_term(qubits, {{2U, PauliAxis::X}});
+        const PauliObservable full = observable.propagated_backward(operations);
+        PauliPropagationStats stats;
+        const PauliPropagationPlan plan(qubits, operations);
+        const PauliObservable causal = plan.propagate_backward(observable, &stats);
+        QRegister initial(qubits);
+        require_close(
+            causal.expectation(initial),
+            full.expectation(initial),
+            2e-12,
+            "causal Pauli propagation does not match full backward propagation");
+        require(stats.source_operations == operations.size(),
+                "causal Pauli propagation reported the wrong source operation count");
+        require(stats.visited_operations == 5U,
+                "causal Pauli propagation did not isolate the exact backward light cone");
+        require(stats.visited_operations < stats.source_operations,
+                "causal Pauli propagation did not remove unrelated operation work");
+        require(stats.peak_terms >= causal.term_count(),
+                "causal Pauli propagation reported an invalid peak term count");
+        require(stats.peak_support >= causal.support_size(),
+                "causal Pauli propagation reported an invalid peak support");
+        require(plan.indexed_reference_count() == operations.size() + 2U,
+                "causal Pauli propagation indexed the wrong number of qubit references");
+        require(plan.estimated_bytes() > operations.size() * sizeof(Operation),
+                "causal Pauli propagation reported an invalid plan size");
+    }
+
+    {
         const auto observable = single_term(
             1,
             {{0, PauliAxis::X}},
@@ -154,6 +203,18 @@ int main() {
             rejected = true;
         }
         require(rejected, "Pauli propagation accepted a trajectory-noise operation");
+    }
+
+    {
+        bool rejected = false;
+        try {
+            const std::array<Operation, 1> operations{
+                Operation{OperationCode::AmplitudeDampingTrajectory, 3U, 0U, 0.1, 0.5}};
+            (void)PauliPropagationPlan(8U, operations);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "Pauli causal plan accepted trajectory noise outside the observable support");
     }
 
     {
