@@ -47,15 +47,16 @@ template <class Function>
 [[nodiscard]] std::vector<Operation> dense_small_circuit(std::size_t qubits) {
     std::vector<Operation> operations;
     operations.reserve(qubits * 3U);
-    for (QubitId qubit = 0; qubit < 5U; ++qubit) {
+    for (QubitId offset = 0; offset < 5U; ++offset) {
+        const QubitId qubit = static_cast<QubitId>(qubits - 5U) + offset;
         operations.push_back(
-            Operation{OperationCode::Rz, qubit, 0U, 0.13 + 0.07 * static_cast<double>(qubit), 0.0});
+            Operation{OperationCode::Rz, qubit, 0U, 0.13 + 0.07 * static_cast<double>(offset), 0.0});
     }
     for (QubitId qubit = 0; qubit < qubits; ++qubit) {
         operations.push_back(Operation{OperationCode::H, qubit, 0U, 0.0, 0.0});
     }
     for (QubitId qubit = 0; qubit + 1U < qubits; ++qubit) {
-        operations.push_back(Operation{OperationCode::Cnot, qubit, qubit + 1U, 0.0, 0.0});
+        operations.push_back(Operation{OperationCode::Cz, qubit, qubit + 1U, 0.0, 0.0});
     }
     return operations;
 }
