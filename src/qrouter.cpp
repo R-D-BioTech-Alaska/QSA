@@ -38,6 +38,8 @@ const char* representation_name(RepresentationKind kind) noexcept {
             return "StabilizerState";
         case RepresentationKind::PhaseGraph:
             return "PhaseGraphState";
+        case RepresentationKind::Pauli:
+            return "PauliObservable";
     }
     return "unknown";
 }
@@ -77,8 +79,29 @@ RepresentationFeatures RepresentationAdvisor::inspect(
     return features;
 }
 
+RepresentationFeatures RepresentationAdvisor::inspect_pauli(
+    const QRegister& state,
+    const PauliObservable& observable,
+    std::uint64_t repeated_steps) {
+    if (observable.qubit_count() != state.qubit_count()) {
+        throw QStateError("Pauli observable width does not match QRegister");
+    }
+    if (!observable.validate()) {
+        throw QStateError("Pauli observable failed exact validation");
+    }
+
+    RepresentationFeatures features = inspect(state, repeated_steps);
+    features.pauli_observable = true;
+    features.pauli_term_count = observable.term_count();
+    features.pauli_support_qubits = observable.support_size();
+    return features;
+}
+
 std::size_t RepresentationAdvisor::context(
     const RepresentationFeatures& features) const noexcept {
+    if (features.pauli_observable) {
+        return 6U;
+    }
     if (features.quantum_dot_declared) {
         return 5U;
     }
@@ -102,7 +125,7 @@ std::size_t RepresentationAdvisor::context(
 std::size_t RepresentationAdvisor::index(
     const RepresentationFeatures& features,
     RepresentationKind kind) const noexcept {
-    return context(features) * 5U + static_cast<std::size_t>(kind);
+    return context(features) * 6U + static_cast<std::size_t>(kind);
 }
 
 double RepresentationAdvisor::posterior_mean(
@@ -126,7 +149,7 @@ std::vector<RepresentationScore> RepresentationAdvisor::rank(
     const double qubits = static_cast<double>(features.qubit_count);
 
     std::vector<RepresentationScore> scores;
-    scores.reserve(5U);
+    scores.reserve(6U);
 
     RepresentationScore register_score;
     register_score.kind = RepresentationKind::Register;
@@ -200,6 +223,26 @@ std::vector<RepresentationScore> RepresentationAdvisor::rank(
         ? "workload is explicitly restricted to the uniform phase-graph gate family"
         : "workload is not declared uniform phase-graph";
     scores.push_back(phase_graph_score);
+
+    RepresentationScore pauli_score;
+    pauli_score.kind = RepresentationKind::Pauli;
+    pauli_score.eligible = features.pauli_observable &&
+                           features.pauli_support_qubits <= features.qubit_count;
+    const double pauli_terms = static_cast<double>(
+        std::max<std::size_t>(1U, features.pauli_term_count));
+    const double pauli_support = static_cast<double>(
+        std::max<std::size_t>(1U, features.pauli_support_qubits));
+    pauli_score.estimated_work = pauli_score.eligible
+        ? safe_product(steps, safe_product(pauli_terms, pauli_support))
+        : std::numeric_limits<double>::infinity();
+    pauli_score.posterior_success = posterior_mean(features, pauli_score.kind);
+    pauli_score.adjusted_score = pauli_score.eligible
+        ? pauli_score.estimated_work / pauli_score.posterior_success
+        : std::numeric_limits<double>::infinity();
+    pauli_score.reason = pauli_score.eligible
+        ? "exact bounded Pauli observable is available"
+        : "no exact bounded Pauli observable supplied";
+    scores.push_back(pauli_score);
 
     std::stable_sort(scores.begin(), scores.end(), [](const RepresentationScore& left,
                                                        const RepresentationScore& right) {

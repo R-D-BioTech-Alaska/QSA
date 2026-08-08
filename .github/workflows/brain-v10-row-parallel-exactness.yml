@@ -1,0 +1,124 @@
+name: Brain V10 Row Parallel Exactness
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/detail/qcausal_vectorized_adjoint_impl.hpp"
+      - "benchmarks/brain_v10_row_parallel_exactness.py"
+      - ".github/workflows/brain-v10-row-parallel-exactness.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brain-v10-row-parallel-exactness-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+
+jobs:
+  exact-row-parallel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out row-parallel QSA
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out frozen recovery evidence
+        uses: actions/checkout@v4
+        with:
+          ref: 454c6d2b03502c0dd3a602885f3fb8f06a268a98
+          path: recovery-evidence
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install QSA and CPU benchmark dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install .
+
+      - name: Compile benchmark
+        run: |
+          python -m py_compile benchmarks/brain_v10_row_parallel_exactness.py
+
+      - name: Run 65,040-row 4/8/16-worker bitwise oracles
+        shell: bash
+        env:
+          QSA_RECOVERY_EVIDENCE_BENCHMARKS: ${{ github.workspace }}/recovery-evidence/benchmarks
+        run: |
+          set -o pipefail
+          for workers in 4 8 16; do
+            python benchmarks/brain_v10_row_parallel_exactness.py \
+              --rows 65040 \
+              --repetitions 3 \
+              --workers "$workers" \
+              --output "brain-v10-row-parallel-exactness-w${workers}.json" \
+              2>&1 | tee "brain-v10-row-parallel-exactness-w${workers}.txt"
+          done
+
+      - name: Summarize row-parallel evidence
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          for workers in (4, 8, 16):
+              receipt = json.loads(
+                  Path(f"brain-v10-row-parallel-exactness-w{workers}.json").read_text(encoding="utf-8")
+              )
+              print("workers=", workers)
+              print("rows=", receipt["rows"])
+              print("cpu_count=", receipt["cpu_count"])
+              print("root_byte_identical=", receipt["root_byte_identical"])
+              print("forward_exact=", receipt["serial_parallel_forward_torch_style_exact"])
+              print("reverse_values_exact=", receipt["serial_parallel_reverse_values_exact"])
+              print("gradients_exact=", receipt["serial_parallel_gradients_exact"])
+              print("maximum_forward_absolute_error=", receipt["maximum_forward_absolute_error"])
+              print("maximum_reverse_value_absolute_error=", receipt["maximum_reverse_value_absolute_error"])
+              print("maximum_gradient_absolute_error=", receipt["maximum_gradient_absolute_error"])
+              print("timing=", receipt["timing"])
+              print("passed=", receipt["passed"])
+              if not receipt["passed"]:
+                  raise SystemExit(1)
+          PY
+
+      - name: Hash row-parallel evidence
+        if: always()
+        shell: bash
+        run: |
+          sha256sum brain-v10-row-parallel-exactness-w*.json > brain-v10-row-parallel-exactness.sha256 || true
+          sha256sum \
+            include/qubit/detail/qcausal_vectorized_adjoint_impl.hpp \
+            benchmarks/brain_v10_row_parallel_exactness.py \
+            .github/workflows/brain-v10-row-parallel-exactness.yml \
+            > brain-v10-row-parallel-sources.sha256
+
+      - name: Upload row-parallel evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-v10-row-parallel-exactness-${{ github.run_id }}
+          path: |
+            brain-v10-row-parallel-exactness-w*.json
+            brain-v10-row-parallel-exactness-w*.txt
+            brain-v10-row-parallel-exactness.sha256
+            brain-v10-row-parallel-sources.sha256
+          if-no-files-found: error
+          retention-days: 90

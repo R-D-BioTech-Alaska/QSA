@@ -1,0 +1,95 @@
+name: QSA Pauli Structural Evidence
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qpauli.hpp"
+      - "include/qubit/qrouter.hpp"
+      - "src/qpauli.cpp"
+      - "src/qpauli_causal.cpp"
+      - "src/qrouter.cpp"
+      - "tests/test_pauli_propagation.cpp"
+      - "tests/test_representation_advisor.cpp"
+      - "benchmarks/pauli_propagation.cpp"
+      - "CMakeLists.txt"
+      - ".github/workflows/qsa-pauli-structural.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-pauli-structural-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-pauli-structural:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out QSA
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Configure release benchmark
+        run: |
+          cmake -S . -B build-pauli \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DQSTATE_BUILD_TESTS=ON \
+            -DQSTATE_BUILD_EXAMPLES=OFF \
+            -DQSTATE_BUILD_BENCHMARKS=ON \
+            -DQSTATE_BUILD_PYTHON_TESTS=OFF
+
+      - name: Build exact Pauli targets
+        run: |
+          cmake --build build-pauli --config Release --target \
+            qstate_pauli_propagation_tests \
+            qstate_representation_advisor_tests \
+            qstate_pauli_propagation_benchmark \
+            --parallel 2
+
+      - name: Run exactness gates
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build-pauli/qstate_pauli_propagation_tests 2>&1 | tee qsa-pauli-tests.txt
+          ./build-pauli/qstate_representation_advisor_tests 2>&1 | tee qsa-pauli-advisor-tests.txt
+
+      - name: Run structural benchmark
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build-pauli/qstate_pauli_propagation_benchmark 2>&1 | tee qsa-pauli-benchmark.txt
+
+      - name: Hash evidence
+        if: always()
+        shell: bash
+        run: |
+          sha256sum \
+            include/qubit/qpauli.hpp \
+            include/qubit/qrouter.hpp \
+            src/qpauli.cpp \
+            src/qpauli_causal.cpp \
+            src/qrouter.cpp \
+            tests/test_pauli_propagation.cpp \
+            tests/test_representation_advisor.cpp \
+            benchmarks/pauli_propagation.cpp \
+            CMakeLists.txt \
+            .github/workflows/qsa-pauli-structural.yml \
+            > qsa-pauli-sources.sha256
+          sha256sum qsa-pauli-*.txt > qsa-pauli-evidence.sha256 || true
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qsa-pauli-structural-${{ github.run_id }}
+          path: |
+            qsa-pauli-tests.txt
+            qsa-pauli-advisor-tests.txt
+            qsa-pauli-benchmark.txt
+            qsa-pauli-sources.sha256
+            qsa-pauli-evidence.sha256
+          if-no-files-found: error
+          retention-days: 90

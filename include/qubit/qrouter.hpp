@@ -1,5 +1,6 @@
 #pragma once
 
+#include "qubit/qpauli.hpp"
 #include "qubit/qstate.hpp"
 
 #include <array>
@@ -16,6 +17,7 @@ enum class RepresentationKind : std::uint8_t {
     QuantumDot = 2,
     Stabilizer = 3,
     PhaseGraph = 4,
+    Pauli = 5,
 };
 
 struct RepresentationFeatures {
@@ -29,6 +31,9 @@ struct RepresentationFeatures {
     bool clifford_only{false};
     bool uniform_phase_graph{false};
     std::size_t phase_graph_edges{0};
+    bool pauli_observable{false};
+    std::size_t pauli_term_count{0};
+    std::size_t pauli_support_qubits{0};
 };
 
 struct RepresentationScore {
@@ -57,6 +62,10 @@ public:
         bool clifford_only = false,
         bool uniform_phase_graph = false,
         std::size_t phase_graph_edges = 0U);
+    [[nodiscard]] static RepresentationFeatures inspect_pauli(
+        const QRegister& state,
+        const PauliObservable& observable,
+        std::uint64_t repeated_steps = 1U);
 
     [[nodiscard]] std::vector<RepresentationScore> rank(
         const RepresentationFeatures& features) const;
@@ -76,7 +85,7 @@ private:
     };
 
     RepresentationAdvisorConfig config_{};
-    std::array<Posterior, 30> posteriors_{};
+    std::array<Posterior, 42> posteriors_{};
 
     [[nodiscard]] std::size_t context(const RepresentationFeatures& features) const noexcept;
     [[nodiscard]] std::size_t index(
