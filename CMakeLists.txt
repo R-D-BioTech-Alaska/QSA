@@ -35,6 +35,7 @@ add_library(qstate_core STATIC
     src/qexecution.cpp
     src/qread.cpp
     src/qdiagonal.cpp
+    src/qpauli.cpp
 )
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
@@ -143,6 +144,10 @@ if(QSTATE_BUILD_TESTS)
     add_executable(qstate_representation_advisor_tests tests/test_representation_advisor.cpp)
     target_link_libraries(qstate_representation_advisor_tests PRIVATE qstate_core)
     add_test(NAME qstate_representation_advisor_tests COMMAND qstate_representation_advisor_tests)
+
+    add_executable(qstate_pauli_propagation_tests tests/test_pauli_propagation.cpp)
+    target_link_libraries(qstate_pauli_propagation_tests PRIVATE qstate_core)
+    add_test(NAME qstate_pauli_propagation_tests COMMAND qstate_pauli_propagation_tests)
 
     add_executable(qstate_stabilizer_tests tests/test_stabilizer.cpp)
     target_link_libraries(qstate_stabilizer_tests PRIVATE qstate_core)
