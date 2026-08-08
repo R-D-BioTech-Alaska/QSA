@@ -176,6 +176,67 @@ int main() {
     }
 
     {
+        constexpr std::size_t qubits = 8U;
+        std::vector<PauliFactor> factors;
+        std::vector<Operation> operations;
+        factors.reserve(qubits);
+        operations.reserve(qubits);
+        for (QubitId qubit = 0U; qubit < qubits; ++qubit) {
+            factors.push_back(PauliFactor{qubit, PauliAxis::X});
+            operations.push_back(Operation{
+                OperationCode::Rz,
+                qubit,
+                0U,
+                0.17 + 0.03 * static_cast<double>(qubit),
+                0.0,
+            });
+        }
+
+        PauliObservable exact(qubits, PauliPropagationConfig{256U});
+        exact.add_term({1.0, 0.0}, factors);
+        const PauliObservable expanded = exact.propagated_backward(operations);
+        require(expanded.term_count() == 256U,
+                "non-Clifford collapse control did not expose full Pauli-term growth");
+
+        PauliObservable bounded(qubits, PauliPropagationConfig{128U});
+        bounded.add_term({1.0, 0.0}, factors);
+        bool rejected = false;
+        try {
+            (void)bounded.propagated_backward(operations);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected,
+                "Pauli propagation did not fail closed when adversarial term growth crossed the bound");
+    }
+
+    {
+        constexpr std::size_t qubits = 128U;
+        std::vector<Operation> operations;
+        operations.reserve(qubits - 1U);
+        for (QubitId qubit = 0U; qubit + 1U < qubits; ++qubit) {
+            operations.push_back(Operation{
+                OperationCode::Cnot,
+                qubit,
+                qubit + 1U,
+                0.0,
+                0.0,
+            });
+        }
+
+        const auto observable = single_term(
+            qubits,
+            {{static_cast<QubitId>(qubits - 1U), PauliAxis::Z}});
+        const PauliPropagationPlan plan(qubits, operations);
+        PauliPropagationStats stats;
+        const PauliObservable causal = plan.propagate_backward(observable, &stats);
+        require(stats.visited_operations == operations.size(),
+                "causal collapse control incorrectly pruned a fully connected backward cone");
+        require(stats.peak_support == qubits && causal.support_size() == qubits,
+                "causal collapse control did not expose full support growth");
+    }
+
+    {
         const auto observable = single_term(
             1,
             {{0, PauliAxis::X}},
