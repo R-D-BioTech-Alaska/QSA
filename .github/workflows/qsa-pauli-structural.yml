@@ -6,6 +6,7 @@ on:
       - "include/qubit/qpauli.hpp"
       - "include/qubit/qrouter.hpp"
       - "src/qpauli.cpp"
+      - "src/qpauli_causal.cpp"
       - "src/qrouter.cpp"
       - "tests/test_pauli_propagation.cpp"
       - "tests/test_representation_advisor.cpp"
@@ -69,6 +70,7 @@ jobs:
             include/qubit/qpauli.hpp \
             include/qubit/qrouter.hpp \
             src/qpauli.cpp \
+            src/qpauli_causal.cpp \
             src/qrouter.cpp \
             tests/test_pauli_propagation.cpp \
             tests/test_representation_advisor.cpp \
