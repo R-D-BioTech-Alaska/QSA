@@ -36,6 +36,7 @@ add_library(qstate_core STATIC
     src/qread.cpp
     src/qdiagonal.cpp
     src/qpauli.cpp
+    src/qpauli_causal.cpp
 )
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
