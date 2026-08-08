@@ -1,6 +1,7 @@
 #include "qubit/qpauli.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 
 namespace qubit {
