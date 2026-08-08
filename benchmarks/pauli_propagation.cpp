@@ -18,6 +18,8 @@ using qubit::OperationPlan;
 using qubit::PauliAxis;
 using qubit::PauliFactor;
 using qubit::PauliObservable;
+using qubit::PauliPropagationPlan;
+using qubit::PauliPropagationStats;
 using qubit::QComplex;
 using qubit::QRegister;
 using qubit::QubitId;
@@ -129,12 +131,35 @@ int main() {
     const double large_propagation_ms = median_ms([&] {
         large_backward = large_observable.propagated_backward(large_operations);
     }, 5);
+
+    const double causal_plan_build_ms = median_ms([&] {
+        const PauliPropagationPlan candidate(large_qubits, large_operations);
+        volatile std::size_t bytes = candidate.estimated_bytes();
+        (void)bytes;
+    }, 5);
+    const PauliPropagationPlan causal_plan(large_qubits, large_operations);
+    PauliPropagationStats causal_stats;
+    PauliObservable causal_backward = causal_plan.propagate_backward(
+        large_observable, &causal_stats);
+    const double causal_query_ms = median_ms([&] {
+        PauliPropagationStats stats;
+        const PauliObservable candidate = causal_plan.propagate_backward(
+            large_observable, &stats);
+        volatile std::size_t terms = candidate.term_count();
+        (void)terms;
+    }, 9);
+
     QRegister large_state(large_qubits);
     const double large_readout_ms = median_ms([&] {
         volatile QComplex value = large_backward.expectation(large_state);
         (void)value;
     }, 9);
     const QComplex large_value = large_backward.expectation(large_state);
+    const QComplex causal_value = causal_backward.expectation(large_state);
+    const double causal_error = (large_value - causal_value).magnitude();
+    if (causal_error > 2e-12) {
+        throw std::runtime_error("Pauli causal benchmark exactness check failed");
+    }
 
     std::cout << "small qubits=" << small_qubits
               << " gates=" << small_operations.size()
@@ -150,6 +175,14 @@ int main() {
               << " support=" << large_backward.support_size()
               << " propagation_ms=" << large_propagation_ms
               << " readout_ms=" << large_readout_ms
+              << " causal_plan_build_ms=" << causal_plan_build_ms
+              << " causal_query_ms=" << causal_query_ms
+              << " causal_visited=" << causal_stats.visited_operations
+              << " causal_peak_terms=" << causal_stats.peak_terms
+              << " causal_peak_support=" << causal_stats.peak_support
+              << " causal_plan_bytes=" << causal_plan.estimated_bytes()
+              << " causal_error=" << causal_error
+              << " causal_query_ratio=" << large_propagation_ms / causal_query_ms
               << " value_re=" << large_value.re
               << " value_im=" << large_value.im << '\n';
     return 0;
