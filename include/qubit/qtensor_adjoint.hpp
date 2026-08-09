@@ -48,13 +48,18 @@ public:
         return rebind_count_;
     }
 
+    [[nodiscard]] std::size_t execution_worker_count() const noexcept {
+        return execution_worker_count_;
+    }
+
     [[nodiscard]] std::size_t estimated_bytes() const noexcept {
         std::size_t bytes = sizeof(*this) +
                             values_.capacity() * sizeof(QComplex) +
                             gradients_.capacity() * sizeof(QComplex) +
                             scratch_.capacity() * sizeof(Scratch) +
                             lane_values_.capacity() * sizeof(std::vector<QComplex>) +
-                            lane_gradients_.capacity() * sizeof(std::vector<QComplex>);
+                            lane_gradients_.capacity() * sizeof(std::vector<QComplex>) +
+                            lane_jobs_.capacity() * sizeof(std::vector<std::size_t>);
         if (plan_.has_value()) {
             bytes += plan_->estimated_bytes();
         }
@@ -83,6 +88,9 @@ public:
         for (const auto& values : lane_gradients_) {
             bytes += values.capacity() * sizeof(QComplex);
         }
+        for (const auto& jobs : lane_jobs_) {
+            bytes += jobs.capacity() * sizeof(std::size_t);
+        }
         return bytes;
     }
 
@@ -105,6 +113,8 @@ private:
     std::vector<Scratch> scratch_{};
     std::vector<std::vector<QComplex>> lane_values_{};
     std::vector<std::vector<QComplex>> lane_gradients_{};
+    std::vector<std::vector<std::size_t>> lane_jobs_{};
+    std::size_t execution_worker_count_{1U};
     std::size_t rebind_count_{0U};
 
     friend class ExactAdjointGradientPlan;
@@ -241,17 +251,30 @@ public:
     }
 
     [[nodiscard]] ExactAdjointGradientWorkspace workspace() const {
+        return workspace(worker_count_);
+    }
+
+    [[nodiscard]] ExactAdjointGradientWorkspace workspace(
+        std::size_t execution_worker_count) const {
+        if (execution_worker_count == 0U || execution_worker_count > worker_count_) {
+            throw QStateError(
+                "Exact adjoint gradient workspace worker count is invalid");
+        }
+
         ExactAdjointGradientWorkspace result;
         result.token_ = workspace_token_;
+        result.execution_worker_count_ = execution_worker_count;
         result.plan_ = *prototype_;
         result.values_.resize(observable_count_);
         result.gradients_.resize(observable_count_ * parameter_count_);
-        result.scratch_.resize(worker_count_);
-        result.lane_values_.resize(worker_count_);
-        result.lane_gradients_.resize(worker_count_);
-        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+        result.scratch_.resize(execution_worker_count);
+        result.lane_values_.resize(execution_worker_count);
+        result.lane_gradients_.resize(execution_worker_count);
+        result.lane_jobs_ = make_lane_schedule(execution_worker_count);
+        for (std::size_t lane = 0U; lane < execution_worker_count; ++lane) {
             result.lane_values_[lane].resize(observable_count_);
             result.lane_gradients_[lane].resize(observable_count_ * parameter_count_);
+            prepare_scratch(result.scratch_[lane], result.lane_jobs_[lane]);
         }
         return result;
     }
@@ -282,7 +305,9 @@ public:
         const TensorNetworkCircuit circuit(qubit_count_, bound, config_.tensor);
         rebind(*workspace_value.plan_, circuit);
 
-        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+        const std::size_t execution_workers =
+            workspace_value.execution_worker_count_;
+        for (std::size_t lane = 0U; lane < execution_workers; ++lane) {
             std::fill(
                 workspace_value.lane_values_[lane].begin(),
                 workspace_value.lane_values_[lane].end(),
@@ -294,10 +319,10 @@ public:
         }
 
         const TensorExpectationPlan& plan = *workspace_value.plan_;
-        std::vector<std::exception_ptr> errors(worker_count_);
+        std::vector<std::exception_ptr> errors(execution_workers);
         const auto worker = [&](std::size_t lane) {
             try {
-                for (const std::size_t job_index : lane_jobs_[lane]) {
+                for (const std::size_t job_index : workspace_value.lane_jobs_[lane]) {
                     const TermJob job = jobs_[job_index];
                     const auto& term = plan.terms_[job.term_index];
                     const QComplex raw_value = forward_and_reverse(
@@ -353,8 +378,8 @@ public:
         };
 
         std::vector<std::thread> threads;
-        threads.reserve(worker_count_ > 0U ? worker_count_ - 1U : 0U);
-        for (std::size_t lane = 1U; lane < worker_count_; ++lane) {
+        threads.reserve(execution_workers > 0U ? execution_workers - 1U : 0U);
+        for (std::size_t lane = 1U; lane < execution_workers; ++lane) {
             threads.emplace_back(worker, lane);
         }
         worker(0U);
@@ -372,7 +397,7 @@ public:
             workspace_value.gradients_.begin(),
             workspace_value.gradients_.end(),
             QComplex{});
-        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+        for (std::size_t lane = 0U; lane < execution_workers; ++lane) {
             for (std::size_t observable = 0U;
                  observable < observable_count_;
                  ++observable) {
@@ -592,6 +617,17 @@ private:
         return std::max<std::uint64_t>(1U, work);
     }
 
+    [[nodiscard]] std::vector<std::vector<std::size_t>> make_lane_schedule(
+        std::size_t lane_count) const {
+        if (lane_count == 0U || lane_count > worker_count_) {
+            throw QStateError("Exact adjoint gradient lane count is invalid");
+        }
+        if (lane_count == worker_count_) {
+            return lane_jobs_;
+        }
+        return make_balanced_lane_schedule(lane_count);
+    }
+
     void build_lane_schedule() {
         lane_jobs_.assign(worker_count_, {});
         lane_estimated_work_.assign(worker_count_, 0U);
@@ -612,16 +648,32 @@ private:
                 std::max(round_robin_peak_estimated_work_, lane_work);
         }
 
-        if (worker_count_ == 1U) {
-            lane_jobs_.front().reserve(jobs_.size());
-            for (std::size_t job_index = 0U; job_index < jobs_.size(); ++job_index) {
-                lane_jobs_.front().push_back(job_index);
+        lane_jobs_ = make_balanced_lane_schedule(worker_count_);
+        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+            for (const std::size_t job_index : lane_jobs_[lane]) {
+                lane_estimated_work_[lane] = saturating_add(
+                    lane_estimated_work_[lane], jobs_[job_index].estimated_work);
             }
-            lane_estimated_work_.front() = estimated_work_;
-            balanced_peak_estimated_work_ = estimated_work_;
-            return;
+            balanced_peak_estimated_work_ = std::max(
+                balanced_peak_estimated_work_, lane_estimated_work_[lane]);
+        }
+        if (balanced_peak_estimated_work_ > round_robin_peak_estimated_work_) {
+            throw QStateError("Exact adjoint gradient load balancing regressed estimated peak work");
+        }
+    }
+
+    [[nodiscard]] std::vector<std::vector<std::size_t>> make_balanced_lane_schedule(
+        std::size_t lane_count) const {
+        std::vector<std::vector<std::size_t>> lanes(lane_count);
+        if (lane_count == 1U) {
+            lanes.front().reserve(jobs_.size());
+            for (std::size_t job_index = 0U; job_index < jobs_.size(); ++job_index) {
+                lanes.front().push_back(job_index);
+            }
+            return lanes;
         }
 
+        std::vector<std::uint64_t> lane_work(lane_count, 0U);
         std::vector<std::size_t> order(jobs_.size());
         for (std::size_t index = 0U; index < order.size(); ++index) {
             order[index] = index;
@@ -637,26 +689,56 @@ private:
                 }
                 return jobs_[first].term_index < jobs_[second].term_index;
             });
-
         for (const std::size_t job_index : order) {
             std::size_t selected_lane = 0U;
-            for (std::size_t lane = 1U; lane < worker_count_; ++lane) {
-                if (lane_estimated_work_[lane] <
-                    lane_estimated_work_[selected_lane]) {
+            for (std::size_t lane = 1U; lane < lane_count; ++lane) {
+                if (lane_work[lane] < lane_work[selected_lane]) {
                     selected_lane = lane;
                 }
             }
-            lane_jobs_[selected_lane].push_back(job_index);
-            lane_estimated_work_[selected_lane] = saturating_add(
-                lane_estimated_work_[selected_lane],
-                jobs_[job_index].estimated_work);
+            lanes[selected_lane].push_back(job_index);
+            lane_work[selected_lane] = saturating_add(
+                lane_work[selected_lane], jobs_[job_index].estimated_work);
         }
-        for (const std::uint64_t lane_work : lane_estimated_work_) {
-            balanced_peak_estimated_work_ =
-                std::max(balanced_peak_estimated_work_, lane_work);
-        }
-        if (balanced_peak_estimated_work_ > round_robin_peak_estimated_work_) {
-            throw QStateError("Exact adjoint gradient load balancing regressed estimated peak work");
+        return lanes;
+    }
+
+    void prepare_scratch(
+        ExactAdjointGradientWorkspace::Scratch& scratch,
+        std::span<const std::size_t> job_indices) const {
+        for (const std::size_t job_index : job_indices) {
+            if (job_index >= jobs_.size()) {
+                throw QStateError("Exact adjoint gradient workspace job is invalid");
+            }
+            const auto& term = prototype_->terms_[jobs_[job_index].term_index];
+            scratch.forward_steps.resize(term.steps.size());
+            scratch.step_adjoints.resize(term.steps.size());
+            for (std::size_t step_index = 0U;
+                 step_index < term.steps.size();
+                 ++step_index) {
+                const auto& step = term.steps[step_index];
+                scratch.forward_steps[step_index].assign(
+                    step.output_entries, QComplex{});
+                scratch.step_adjoints[step_index].assign(
+                    step.output_entries, QComplex{});
+            }
+
+            scratch.source_adjoints.resize(term.sources.size());
+            for (std::size_t source = 0U; source < term.sources.size(); ++source) {
+                scratch.source_adjoints[source].assign(
+                    term.sources[source].values.size(), QComplex{});
+            }
+            scratch.terminal_values.resize(term.terminal_nodes.size());
+
+            for (std::size_t reverse_index = term.steps.size();
+                 reverse_index-- > 0U;) {
+                const std::size_t input_count =
+                    term.steps[reverse_index].inputs.size();
+                scratch.input_indices.resize(input_count);
+                scratch.input_values.resize(input_count);
+                scratch.prefix.resize(input_count + 1U);
+                scratch.suffix.resize(input_count + 1U);
+            }
         }
     }
 
@@ -673,20 +755,30 @@ private:
 
     void validate_workspace(
         const ExactAdjointGradientWorkspace& workspace_value) const {
+        const std::size_t execution_workers =
+            workspace_value.execution_worker_count_;
         if (workspace_value.token_ != workspace_token_ ||
             !workspace_value.plan_.has_value() ||
+            execution_workers == 0U ||
+            execution_workers > worker_count_ ||
             workspace_value.values_.size() != observable_count_ ||
             workspace_value.gradients_.size() != observable_count_ * parameter_count_ ||
-            workspace_value.scratch_.size() != worker_count_ ||
-            workspace_value.lane_values_.size() != worker_count_ ||
-            workspace_value.lane_gradients_.size() != worker_count_) {
+            workspace_value.scratch_.size() != execution_workers ||
+            workspace_value.lane_values_.size() != execution_workers ||
+            workspace_value.lane_gradients_.size() != execution_workers ||
+            workspace_value.lane_jobs_.size() != execution_workers) {
             throw QStateError("Exact adjoint gradient workspace does not match its plan");
         }
-        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+        for (std::size_t lane = 0U; lane < execution_workers; ++lane) {
             if (workspace_value.lane_values_[lane].size() != observable_count_ ||
                 workspace_value.lane_gradients_[lane].size() !=
                     observable_count_ * parameter_count_) {
                 throw QStateError("Exact adjoint gradient workspace lane shape is invalid");
+            }
+            for (const std::size_t job_index : workspace_value.lane_jobs_[lane]) {
+                if (job_index >= jobs_.size()) {
+                    throw QStateError("Exact adjoint gradient workspace job is invalid");
+                }
             }
         }
     }
