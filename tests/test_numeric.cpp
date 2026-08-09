@@ -1,3 +1,4 @@
+#include "qubit/qkron.hpp"
 #include "qubit/qnumeric.hpp"
 
 #include <array>
@@ -11,9 +12,11 @@
 
 namespace {
 
+using qubit::KronVector;
 using qubit::NumericConfig;
 using qubit::NumericExecutor;
 using qubit::QComplex;
+using qubit::QStateError;
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -242,6 +245,125 @@ int main() {
     }
 
     {
+        KronVector structured({2U, 3U, 2U}, 8U);
+        const std::vector<std::vector<QComplex>> first{
+            {{0.8, 0.1}, {0.3, -0.2}},
+            {{0.4, 0.0}, {-0.2, 0.3}, {0.7, -0.1}},
+            {{0.6, 0.2}, {0.1, 0.5}},
+        };
+        const std::vector<std::vector<QComplex>> second{
+            {{0.2, -0.4}, {0.5, 0.1}},
+            {{-0.1, 0.2}, {0.3, 0.4}, {0.6, 0.0}},
+            {{0.9, -0.1}, {-0.2, 0.2}},
+        };
+        structured.add_term({0.7, -0.15}, first);
+        structured.add_term({-0.25, 0.3}, second);
+        require(structured.logical_size() == 12U && structured.term_count() == 2U,
+                "structured Kronecker dimensions changed");
+
+        const std::vector<QComplex> dense = structured.materialize(12U);
+        QComplex dense_norm{};
+        for (const QComplex value : dense) {
+            dense_norm += value.conjugate() * value;
+        }
+        require_close(structured.norm2(), dense_norm.re, 5e-13,
+                      "structured Kronecker norm differs from dense materialization");
+
+        for (std::size_t first_index = 0; first_index < 2U; ++first_index) {
+            for (std::size_t second_index = 0; second_index < 3U; ++second_index) {
+                for (std::size_t third_index = 0; third_index < 2U; ++third_index) {
+                    const std::array<std::size_t, 3> index{
+                        first_index, second_index, third_index};
+                    const std::size_t flat =
+                        (first_index * 3U + second_index) * 2U + third_index;
+                    require_close(structured.element(index), dense[flat], 0.0,
+                                  "structured Kronecker element order changed");
+                }
+            }
+        }
+
+        KronVector transformed = structured;
+        const std::array<QComplex, 4> matrix{{
+            {0.5, 0.25}, {-0.125, 0.75},
+            {0.625, -0.375}, {0.25, 0.125},
+        }};
+        transformed.apply_local_operator(0U, matrix);
+        const std::vector<QComplex> transformed_dense = transformed.materialize(12U);
+        for (std::size_t out0 = 0; out0 < 2U; ++out0) {
+            for (std::size_t i1 = 0; i1 < 3U; ++i1) {
+                for (std::size_t i2 = 0; i2 < 2U; ++i2) {
+                    QComplex expected{};
+                    for (std::size_t in0 = 0; in0 < 2U; ++in0) {
+                        const std::size_t source = (in0 * 3U + i1) * 2U + i2;
+                        expected += matrix[out0 * 2U + in0] * dense[source];
+                    }
+                    const std::size_t target = (out0 * 3U + i1) * 2U + i2;
+                    require_close(transformed_dense[target], expected, 2e-13,
+                                  "structured local operator differs from dense execution");
+                }
+            }
+        }
+
+        QComplex dense_inner{};
+        for (std::size_t index = 0; index < dense.size(); ++index) {
+            dense_inner += dense[index].conjugate() * transformed_dense[index];
+        }
+        require_close(structured.inner_product(transformed), dense_inner, 5e-13,
+                      "structured Kronecker inner product differs from dense execution");
+    }
+
+    {
+        constexpr std::size_t sites = 100U;
+        KronVector huge(std::vector<std::size_t>(sites, 2U), 4U);
+        std::vector<std::vector<QComplex>> factors;
+        factors.reserve(sites);
+        for (std::size_t site = 0; site < sites; ++site) {
+            const double angle = 0.01 * static_cast<double>(site + 1U);
+            factors.push_back({{std::cos(angle), 0.0}, {std::sin(angle), 0.0}});
+        }
+        huge.add_term({1.0, 0.0}, factors);
+        require(!huge.logical_size_fits(),
+                "100-factor Kronecker vector unexpectedly fit in a dense size_t extent");
+        require_close(static_cast<double>(huge.log2_logical_size()), 100.0, 1e-14,
+                      "100-factor Kronecker logical size changed");
+        require_close(huge.norm2(), 1.0, 2e-13,
+                      "100-factor structured norm lost product normalization");
+        const std::vector<std::size_t> zero_index(sites, 0U);
+        QComplex expected{1.0, 0.0};
+        for (std::size_t site = 0; site < sites; ++site) {
+            expected *= factors[site][0];
+        }
+        require_close(huge.element(zero_index), expected, 2e-13,
+                      "100-factor structured element differs from product reference");
+
+        bool rejected = false;
+        try {
+            static_cast<void>(huge.materialize());
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "100-factor Kronecker vector allowed dense materialization");
+    }
+
+    {
+        KronVector left({2U}, 2U);
+        KronVector right({2U}, 2U);
+        const std::vector<std::vector<QComplex>> a{{{1.0, 0.0}, {0.0, 0.0}}};
+        const std::vector<std::vector<QComplex>> b{{{0.0, 0.0}, {1.0, 0.0}}};
+        left.add_term({1.0, 0.0}, a);
+        left.add_term({1.0, 0.0}, b);
+        right.add_term({1.0, 0.0}, a);
+        right.add_term({1.0, 0.0}, b);
+        bool rejected = false;
+        try {
+            static_cast<void>(left.tensor_product(right));
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "Kronecker tensor product exceeded its exact rank cap");
+    }
+
+    {
         std::vector<double> empty_real;
         std::vector<QComplex> empty_complex;
         const std::array<QComplex, 4> matrix2{};
@@ -313,6 +435,24 @@ int main() {
             rejected = true;
         }
         require(rejected, "numeric executor accepted an unbounded worker count");
+
+        rejected = false;
+        try {
+            KronVector invalid({2U, 0U});
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "KronVector accepted a zero factor dimension");
+
+        rejected = false;
+        try {
+            KronVector vector({2U});
+            const std::vector<std::vector<QComplex>> wrong{{{1.0, 0.0}}};
+            vector.add_term({1.0, 0.0}, wrong);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "KronVector accepted a mismatched factor dimension");
     }
 
     {
