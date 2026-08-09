@@ -30,8 +30,8 @@ struct ExactExpectationResult {
     std::string fallback_reason{};
 };
 
-struct ExactAmplitudeResult {
-    QComplex value{};
+struct ExactProbabilityResult {
+    double value{0.0};
     ExactExecutionRoute route{ExactExecutionRoute::Register};
     TensorContractionStats tensor_stats{};
     std::string fallback_reason{};
@@ -46,12 +46,12 @@ public:
         std::span<const Operation> operations,
         const PauliObservable& observable) const;
 
-    [[nodiscard]] ExactAmplitudeResult amplitude_from_zero(
+    [[nodiscard]] ExactProbabilityResult basis_probability_from_zero(
         std::size_t qubit_count,
         std::span<const Operation> operations,
         std::span<const std::uint8_t> basis_bits) const;
 
-    [[nodiscard]] ExactAmplitudeResult amplitude_from_zero(
+    [[nodiscard]] ExactProbabilityResult basis_probability_from_zero(
         std::size_t qubit_count,
         std::span<const Operation> operations,
         BasisIndex basis) const;
