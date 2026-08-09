@@ -20,8 +20,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install benchmark dependency
-        run: python -m pip install --upgrade pip numpy
+      - name: Install benchmark dependencies
+        run: >-
+          python -m pip install --upgrade pip numpy
+          qiskit==2.5.1 qiskit-aer==0.17.2
       - name: Configure release benchmarks
         run: >-
           cmake -S . -B build-runtime -DCMAKE_BUILD_TYPE=Release
@@ -57,6 +59,14 @@ jobs:
         run: ./build-runtime/qstate_tensor_expectation_benchmark | tee tensor-expectation.txt
       - name: Run exact estimator benchmark
         run: ./build-runtime/qstate_estimator_benchmark | tee estimator.txt
+      - name: Run matched Qiskit Aer benchmark
+        env:
+          OMP_NUM_THREADS: "4"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+        run: python benchmarks/estimator_aer.py --qsa-output estimator.txt | tee qsa-vs-aer.txt
       - uses: actions/upload-artifact@v4
         with:
           name: qsa-0.2.0-runtime-evidence
@@ -66,3 +76,4 @@ jobs:
             tensor-plan.txt
             tensor-expectation.txt
             estimator.txt
+            qsa-vs-aer.txt
