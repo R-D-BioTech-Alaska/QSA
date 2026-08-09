@@ -8,7 +8,6 @@ CORE_FILES = (
     "include/qubit/qcomplex.hpp",
     "include/qubit/qshared_vector.hpp",
     "include/qubit/qstate.hpp",
-    "include/qubit/qsc.hpp",
     "include/qubit/qplan.hpp",
     "include/qubit/qread.hpp",
     "include/qubit/qdiagonal.hpp",
