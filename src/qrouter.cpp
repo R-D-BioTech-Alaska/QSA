@@ -50,6 +50,36 @@ void validate_config(const RepresentationAdvisorConfig& config) {
     return false;
 }
 
+[[nodiscard]] bool is_pauli_axis_cell(const BlochCell& cell, double epsilon) noexcept {
+    const double tolerance = std::max(epsilon * 8.0, 8.0 * std::numeric_limits<double>::epsilon());
+    const auto near_zero = [tolerance](double value) {
+        return std::abs(value) <= tolerance;
+    };
+    const auto near_axis = [tolerance](double value) {
+        return std::abs(std::abs(value) - 1.0) <= tolerance;
+    };
+
+    return (near_axis(cell.x) && near_zero(cell.y) && near_zero(cell.z)) ||
+           (near_zero(cell.x) && near_axis(cell.y) && near_zero(cell.z)) ||
+           (near_zero(cell.x) && near_zero(cell.y) && near_axis(cell.z));
+}
+
+[[nodiscard]] bool is_certified_product_stabilizer(const QRegister& state) {
+    if (state.component_count() != state.qubit_count()) {
+        return false;
+    }
+    const std::vector<QComponentReadView> views = state.component_read_views();
+    if (views.size() != state.qubit_count()) {
+        return false;
+    }
+    return std::all_of(views.begin(), views.end(), [&state](const QComponentReadView& view) {
+        return view.kind == ComponentKind::Cell &&
+               view.cell != nullptr &&
+               view.qubits.size() == 1U &&
+               is_pauli_axis_cell(*view.cell, state.config().epsilon);
+    });
+}
+
 }  // namespace
 
 const char* representation_name(RepresentationKind kind) noexcept {
@@ -94,6 +124,7 @@ RepresentationFeatures RepresentationAdvisor::inspect(
     features.exact_symmetry_classes = exact_symmetry_classes;
     features.quantum_dot_declared = quantum_dot_declared;
     features.clifford_only = clifford_only;
+    features.stabilizer_input_certified = clifford_only;
     features.uniform_phase_graph = uniform_phase_graph;
     features.phase_graph_edges = phase_graph_edges;
     for (std::size_t qubit = 0; qubit < state.qubit_count(); ++qubit) {
@@ -123,6 +154,8 @@ RepresentationFeatures RepresentationAdvisor::inspect_operations(
         operations.begin(), operations.end(), [](const Operation& operation) {
             return is_clifford_operation(operation.code);
         });
+    features.stabilizer_input_certified =
+        features.clifford_only && is_certified_product_stabilizer(state);
     return features;
 }
 
@@ -152,7 +185,7 @@ std::size_t RepresentationAdvisor::context(
     if (features.quantum_dot_declared) {
         return 5U;
     }
-    if (features.clifford_only) {
+    if (features.clifford_only && features.stabilizer_input_certified) {
         return 4U;
     }
     if (features.uniform_phase_graph) {
@@ -240,7 +273,7 @@ std::vector<RepresentationScore> RepresentationAdvisor::rank(
 
     RepresentationScore stabilizer_score;
     stabilizer_score.kind = RepresentationKind::Stabilizer;
-    stabilizer_score.eligible = features.clifford_only;
+    stabilizer_score.eligible = features.clifford_only && features.stabilizer_input_certified;
     const double stabilizer_width = std::max(1.0, std::ceil(qubits / 64.0));
     stabilizer_score.estimated_work = stabilizer_score.eligible
         ? safe_product(steps, safe_product(8.0, stabilizer_width))
@@ -249,9 +282,13 @@ std::vector<RepresentationScore> RepresentationAdvisor::rank(
     stabilizer_score.adjusted_score = stabilizer_score.eligible
         ? stabilizer_score.estimated_work / stabilizer_score.posterior_success
         : std::numeric_limits<double>::infinity();
-    stabilizer_score.reason = stabilizer_score.eligible
-        ? "workload is explicitly restricted to Clifford operations"
-        : "workload is not declared Clifford-only";
+    if (!features.clifford_only) {
+        stabilizer_score.reason = "workload is not declared Clifford-only";
+    } else if (!features.stabilizer_input_certified) {
+        stabilizer_score.reason = "input state is not certified for exact stabilizer conversion";
+    } else {
+        stabilizer_score.reason = "Clifford operations and stabilizer input are certified";
+    }
     scores.push_back(stabilizer_score);
 
     RepresentationScore phase_graph_score;

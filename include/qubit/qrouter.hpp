@@ -31,6 +31,7 @@ struct RepresentationFeatures {
     std::size_t exact_symmetry_classes{0};
     bool quantum_dot_declared{false};
     bool clifford_only{false};
+    bool stabilizer_input_certified{false};
     bool uniform_phase_graph{false};
     std::size_t phase_graph_edges{0};
     bool pauli_observable{false};
