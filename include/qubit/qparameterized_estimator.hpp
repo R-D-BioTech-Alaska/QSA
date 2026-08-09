@@ -31,6 +31,10 @@ struct ExactParameterizedEstimatorStats {
     std::size_t operation_count{0U};
     std::size_t observable_count{0U};
     std::size_t point_worker_limit{0U};
+    std::size_t dynamic_term_count{0U};
+    std::size_t static_term_count{0U};
+    std::size_t dynamic_observable_count{0U};
+    std::size_t static_observable_count{0U};
     ExactExecutionRoute route{ExactExecutionRoute::Register};
     TensorContractionStats tensor{};
 };
@@ -162,6 +166,7 @@ public:
             tensor_prototype_.emplace(initial, observables_);
             build_bindings(initial, observables_);
             certify_parameter_bindings(initial);
+            prepare_static_terms();
             route_ = ExactExecutionRoute::TensorNetwork;
         } catch (const QStateError& error) {
             tensor_unavailable_reason_ = error.what();
@@ -169,6 +174,12 @@ public:
             bindings_.clear();
             factor_bindings_.clear();
             occurrence_bindings_.clear();
+            dynamic_terms_.clear();
+            static_term_values_.clear();
+            dynamic_term_count_ = 0U;
+            static_term_count_ = 0U;
+            dynamic_observable_count_ = 0U;
+            static_observable_count_ = 0U;
             route_ = ExactExecutionRoute::Register;
         }
     }
@@ -274,8 +285,10 @@ public:
                             workspace_value.tensor_lanes_[lane],
                             point_parameters,
                             workspace_value.tensor_parameter_values_[lane]);
-                        workspace_value.tensor_lanes_[lane].expectations(
-                            point_results, workspace_value.tensor_workspaces_[lane]);
+                        expectations_prepared(
+                            workspace_value.tensor_lanes_[lane],
+                            workspace_value.tensor_workspaces_[lane],
+                            point_results);
                         completed_rebinds.fetch_add(1U, std::memory_order_relaxed);
                     } else {
                         OperationPlan bound = register_plan_.bind(point_parameters);
@@ -343,6 +356,10 @@ public:
         result.operation_count = operations_.size();
         result.observable_count = observables_.size();
         result.point_worker_limit = worker_limit_;
+        result.dynamic_term_count = dynamic_term_count_;
+        result.static_term_count = static_term_count_;
+        result.dynamic_observable_count = dynamic_observable_count_;
+        result.static_observable_count = static_observable_count_;
         result.route = route_;
         if (tensor_prototype_.has_value()) {
             result.tensor = tensor_prototype_->stats();
@@ -358,6 +375,8 @@ public:
                             bindings_.capacity() * sizeof(Binding) +
                             factor_bindings_.capacity() * sizeof(std::vector<std::size_t>) +
                             occurrence_bindings_.capacity() * sizeof(std::vector<std::size_t>) +
+                            dynamic_terms_.capacity() * sizeof(std::uint8_t) +
+                            static_term_values_.capacity() * sizeof(QComplex) +
                             tensor_unavailable_reason_.capacity();
         for (const PauliObservable& observable : observables_) {
             bytes += observable.terms().capacity() * sizeof(PauliTerm);
@@ -411,6 +430,12 @@ private:
     std::vector<Binding> bindings_{};
     std::vector<std::vector<std::size_t>> factor_bindings_{};
     std::vector<std::vector<std::size_t>> occurrence_bindings_{};
+    std::vector<std::uint8_t> dynamic_terms_{};
+    std::vector<QComplex> static_term_values_{};
+    std::size_t dynamic_term_count_{0U};
+    std::size_t static_term_count_{0U};
+    std::size_t dynamic_observable_count_{0U};
+    std::size_t static_observable_count_{0U};
     std::uint64_t workspace_token_{0U};
 
     [[nodiscard]] static std::uint64_t next_workspace_token() noexcept {
@@ -625,6 +650,68 @@ private:
         }
     }
 
+    void prepare_static_terms() {
+        if (!tensor_prototype_.has_value()) {
+            throw QStateError(
+                "Exact parameterized estimator cannot cache terms without a tensor plan");
+        }
+        dynamic_terms_.assign(tensor_prototype_->terms_.size(), 0U);
+        static_term_values_.assign(tensor_prototype_->terms_.size(), {});
+
+        for (const auto& occurrence_bindings : occurrence_bindings_) {
+            for (const std::size_t binding_index : occurrence_bindings) {
+                if (binding_index >= bindings_.size()) {
+                    throw QStateError(
+                        "Exact parameterized estimator static-term binding is invalid");
+                }
+                const std::size_t term_index = bindings_[binding_index].term_index;
+                if (term_index >= dynamic_terms_.size()) {
+                    throw QStateError(
+                        "Exact parameterized estimator static-term index is invalid");
+                }
+                dynamic_terms_[term_index] = 1U;
+            }
+        }
+
+        dynamic_term_count_ = 0U;
+        static_term_count_ = 0U;
+        dynamic_observable_count_ = 0U;
+        static_observable_count_ = 0U;
+
+        TensorExpectationWorkspace static_workspace = tensor_prototype_->workspace();
+        for (std::size_t term_index = 0U;
+             term_index < tensor_prototype_->terms_.size();
+             ++term_index) {
+            const auto& term = tensor_prototype_->terms_[term_index];
+            if (dynamic_terms_[term_index] != 0U) {
+                ++dynamic_term_count_;
+                continue;
+            }
+            ++static_term_count_;
+            static_term_values_[term_index] = term.identity
+                ? QComplex{1.0, 0.0}
+                : tensor_prototype_->contract(term, static_workspace);
+        }
+
+        for (const auto& observable : tensor_prototype_->observables_) {
+            bool dynamic = false;
+            for (std::size_t term_index = observable.term_begin;
+                 term_index < observable.term_end;
+                 ++term_index) {
+                if (term_index >= dynamic_terms_.size()) {
+                    throw QStateError(
+                        "Exact parameterized estimator observable term range is invalid");
+                }
+                dynamic = dynamic || dynamic_terms_[term_index] != 0U;
+            }
+            if (dynamic) {
+                ++dynamic_observable_count_;
+            } else {
+                ++static_observable_count_;
+            }
+        }
+    }
+
     [[nodiscard]] static std::array<QComplex, 4> gate_values(
         OperationCode code,
         double parameter) {
@@ -699,6 +786,41 @@ private:
                     }
                 }
             }
+        }
+    }
+
+    void expectations_prepared(
+        TensorExpectationPlan& plan,
+        TensorExpectationWorkspace& workspace_value,
+        std::span<QComplex> results) const {
+        if (results.size() != plan.observables_.size() ||
+            dynamic_terms_.size() != plan.terms_.size() ||
+            static_term_values_.size() != plan.terms_.size()) {
+            throw QStateError(
+                "Exact parameterized estimator prepared expectation shape is invalid");
+        }
+        plan.validate_workspace(workspace_value);
+        for (std::size_t observable_index = 0U;
+             observable_index < plan.observables_.size();
+             ++observable_index) {
+            const auto& observable = plan.observables_[observable_index];
+            QComplex result{};
+            for (std::size_t term_index = observable.term_begin;
+                 term_index < observable.term_end;
+                 ++term_index) {
+                if (term_index >= dynamic_terms_.size()) {
+                    throw QStateError(
+                        "Exact parameterized estimator prepared term index is invalid");
+                }
+                const auto& term = plan.terms_[term_index];
+                const QComplex value = dynamic_terms_[term_index] != 0U
+                    ? (term.identity
+                           ? QComplex{1.0, 0.0}
+                           : plan.contract(term, workspace_value))
+                    : static_term_values_[term_index];
+                result += term.coefficient * value;
+            }
+            results[observable_index] = result;
         }
     }
 
