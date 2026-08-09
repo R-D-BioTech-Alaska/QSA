@@ -37,6 +37,7 @@ add_library(qstate_core STATIC
     src/qdiagonal.cpp
     src/qpauli.cpp
     src/qpauli_causal.cpp
+    src/qtensor.cpp
 )
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
@@ -186,6 +187,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_transition_invariant_tests PRIVATE qstate_core)
     add_test(NAME qstate_transition_invariant_tests COMMAND qstate_transition_invariant_tests)
 
+    add_executable(qstate_tensor_network_tests tests/test_tensor_network.cpp)
+    target_link_libraries(qstate_tensor_network_tests PRIVATE qstate_core)
+    add_test(NAME qstate_tensor_network_tests COMMAND qstate_tensor_network_tests)
+
     add_executable(qstate_causal_runtime_tests tests/test_qcausal.cpp)
     target_link_libraries(qstate_causal_runtime_tests PRIVATE qstate_core)
     add_test(NAME qstate_causal_runtime_tests COMMAND qstate_causal_runtime_tests)
@@ -302,6 +307,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_scaling_fast_paths_benchmark benchmarks/scaling_fast_paths.cpp)
     target_link_libraries(qstate_scaling_fast_paths_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_tensor_network_benchmark benchmarks/tensor_network.cpp)
+    target_link_libraries(qstate_tensor_network_benchmark PRIVATE qstate_core)
 
     add_executable(qstate_causal_runtime_benchmark benchmarks/causal_runtime.cpp)
     target_link_libraries(qstate_causal_runtime_benchmark PRIVATE qstate_core)
