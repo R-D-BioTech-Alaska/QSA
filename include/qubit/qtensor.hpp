@@ -171,11 +171,10 @@ class TensorExpectationWorkspace {
 public:
     TensorExpectationWorkspace() = default;
 
-    [[nodiscard]] std::size_t lane_count() const noexcept { return lanes_.size(); }
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
 
 private:
-    std::vector<std::vector<std::vector<QComplex>>> lanes_{};
+    std::vector<std::vector<QComplex>> outputs_{};
 
     friend class TensorExpectationPlan;
 };
@@ -189,8 +188,7 @@ public:
         const TensorNetworkCircuit& circuit,
         std::span<const PauliObservable> observables);
 
-    [[nodiscard]] TensorExpectationWorkspace workspace(
-        std::size_t lane_count = 1U) const;
+    [[nodiscard]] TensorExpectationWorkspace workspace() const;
     [[nodiscard]] QComplex expectation(
         TensorContractionStats* stats = nullptr) const;
     [[nodiscard]] QComplex expectation(
@@ -202,15 +200,6 @@ public:
     void expectations(
         std::span<QComplex> results,
         TensorExpectationWorkspace& workspace,
-        TensorContractionStats* stats = nullptr) const;
-    void expectations_parallel(
-        std::span<QComplex> results,
-        std::size_t worker_count = 0U,
-        TensorContractionStats* stats = nullptr) const;
-    void expectations_parallel(
-        std::span<QComplex> results,
-        TensorExpectationWorkspace& workspace,
-        std::size_t worker_count = 0U,
         TensorContractionStats* stats = nullptr) const;
 
     [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
@@ -272,15 +261,12 @@ private:
     [[nodiscard]] std::span<const QComplex> node_values(
         const TermPlan& term,
         std::size_t node,
-        const TensorExpectationWorkspace& workspace,
-        std::size_t lane) const;
-    void validate_workspace(
-        const TensorExpectationWorkspace& workspace,
-        std::size_t required_lanes = 1U) const;
+        const TensorExpectationWorkspace& workspace) const;
+    void validate_workspace(const TensorExpectationWorkspace& workspace) const;
     [[nodiscard]] QComplex contract(
         const TermPlan& term,
-        TensorExpectationWorkspace& workspace,
-        std::size_t lane) const;
+        TensorExpectationWorkspace& workspace) const;
+    static void set_operator(std::array<QComplex, 4>& values, PauliAxis axis);
 };
 
 }  // namespace qubit
