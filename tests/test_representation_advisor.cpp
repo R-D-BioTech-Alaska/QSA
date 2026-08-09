@@ -130,10 +130,14 @@ int main() {
     }
     {
         QRegister state(64);
-        const auto features = RepresentationAdvisor::inspect(
+        const auto unproven = RepresentationAdvisor::inspect(
             state, 100'000U, 0U, false, true);
-        require(advisor.recommend(features).kind == RepresentationKind::Stabilizer,
-                "advisor did not select a declared Clifford workload");
+        require(advisor.recommend(unproven).kind == RepresentationKind::Register,
+                "Clifford declaration alone bypassed the stabilizer input proof");
+        const auto certified = RepresentationAdvisor::inspect(
+            state, 100'000U, 0U, false, true, false, 0U, true);
+        require(advisor.recommend(certified).kind == RepresentationKind::Stabilizer,
+                "advisor did not select a fully certified stabilizer workload");
     }
     {
         QRegister state(64);
