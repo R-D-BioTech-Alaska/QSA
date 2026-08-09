@@ -127,14 +127,17 @@ def main() -> None:
     if args.qsa_output is not None:
         qsa = parse_qsa_output(args.qsa_output)
         comparisons = (
-            ("real", "real_fused_parallel_ms", real_ms),
-            ("complex", "complex_fused_parallel_ms", complex_ms),
-            ("matrix2", "matrix2_parallel_ms", matrix_ms),
+            ("real", "real_fused_serial_ms", "real_fused_parallel_ms", real_ms),
+            ("complex", "complex_fused_serial_ms", "complex_fused_parallel_ms", complex_ms),
+            ("matrix2", "matrix2_serial_ms", "matrix2_parallel_ms", matrix_ms),
         )
-        for name, qsa_key, numpy_ms in comparisons:
-            qsa_ms = qsa.get(qsa_key)
-            if qsa_ms is not None and qsa_ms > 0.0:
-                print(f"qsa_{name}_vs_numpy={numpy_ms / qsa_ms:.12g}")
+        for name, serial_key, parallel_key, numpy_ms in comparisons:
+            serial_ms = qsa.get(serial_key)
+            if serial_ms is not None and serial_ms > 0.0:
+                print(f"qsa_{name}_serial_vs_numpy={numpy_ms / serial_ms:.12g}")
+            parallel_ms = qsa.get(parallel_key)
+            if parallel_ms is not None and parallel_ms > 0.0:
+                print(f"qsa_{name}_vs_numpy={numpy_ms / parallel_ms:.12g}")
 
         norm_pairs = (
             ("real", "real_parallel_norm2", real_norm),
