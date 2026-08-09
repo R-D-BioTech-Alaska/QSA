@@ -40,7 +40,9 @@ add_library(qstate_core STATIC
     src/qpauli_causal.cpp
     src/qtensor.cpp
     src/qbroker.cpp
+    src/qestimator.cpp
     src/qtensor_plan.cpp
+    src/qtensor_expectation.cpp
 )
 
 set(QSTATE_NUMERIC_X86 FALSE)
@@ -220,9 +222,17 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_tensor_contraction_plan_tests PRIVATE qstate_core)
     add_test(NAME qstate_tensor_contraction_plan_tests COMMAND qstate_tensor_contraction_plan_tests)
 
+    add_executable(qstate_tensor_expectation_tests tests/test_tensor_expectation.cpp)
+    target_link_libraries(qstate_tensor_expectation_tests PRIVATE qstate_core)
+    add_test(NAME qstate_tensor_expectation_tests COMMAND qstate_tensor_expectation_tests)
+
     add_executable(qstate_execution_broker_tests tests/test_execution_broker.cpp)
     target_link_libraries(qstate_execution_broker_tests PRIVATE qstate_core)
     add_test(NAME qstate_execution_broker_tests COMMAND qstate_execution_broker_tests)
+
+    add_executable(qstate_estimator_tests tests/test_estimator.cpp)
+    target_link_libraries(qstate_estimator_tests PRIVATE qstate_core)
+    add_test(NAME qstate_estimator_tests COMMAND qstate_estimator_tests)
 
     add_executable(qstate_causal_runtime_tests tests/test_qcausal.cpp)
     target_link_libraries(qstate_causal_runtime_tests PRIVATE qstate_core)
@@ -349,6 +359,12 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_tensor_contraction_plan_benchmark benchmarks/tensor_contraction_plan.cpp)
     target_link_libraries(qstate_tensor_contraction_plan_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_estimator_benchmark benchmarks/estimator.cpp)
+    target_link_libraries(qstate_estimator_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_tensor_expectation_benchmark benchmarks/tensor_expectation.cpp)
+    target_link_libraries(qstate_tensor_expectation_benchmark PRIVATE qstate_core)
 
     add_executable(qstate_causal_runtime_benchmark benchmarks/causal_runtime.cpp)
     target_link_libraries(qstate_causal_runtime_benchmark PRIVATE qstate_core)
