@@ -173,7 +173,6 @@ void run_case(
             queries,
             ExactCausalAdjointGradientConfig{
                 ExactAdjointGradientConfig{tensor, workers},
-                65'536U,
             });
     });
     auto causal_workspace = causal->workspace();
@@ -218,8 +217,6 @@ void run_case(
               << causal_stats.dynamic_observable_count << '\n';
     std::cout << prefix << "_classification_static_contribution_observables="
               << causal_stats.static_contribution_observable_count << '\n';
-    std::cout << prefix << "_classification_fallback_terms="
-              << causal_stats.classification_fallback_term_count << '\n';
     std::cout << prefix << "_legacy_differentiated_terms="
               << legacy_stats.differentiated_term_count << '\n';
     std::cout << prefix << "_causal_differentiated_terms="
