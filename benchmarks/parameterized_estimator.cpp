@@ -265,6 +265,7 @@ void run_case(
         throw std::runtime_error(
             "parameterized estimator benchmark unexpectedly fell back from tensor reuse");
     }
+    const auto plan_stats = plan->stats();
 
     qubit::ExactParameterizedEstimatorWorkspace workspace;
     const double workspace_ms = milliseconds([&] {
@@ -323,6 +324,12 @@ void run_case(
     std::cout << prefix << "_points=" << point_count << '\n';
     std::cout << prefix << "_worker_count=" << workspace.worker_count() << '\n';
     std::cout << prefix << "_route=" << static_cast<int>(plan->route()) << '\n';
+    std::cout << prefix << "_dynamic_terms=" << plan_stats.dynamic_term_count << '\n';
+    std::cout << prefix << "_static_terms=" << plan_stats.static_term_count << '\n';
+    std::cout << prefix << "_dynamic_observables="
+              << plan_stats.dynamic_observable_count << '\n';
+    std::cout << prefix << "_static_observables="
+              << plan_stats.static_observable_count << '\n';
     std::cout << prefix << "_workload_build_ms=" << workload_build_ms << '\n';
     std::cout << prefix << "_compile_ms=" << compile_ms << '\n';
     std::cout << prefix << "_workspace_ms=" << workspace_ms << '\n';
