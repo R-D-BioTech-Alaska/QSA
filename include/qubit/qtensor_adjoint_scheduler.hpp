@@ -146,10 +146,10 @@ public:
 
         const ExactAdjointGradientStats serial_stats = serial_.stats();
         serial_estimated_work_ = serial_stats.estimated_work;
-        serial_workspace_bytes_ = serial_.workspace().estimated_bytes();
         if (serial_estimated_work_ == 0U) {
             throw QStateError("Exact adjoint scheduler received an empty differentiated workload");
         }
+        serial_workspace_bytes_ = profiled_workspace_bytes(serial_);
 
         if (resolved_worker_count_ > 1U &&
             serial_stats.differentiated_term_count > 1U) {
@@ -165,7 +165,7 @@ public:
                 const ExactAdjointGradientStats term_stats = term_->stats();
                 term_peak_estimated_work_ =
                     term_stats.balanced_peak_estimated_work;
-                term_workspace_bytes_ = term_->workspace().estimated_bytes();
+                term_workspace_bytes_ = profiled_workspace_bytes(*term_);
             } else {
                 term_.reset();
             }
@@ -189,10 +189,13 @@ public:
         }
 
         const std::size_t staging_bytes = staged_output_bytes(point_count);
+        const std::size_t scheduler_bytes =
+            sizeof(ExactAdjointGradientSchedulerWorkspace);
         schedule.serial_estimated_critical_work = saturating_multiply(
             serial_estimated_work_, static_cast<std::uint64_t>(point_count));
         schedule.serial_estimated_workspace_bytes = saturating_add_size(
-            serial_workspace_bytes_, staging_bytes);
+            saturating_add_size(serial_workspace_bytes_, staging_bytes),
+            scheduler_bytes);
         schedule.serial_eligible = fits_workspace(
             schedule.serial_estimated_workspace_bytes);
 
@@ -200,7 +203,8 @@ public:
             schedule.term_estimated_critical_work = saturating_multiply(
                 term_peak_estimated_work_, static_cast<std::uint64_t>(point_count));
             schedule.term_estimated_workspace_bytes = saturating_add_size(
-                term_workspace_bytes_, staging_bytes);
+                saturating_add_size(term_workspace_bytes_, staging_bytes),
+                scheduler_bytes);
             schedule.term_eligible = fits_workspace(
                 schedule.term_estimated_workspace_bytes);
         }
@@ -213,10 +217,15 @@ public:
                 static_cast<std::size_t>(point_count % point_workers != 0U);
             schedule.point_estimated_critical_work = saturating_multiply(
                 serial_estimated_work_, static_cast<std::uint64_t>(waves));
-            const std::size_t point_workspace = saturating_multiply_size(
+            std::size_t point_workspace = saturating_multiply_size(
                 serial_workspace_bytes_, point_workers);
+            point_workspace = saturating_add_size(
+                point_workspace,
+                saturating_multiply_size(
+                    sizeof(ExactAdjointGradientWorkspace), point_workers));
+            point_workspace = saturating_add_size(point_workspace, staging_bytes);
             schedule.point_estimated_workspace_bytes = saturating_add_size(
-                point_workspace, staging_bytes);
+                point_workspace, scheduler_bytes);
             schedule.point_eligible = fits_workspace(
                 schedule.point_estimated_workspace_bytes);
         }
@@ -361,6 +370,12 @@ public:
                 break;
         }
 
+        if (config_.max_workspace_bytes != 0U &&
+            workspace_value.estimated_bytes() > config_.max_workspace_bytes) {
+            throw QStateError(
+                "Exact adjoint scheduler exceeded max_workspace_bytes");
+        }
+
         std::copy(
             workspace_value.staged_values_.begin(),
             workspace_value.staged_values_.end(),
@@ -437,6 +452,18 @@ private:
     [[nodiscard]] static std::uint64_t next_workspace_token() noexcept {
         static std::atomic<std::uint64_t> next{1U};
         return next.fetch_add(1U, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] static std::size_t profiled_workspace_bytes(
+        const ExactAdjointGradientPlan& plan) {
+        ExactAdjointGradientWorkspace workspace_value = plan.workspace();
+        std::vector<double> parameters(plan.parameter_count(), 0.0);
+        std::vector<QComplex> values(plan.observable_count());
+        std::vector<QComplex> gradients(
+            plan.observable_count() * plan.parameter_count());
+        plan.value_and_gradient(
+            parameters, values, gradients, workspace_value);
+        return workspace_value.estimated_bytes();
     }
 
     [[nodiscard]] static std::uint64_t saturating_multiply(
