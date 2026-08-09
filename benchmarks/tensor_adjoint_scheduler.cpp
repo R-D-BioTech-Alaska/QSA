@@ -304,6 +304,20 @@ void run_case(
     std::cout << prefix << "_value_checksum_imag=" << value_checksum.im << '\n';
     std::cout << prefix << "_gradient_checksum_real=" << gradient_checksum.re << '\n';
     std::cout << prefix << "_gradient_checksum_imag=" << gradient_checksum.im << '\n';
+    if (point_count == 1U) {
+        for (std::size_t index = 0U; index < scheduler_values.size(); ++index) {
+            std::cout << prefix << "_value_" << index << "_real="
+                      << scheduler_values[index].re << '\n';
+            std::cout << prefix << "_value_" << index << "_imag="
+                      << scheduler_values[index].im << '\n';
+        }
+        for (std::size_t index = 0U; index < scheduler_gradients.size(); ++index) {
+            std::cout << prefix << "_gradient_" << index << "_real="
+                      << scheduler_gradients[index].re << '\n';
+            std::cout << prefix << "_gradient_" << index << "_imag="
+                      << scheduler_gradients[index].im << '\n';
+        }
+    }
     std::cout << prefix << "_scheduler_successful_points="
               << scheduler_workspace.successful_point_count() << '\n';
     std::cout << prefix << "_scheduler_workspace_bytes="
@@ -315,7 +329,7 @@ void run_case(
 }  // namespace
 
 int main() {
-    std::cout << std::setprecision(12);
+    std::cout << std::setprecision(17);
     run_case(18U, 24U, 6U, 1U);
     run_case(18U, 24U, 6U, 12U);
     run_case(100U, 8U, 4U, 1U);
