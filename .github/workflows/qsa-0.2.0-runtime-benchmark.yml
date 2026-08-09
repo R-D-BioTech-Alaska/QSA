@@ -39,10 +39,15 @@ jobs:
           qstate_tensor_contraction_plan_benchmark
           qstate_tensor_expectation_benchmark
           qstate_estimator_benchmark
-      - name: Test structured Kronecker operators
+      - name: Build structural runtime checks
         run: |
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_kron_operator.cpp -o build-runtime/qstate_kron_operator_test
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_rebind.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_rebind_test
+          c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_rebind.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_rebind_benchmark
+      - name: Test structured runtime additions
+        run: |
           ./build-runtime/qstate_kron_operator_test
+          ./build-runtime/qstate_tensor_rebind_test
       - name: Run native numeric benchmark
         run: |
           set -o pipefail
@@ -65,6 +70,10 @@ jobs:
         run: |
           set -o pipefail
           ./build-runtime/qstate_tensor_expectation_benchmark | tee tensor-expectation.txt
+      - name: Run tensor rebind benchmark
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_tensor_rebind_benchmark | tee tensor-rebind.txt
       - name: Run exact estimator benchmark
         run: |
           set -o pipefail
@@ -87,5 +96,6 @@ jobs:
             qsa-vs-numpy.txt
             tensor-plan.txt
             tensor-expectation.txt
+            tensor-rebind.txt
             estimator.txt
             qsa-vs-aer.txt

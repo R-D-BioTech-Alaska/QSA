@@ -16,6 +16,7 @@ class TensorContractionPlan;
 class TensorContractionWorkspace;
 class TensorExpectationPlan;
 class TensorExpectationWorkspace;
+class TensorExpectationRebindPlan;
 
 struct TensorNetworkConfig {
     std::size_t max_contraction_entries{1U << 20U};
@@ -90,6 +91,7 @@ private:
 
     friend class TensorContractionPlan;
     friend class TensorExpectationPlan;
+    friend class TensorExpectationRebindPlan;
 };
 
 class TensorContractionWorkspace {
@@ -267,6 +269,8 @@ private:
         const TermPlan& term,
         TensorExpectationWorkspace& workspace) const;
     static void set_operator(std::array<QComplex, 4>& values, PauliAxis axis);
+
+    friend class TensorExpectationRebindPlan;
 };
 
 }  // namespace qubit

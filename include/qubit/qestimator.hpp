@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qbroker.hpp"
+#include "qubit/qtensor_rebind.hpp"
 
 #include <cstddef>
 #include <optional>
