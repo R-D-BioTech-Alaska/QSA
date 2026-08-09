@@ -11,7 +11,7 @@
 
 [![DOI](https://img.shields.io/badge/DOI-10.13140%2FRG.2.2.19653.20965-blue)](https://doi.org/10.13140/RG.2.2.19653.20965)
 [![Build and Test](https://github.com/R-D-BioTech-Alaska/QSA/actions/workflows/qsa.yml/badge.svg)](https://github.com/R-D-BioTech-Alaska/QSA/actions/workflows/qsa.yml)
-[![Version](https://img.shields.io/badge/version-0.1.7-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.1.8-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-orange)](LICENSE)
 
 ### A from-scratch, qubit-native mathematical runtime for ordinary computers
@@ -72,9 +72,11 @@ QSA avoids exponential allocation when the state, circuit, or requested observab
 
 ---
 
-## Current Main After QSA 0.1.7
+## What Changed in QSA 0.1.8
 
-The released package remains QSA 0.1.7. Current `main` contains additional exact execution work that is being prepared for the next release.
+QSA 0.1.8 expands where exact quantum work can stay structural instead of falling back to a global exponential state representation.
+
+The release adds exact operator-space propagation, causal light-cone execution, stronger factorization safety, and native batch/parallel execution while preserving the existing QSA register as the exact general fallback.
 
 ### Exact component factorization repair
 
@@ -219,7 +221,7 @@ It can rank eligible exact engines such as:
 * `StabilizerState`
 * `PhaseGraphState`
 * `QuantumDotPocket`
-* `PauliObservable` on current `main`
+* `PauliObservable`
 
 The advisor cannot make an invalid backend eligible. For example, a non-Clifford workload cannot be routed to the stabilizer engine simply because the stabilizer engine was previously fast.
 
@@ -327,7 +329,7 @@ The plan verifies the component layout and storage mode before execution. If the
 | **0.1.5** | Added `SymmetryState`, exact amplitude classes, and Hamming-weight states. |
 | **0.1.6** | Added installable CMake packages, stronger CI, hostile-QSC testing, compatibility checks, security documentation, and release tooling. |
 | **0.1.7** | Added quantum-dot systems, structural acceleration, Bayesian compaction, representation advice, component-aware symmetry discovery, stabilizer and phase-graph backends, parallel component execution, zero-copy views, compiled diagonal plans, structured sparse kernels, and word-parallel stabilizer batches. |
-| **Current main** | Adds exact factorization repair, batch-native weighted adjoints, deterministic row-parallel execution, exact sparse Pauli observables, exact causal Pauli propagation, and Pauli-aware representation advice. |
+| **0.1.8** | Added exact factorization reconstruction, batch-native weighted adjoints, deterministic row-parallel execution, exact sparse Pauli observables, exact causal Pauli propagation, fail-closed collapse handling, and Pauli-aware representation advice. |
 
 The established QSA 0.1 interfaces remain available. New systems have been added through new methods and classes instead of replacing the original entry points.
 
@@ -418,7 +420,7 @@ These are workload-specific measurements, not one universal multiplier for every
 | Sparse Y over 262,144 support entries | up to approximately **15.4x faster** |
 | 4,096-qubit, 100,000-gate stabilizer batch | approximately **120x–138x faster** |
 | 100,000-qubit phase graph with 199,999 phase operations | approximately **4.6 ms** |
-| 18-qubit entangled exact Pauli comparison on current main | **11,265.94x local measured ratio**, error `2.65121312491e-19` |
+| 18-qubit entangled exact Pauli comparison in QSA 0.1.8 | **11,265.94x local measured ratio**, error `2.65121312491e-19` |
 | 100,000-qubit, 100,001-gate exact causal Pauli query | **0.000692 ms** after plan build, `2 / 100,001` operations visited, error `0` |
 | 65,040-row exact V10 parallel workload | approximately **2.2x–2.5x** on the measured four-core hosted runner with bitwise-identical results |
 
@@ -470,7 +472,7 @@ amplitude-classes=61
 QSA engine-memory=1,592 bytes
 ```
 
-Current-main Pauli example:
+QSA 0.1.8 Pauli example:
 
 ```text
 100,000 logical qubits
@@ -486,10 +488,10 @@ These results apply to states, circuits, and observables with the described stru
 
 ## Installation
 
-Install the latest released QSA, 0.1.7, from GitHub:
+Install the latest released QSA, 0.1.8, from GitHub:
 
 ```bash
-python -m pip install "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@v0.1.7"
+python -m pip install "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@v0.1.8"
 ```
 
 Install the current `main` branch:
@@ -687,7 +689,7 @@ The release checklist requires the default-branch `QSA Build and Test` workflow 
 
 ## Compatibility
 
-The released QSA 0.1.7 interfaces remain the compatibility baseline while current `main` adds new exact paths.
+QSA 0.1.8 preserves the established QSA 0.1 compatibility baseline while adding new exact execution paths.
 
 * Existing C++ names remain available.
 * Existing C ABI symbols remain available.
@@ -784,7 +786,7 @@ Security reports should follow [`SECURITY.md`](SECURITY.md) instead of being pos
 
 Use the DOI at the top of this README or the repository's [`CITATION.cff`](CITATION.cff) when citing Qubit State Algebra.
 
-For the latest published software release, identify the version as **QSA 0.1.7**. When reporting results from current `main`, record the exact commit SHA because `main` contains post-0.1.7 execution work.
+For results or features specific to this release, identify the software version as **QSA 0.1.8**.
 
 ---
 
