@@ -4,6 +4,10 @@
 #include <limits>
 #include <string>
 
+#if defined(__BMI2__) && (defined(__x86_64__) || defined(_M_X64))
+#include <immintrin.h>
+#endif
+
 namespace qubit {
 namespace {
 
@@ -42,6 +46,50 @@ namespace {
         factor_index |= ((union_index >> positions[local]) & 1U) << local;
     }
     return factor_index;
+}
+
+[[nodiscard]] std::size_t extract_packed_bits(
+    std::size_t value,
+    std::size_t mask) noexcept {
+#if defined(__BMI2__) && (defined(__x86_64__) || defined(_M_X64))
+    return static_cast<std::size_t>(
+        _pext_u64(static_cast<unsigned long long>(value),
+                  static_cast<unsigned long long>(mask)));
+#else
+    std::size_t result = 0U;
+    std::size_t output_bit = 1U;
+    while (mask != 0U) {
+        const std::size_t source_bit = mask & (~mask + 1U);
+        if ((value & source_bit) != 0U) {
+            result |= output_bit;
+        }
+        mask &= mask - 1U;
+        output_bit <<= 1U;
+    }
+    return result;
+#endif
+}
+
+[[nodiscard]] std::size_t deposit_packed_bits(
+    std::size_t value,
+    std::size_t mask) noexcept {
+#if defined(__BMI2__) && (defined(__x86_64__) || defined(_M_X64))
+    return static_cast<std::size_t>(
+        _pdep_u64(static_cast<unsigned long long>(value),
+                  static_cast<unsigned long long>(mask)));
+#else
+    std::size_t result = 0U;
+    std::size_t source_bit = 1U;
+    while (mask != 0U) {
+        const std::size_t target_bit = mask & (~mask + 1U);
+        if ((value & source_bit) != 0U) {
+            result |= target_bit;
+        }
+        mask &= mask - 1U;
+        source_bit <<= 1U;
+    }
+    return result;
+#endif
 }
 
 }  // namespace
@@ -353,15 +401,46 @@ TensorExpectationPlan::TensorExpectationPlan(
                 InputMap input;
                 input.node = node;
                 input.positions.reserve(scopes[node].size());
-                for (const VariableId variable : scopes[node]) {
+                bool first_reduced = true;
+                std::size_t previous_reduced = 0U;
+                input.packed = selected_union.size() <
+                                   std::numeric_limits<std::size_t>::digits &&
+                               scopes[node].size() <
+                                   std::numeric_limits<std::size_t>::digits;
+                for (std::size_t local = 0; local < scopes[node].size(); ++local) {
+                    const VariableId variable = scopes[node][local];
                     const auto position =
                         std::lower_bound(selected_union.begin(), selected_union.end(), variable);
                     if (position == selected_union.end() || *position != variable) {
                         throw QStateError(
                             "Tensor expectation input variable is missing from union");
                     }
-                    input.positions.push_back(
-                        static_cast<std::size_t>(position - selected_union.begin()));
+                    const std::size_t union_position =
+                        static_cast<std::size_t>(position - selected_union.begin());
+                    input.positions.push_back(union_position);
+                    if (union_position == step.selected_position) {
+                        if (local >= std::numeric_limits<std::size_t>::digits) {
+                            input.packed = false;
+                        } else {
+                            input.selected_mask |= std::size_t{1} << local;
+                        }
+                        continue;
+                    }
+                    const std::size_t reduced_position =
+                        union_position -
+                        static_cast<std::size_t>(union_position > step.selected_position);
+                    if (reduced_position >= std::numeric_limits<std::size_t>::digits ||
+                        local >= std::numeric_limits<std::size_t>::digits) {
+                        input.packed = false;
+                        continue;
+                    }
+                    if (!first_reduced && reduced_position <= previous_reduced) {
+                        input.packed = false;
+                    }
+                    first_reduced = false;
+                    previous_reduced = reduced_position;
+                    input.gather_mask |= std::size_t{1} << reduced_position;
+                    input.deposit_mask |= std::size_t{1} << local;
                 }
                 step.inputs.push_back(std::move(input));
                 active[node] = false;
@@ -511,21 +590,39 @@ QComplex TensorExpectationPlan::contract(
             step.selected_position == 0U
                 ? 0U
                 : (std::size_t{1} << step.selected_position) - 1U;
+        const bool all_packed = std::all_of(
+            step.inputs.begin(), step.inputs.end(),
+            [](const InputMap& input) { return input.packed; });
 
         for (std::size_t reduced_index = 0; reduced_index < output.size(); ++reduced_index) {
-            const std::size_t low = reduced_index & lower_mask;
-            const std::size_t high = reduced_index >> step.selected_position;
-            const std::size_t base_union_index =
-                low | (high << (step.selected_position + 1U));
+            std::size_t base_union_index = 0U;
+            if (!all_packed) {
+                const std::size_t low = reduced_index & lower_mask;
+                const std::size_t high = reduced_index >> step.selected_position;
+                base_union_index = low | (high << (step.selected_position + 1U));
+            }
             QComplex sum{};
             for (std::size_t selected_bit = 0; selected_bit < 2U; ++selected_bit) {
                 const std::size_t union_index =
-                    base_union_index | (selected_bit << step.selected_position);
+                    all_packed
+                        ? 0U
+                        : base_union_index | (selected_bit << step.selected_position);
                 QComplex product{1.0, 0.0};
                 for (const InputMap& input : step.inputs) {
                     const std::span<const QComplex> values =
                         node_values(term, input.node, workspace_value);
-                    const QComplex value = values[mapped_factor_index(union_index, input.positions)];
+                    std::size_t factor_index = 0U;
+                    if (input.packed) {
+                        factor_index = deposit_packed_bits(
+                            extract_packed_bits(reduced_index, input.gather_mask),
+                            input.deposit_mask);
+                        if (selected_bit != 0U) {
+                            factor_index |= input.selected_mask;
+                        }
+                    } else {
+                        factor_index = mapped_factor_index(union_index, input.positions);
+                    }
+                    const QComplex value = values[factor_index];
                     if (value.re == 0.0 && value.im == 0.0) {
                         product = {};
                         break;
