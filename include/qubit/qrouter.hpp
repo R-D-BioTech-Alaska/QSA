@@ -64,7 +64,8 @@ public:
         bool quantum_dot_declared = false,
         bool clifford_only = false,
         bool uniform_phase_graph = false,
-        std::size_t phase_graph_edges = 0U);
+        std::size_t phase_graph_edges = 0U,
+        bool stabilizer_input_certified = false);
     [[nodiscard]] static RepresentationFeatures inspect_operations(
         const QRegister& state,
         std::span<const Operation> operations,
