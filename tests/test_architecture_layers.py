@@ -27,6 +27,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qstabilizer.hpp",
     "include/qubit/qphase_graph.hpp",
     "include/qubit/qpauli.hpp",
+    "include/qubit/qtensor.hpp",
 )
 
 
