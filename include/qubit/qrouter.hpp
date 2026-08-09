@@ -1,11 +1,13 @@
 #pragma once
 
 #include "qubit/qpauli.hpp"
+#include "qubit/qplan.hpp"
 #include "qubit/qstate.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -62,6 +64,12 @@ public:
         bool clifford_only = false,
         bool uniform_phase_graph = false,
         std::size_t phase_graph_edges = 0U);
+    [[nodiscard]] static RepresentationFeatures inspect_operations(
+        const QRegister& state,
+        std::span<const Operation> operations,
+        std::uint64_t repeated_steps = 1U,
+        std::size_t exact_symmetry_classes = 0U,
+        bool quantum_dot_declared = false);
     [[nodiscard]] static RepresentationFeatures inspect_pauli(
         const QRegister& state,
         const PauliObservable& observable,
