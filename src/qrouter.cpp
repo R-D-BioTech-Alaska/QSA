@@ -24,6 +24,32 @@ void validate_config(const RepresentationAdvisorConfig& config) {
     return first * second;
 }
 
+[[nodiscard]] bool is_clifford_operation(OperationCode code) noexcept {
+    switch (code) {
+        case OperationCode::X:
+        case OperationCode::Y:
+        case OperationCode::Z:
+        case OperationCode::H:
+        case OperationCode::S:
+        case OperationCode::Sdg:
+        case OperationCode::Cnot:
+        case OperationCode::Cz:
+        case OperationCode::Swap:
+            return true;
+        case OperationCode::T:
+        case OperationCode::Tdg:
+        case OperationCode::Rx:
+        case OperationCode::Ry:
+        case OperationCode::Rz:
+        case OperationCode::BitFlipTrajectory:
+        case OperationCode::PhaseFlipTrajectory:
+        case OperationCode::DepolarizingTrajectory:
+        case OperationCode::AmplitudeDampingTrajectory:
+            return false;
+    }
+    return false;
+}
+
 }  // namespace
 
 const char* representation_name(RepresentationKind kind) noexcept {
@@ -76,6 +102,27 @@ RepresentationFeatures RepresentationAdvisor::inspect(
             std::max(features.largest_component, state.component_size(id));
         features.support_entries += state.component_nonzero_count(id);
     }
+    return features;
+}
+
+RepresentationFeatures RepresentationAdvisor::inspect_operations(
+    const QRegister& state,
+    std::span<const Operation> operations,
+    std::uint64_t repeated_steps,
+    std::size_t exact_symmetry_classes,
+    bool quantum_dot_declared) {
+    RepresentationFeatures features = inspect(
+        state,
+        repeated_steps,
+        exact_symmetry_classes,
+        quantum_dot_declared,
+        false,
+        false,
+        0U);
+    features.clifford_only = std::all_of(
+        operations.begin(), operations.end(), [](const Operation& operation) {
+            return is_clifford_operation(operation.code);
+        });
     return features;
 }
 
