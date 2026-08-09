@@ -124,6 +124,8 @@ int main() {
             "scheduler gradients differ from repeated serial adjoint");
     require(completed.route == many.route,
             "scheduler executed a different route than choose reported");
+    require(completed.estimated_workspace_bytes == workspace.estimated_bytes(),
+            "scheduler predicted workspace does not match retained workspace");
     require(workspace.successful_point_count() == point_count,
             "scheduler successful point count changed");
     require(workspace.has_last_schedule(),
@@ -135,6 +137,8 @@ int main() {
         parameters, point_count, values, gradients, workspace, nullptr);
     require(values == first_values, "scheduler values are not deterministic");
     require(gradients == first_gradients, "scheduler gradients are not deterministic");
+    require(workspace.estimated_bytes() == many.estimated_workspace_bytes,
+            "reused scheduler workspace outgrew its retained-memory certificate");
     require(workspace.successful_point_count() == 2U * point_count,
             "scheduler cumulative successful point count changed");
 
@@ -163,6 +167,26 @@ int main() {
                 "workspace budget did not exclude point parallelism");
         require(route.estimated_workspace_bytes <= budget,
                 "scheduler selected a route over the workspace budget");
+        auto constrained_workspace = constrained.workspace();
+        std::vector<QComplex> constrained_values(value_count);
+        std::vector<QComplex> constrained_gradients(reference_gradients.size());
+        qubit::ExactAdjointGradientSchedule constrained_completed;
+        constrained.value_and_gradient_batch(
+            parameters,
+            point_count,
+            constrained_values,
+            constrained_gradients,
+            constrained_workspace,
+            &constrained_completed);
+        require(constrained_values == reference_values,
+                "memory-constrained scheduler values changed");
+        require(constrained_gradients == reference_gradients,
+                "memory-constrained scheduler gradients changed");
+        require(constrained_workspace.estimated_bytes() ==
+                    constrained_completed.estimated_workspace_bytes,
+                "memory-constrained scheduler retained size changed");
+        require(constrained_workspace.estimated_bytes() <= budget,
+                "memory-constrained scheduler exceeded its hard budget");
     }
 
     {
