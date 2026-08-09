@@ -2,14 +2,22 @@
 
 ## Unreleased
 
-- Added deterministic randomized state-transition differential validation against an independent dense reference
-- Added explicit copy-on-write branch-isolation, QSC round-trip, measurement, trajectory-noise, and Pauli-read invariants
-- Added architecture-layer dependency checks so the QRegister core cannot acquire causal-runtime internals
-- Added operation-derived Clifford certification for representation routing instead of relying only on caller-supplied flags
-- Documented the core, structural, differentiation, and runtime boundaries and the acceptance gate for new specialized paths
-- Added exact bounded tensor-network circuit contraction for unitary basis-amplitude queries without constructing a global statevector
-- Added deterministic contraction-width statistics and fail-closed `max_contraction_entries` and `max_factors` resource certificates
-- Added randomized QRegister differential gates, a 100-qubit structured analytic-amplitude gate, contraction-collapse rejection, and reproducible tensor evidence
+## 0.2.0 — 2026-08-09
+
+- Added a native fused numerical layer with persistent bounded workers, deterministic reductions, specialized real/complex kernels, and runtime AVX2/FMA dispatch on supported x86 systems
+- Added reusable exact tensor contraction and Pauli-expectation plans with caller-owned workspaces and fail-closed factor/contraction resource limits
+- Added exact estimator planning with structural route selection and QRegister fallback
+- Added compile-once parameterized estimator sweeps with direct Rx/Ry/Rz tensor-source rebinding, shared parameter slots, bounded point concurrency, and transactional output staging
+- Added exact caching of observable terms proven independent of parameterized tensor sources
+- Added exact reverse-mode tensor adjoints, term-parallel and point-batch execution, bounded scheduling, and runtime-width controls
+- Added backward support-light-cone classification for exact gradients so parameter-independent terms are evaluated once and only dynamic terms enter reverse-mode execution
+- Added matched NumPy and Qiskit Aer benchmark lanes with numerical-error, route, memory, setup, and execution evidence; benchmark claims remain workload-specific
+- Added randomized structural validation, exact tensor differential gates, contraction-collapse rejection, and architecture-layer checks for the newer runtime
+- Preserved C ABI 1.5.0, QSC v1, established QSA 0.1 interfaces, and the general exact QRegister fallback
+
+## 0.1.9 — 0.2.0 bridge
+
+QSA 0.1.9 was the development bridge from the 0.1 compatibility line into the 0.2 runtime. The accepted numerical, tensor-planning, estimator, parameter-sweep, and differentiation work from that bridge is consolidated in 0.2.0 rather than maintained as a separate long-lived feature line.
 
 ## 0.1.8 — 2026-08-08
 
