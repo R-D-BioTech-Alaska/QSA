@@ -3,6 +3,7 @@
 #include "qubit/qtensor_adjoint.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -83,6 +84,10 @@ public:
               ExactAdjointGradientConfig{config.tensor, 1U}),
           config_(config),
           workspace_token_(next_workspace_token()) {
+        if (point_plan_.parameter_count() == 0U) {
+            throw QStateError(
+                "Exact adjoint gradient batch requires at least one parameterized operation");
+        }
         if (config_.point_worker_count > kMaxPointWorkers) {
             throw QStateError(
                 "Exact adjoint gradient batch point_worker_count exceeds the supported limit");
