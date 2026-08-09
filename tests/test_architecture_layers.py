@@ -21,6 +21,7 @@ FORBIDDEN_CORE_INCLUDES = (
     '"qubit/qcausal_',
     '"qubit/detail/qcausal',
     '"qubit/qbroker.hpp"',
+    '"qubit/qestimator.hpp"',
 )
 
 STRUCTURAL_FILES = (
@@ -34,6 +35,8 @@ STRUCTURAL_FILES = (
 BROKER_FILES = (
     "include/qubit/qbroker.hpp",
     "src/qbroker.cpp",
+    "include/qubit/qestimator.hpp",
+    "src/qestimator.cpp",
 )
 
 
@@ -55,11 +58,14 @@ def main() -> None:
         assert '"qubit/qbroker.hpp"' not in text, (
             f"structural layer {path} depends on the execution broker"
         )
+        assert '"qubit/qestimator.hpp"' not in text, (
+            f"structural layer {path} depends on the estimator"
+        )
 
     for path in BROKER_FILES:
         text = read(path)
         assert '"qubit/detail/qcausal' not in text, (
-            f"execution broker {path} depends on causal runtime internals"
+            f"execution layer {path} depends on causal runtime internals"
         )
 
     cmake = read("CMakeLists.txt")
@@ -69,6 +75,7 @@ def main() -> None:
     public_state = read("include/qubit/qstate.hpp")
     assert "Causal" not in public_state, "QRegister core surface contains causal runtime types"
     assert "ExactExecutionBroker" not in public_state, "QRegister core surface contains broker types"
+    assert "ExactEstimator" not in public_state, "QRegister core surface contains estimator types"
 
     print("architecture layer tests passed")
 
