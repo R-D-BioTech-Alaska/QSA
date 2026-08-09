@@ -20,6 +20,7 @@ FORBIDDEN_CORE_INCLUDES = (
     '"qubit/qcausal',
     '"qubit/qcausal_',
     '"qubit/detail/qcausal',
+    '"qubit/qbroker.hpp"',
 )
 
 STRUCTURAL_FILES = (
@@ -28,6 +29,11 @@ STRUCTURAL_FILES = (
     "include/qubit/qphase_graph.hpp",
     "include/qubit/qpauli.hpp",
     "include/qubit/qtensor.hpp",
+)
+
+BROKER_FILES = (
+    "include/qubit/qbroker.hpp",
+    "src/qbroker.cpp",
 )
 
 
@@ -39,12 +45,21 @@ def main() -> None:
     for path in CORE_FILES:
         text = read(path)
         for token in FORBIDDEN_CORE_INCLUDES:
-            assert token not in text, f"core layer {path} depends on causal runtime through {token}"
+            assert token not in text, f"core layer {path} depends on higher-level runtime through {token}"
 
     for path in STRUCTURAL_FILES:
         text = read(path)
         assert '"qubit/detail/qcausal' not in text, (
             f"structural layer {path} depends on causal runtime internals"
+        )
+        assert '"qubit/qbroker.hpp"' not in text, (
+            f"structural layer {path} depends on the execution broker"
+        )
+
+    for path in BROKER_FILES:
+        text = read(path)
+        assert '"qubit/detail/qcausal' not in text, (
+            f"execution broker {path} depends on causal runtime internals"
         )
 
     cmake = read("CMakeLists.txt")
@@ -53,6 +68,7 @@ def main() -> None:
 
     public_state = read("include/qubit/qstate.hpp")
     assert "Causal" not in public_state, "QRegister core surface contains causal runtime types"
+    assert "ExactExecutionBroker" not in public_state, "QRegister core surface contains broker types"
 
     print("architecture layer tests passed")
 

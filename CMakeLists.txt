@@ -38,6 +38,7 @@ add_library(qstate_core STATIC
     src/qpauli.cpp
     src/qpauli_causal.cpp
     src/qtensor.cpp
+    src/qbroker.cpp
 )
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
@@ -190,6 +191,10 @@ if(QSTATE_BUILD_TESTS)
     add_executable(qstate_tensor_network_tests tests/test_tensor_network.cpp)
     target_link_libraries(qstate_tensor_network_tests PRIVATE qstate_core)
     add_test(NAME qstate_tensor_network_tests COMMAND qstate_tensor_network_tests)
+
+    add_executable(qstate_execution_broker_tests tests/test_execution_broker.cpp)
+    target_link_libraries(qstate_execution_broker_tests PRIVATE qstate_core)
+    add_test(NAME qstate_execution_broker_tests COMMAND qstate_execution_broker_tests)
 
     add_executable(qstate_causal_runtime_tests tests/test_qcausal.cpp)
     target_link_libraries(qstate_causal_runtime_tests PRIVATE qstate_core)

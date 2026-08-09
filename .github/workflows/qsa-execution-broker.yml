@@ -1,0 +1,35 @@
+name: QSA Exact Execution Broker
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qbroker.hpp"
+      - "src/qbroker.cpp"
+      - "tests/test_execution_broker.cpp"
+      - "tests/test_architecture_layers.py"
+      - "CMakeLists.txt"
+      - ".github/workflows/qsa-execution-broker.yml"
+  workflow_dispatch:
+
+jobs:
+  exact-broker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DQSTATE_BUILD_EXAMPLES=OFF -DQSTATE_BUILD_BENCHMARKS=OFF
+      - name: Build broker and inherited exact routes
+        run: >-
+          cmake --build build --config Release --parallel 2
+          --target qstate_execution_broker_tests qstate_tensor_network_tests qstate_pauli_propagation_tests
+      - name: Run broker gates
+        run: ./build/qstate_execution_broker_tests
+      - name: Run tensor exactness gates
+        run: ./build/qstate_tensor_network_tests
+      - name: Run Pauli exactness gates
+        run: ./build/qstate_pauli_propagation_tests
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py

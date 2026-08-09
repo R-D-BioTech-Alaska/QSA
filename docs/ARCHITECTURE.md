@@ -33,7 +33,7 @@ Structural engines exploit a proof or a bounded mathematical variable:
 
 A structural route is eligible only while its governing structure is valid. If support, term count, component closure, contraction width, or another controlling quantity grows beyond its configured bound, the route must reject or return to an exact general path. It must not approximate silently.
 
-`RepresentationAdvisor::inspect_operations()` derives Clifford eligibility from the actual operation list. Callers do not need to assert that property manually. Existing explicit feature inspection remains available for compatibility where an external subsystem already owns a stronger certificate.
+`RepresentationAdvisor::inspect_operations()` derives Clifford eligibility from the actual operation list. Existing explicit feature inspection remains available for compatibility where an external subsystem already owns a stronger certificate.
 
 ### Exact tensor-network contraction
 
@@ -41,7 +41,21 @@ A structural route is eligible only while its governing structure is valid. If s
 
 The controlling structural resource is the largest binary factor union encountered during contraction. `max_contraction_entries` is a hard bound on that intermediate work. If the requested contraction would exceed the bound, the query throws instead of truncating a bond or approximating an amplitude.
 
-The first tensor route supports exact unitary circuit amplitudes. It intentionally does not accept trajectory-noise operations, automatically convert arbitrary QRegister state, or replace QRegister. Automatic migration requires a separate exact eligibility and reconstruction certificate.
+The first tensor route supports exact unitary circuit amplitudes. It intentionally does not accept trajectory-noise operations, automatically convert arbitrary QRegister state, or replace QRegister. Arbitrary state migration requires its own exact eligibility and reconstruction certificate.
+
+## Exact execution broker
+
+`ExactExecutionBroker` is an execution dispatcher above the exact primitives. It does not own a new state representation and it does not mutate a representation in place.
+
+For Pauli expectations, the broker first attempts exact causal backward propagation. If operator growth, trajectory semantics, or another Pauli contract rejects that route, the broker executes the original operations on a copied `QRegister` and evaluates the same observable there.
+
+For basis probabilities from |0>, the broker first attempts exact bounded tensor contraction and takes the norm squared of the requested amplitude. If the contraction certificate fails or the circuit is unsupported by the tensor route, the broker executes the original operations on `QRegister` and evaluates the same basis probability there.
+
+The automatic tensor surface intentionally exposes basis probability rather than raw complex amplitude. QRegister and a circuit tensor network may use different global-phase gauges while representing the same physical pure state; probability is gauge invariant and therefore remains route independent.
+
+Every result reports the route that actually produced it. Specialized-route rejection is preserved as a fallback reason so an exact fallback is auditable rather than silent.
+
+The broker therefore automates exact query routing without pretending that arbitrary QRegister states can already migrate losslessly among every backend. A future state-migration broker must prove its input-state and reconstruction certificates separately.
 
 ## Differentiation
 
@@ -85,6 +99,8 @@ Representation and storage changes are tested against the same invariants:
 
 The tensor backend has a separate bounded-system differential gate against QRegister, a wide structured circuit with an analytic amplitude check, deterministic resource statistics, and an explicit contraction-limit rejection case.
 
+The execution broker has explicit collapse gates requiring both Pauli term-growth and tensor contraction-width failures to return the same exact result through QRegister.
+
 ## Review gate for new specialized paths
 
 A new exact backend or fast path should include all of the following before integration:
@@ -101,4 +117,4 @@ Performance evidence cannot replace an exactness gate.
 
 ## Next structural expansion
 
-The tensor-network route closes the first general bounded-entanglement execution gap without making arbitrary state migration automatic. The next structural step is a certified representation broker and, where useful, persistent tensor forms such as Schmidt trees or matrix-product states. Those paths must preserve the same fail-closed rule when bond or contraction width ceases to be bounded.
+The tensor-network route and exact execution broker close two major gaps: general bounded-entanglement query execution and automatic exact fallback. The next structural step is persistent tensor forms such as Schmidt trees or matrix-product states, followed by certified state migration only where an exact reconstruction or state-family proof exists. Those paths must preserve the same fail-closed rule when bond or contraction width ceases to be bounded.
