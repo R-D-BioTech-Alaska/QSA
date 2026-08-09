@@ -1,0 +1,45 @@
+name: QSA Adjoint Causal Evidence
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-adjoint-causal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  adjoint-causal-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure exact runtime
+        run: >-
+          cmake -S . -B build-causal-adjoint -DCMAKE_BUILD_TYPE=Release
+          -DQSTATE_BUILD_TESTS=OFF
+          -DQSTATE_BUILD_EXAMPLES=OFF
+          -DQSTATE_BUILD_BENCHMARKS=OFF
+          -DQSTATE_BUILD_PYTHON_TESTS=OFF
+          -DQSTATE_NATIVE_ARCH=ON
+      - name: Build exact runtime
+        run: >-
+          cmake --build build-causal-adjoint --config Release --parallel
+          --target qstate_core
+      - name: Build causal adjoint evidence
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude tests/test_tensor_adjoint_causal.cpp build-causal-adjoint/libqstate_core.a -pthread -o build-causal-adjoint/qstate_tensor_adjoint_causal_test
+          c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude benchmarks/tensor_adjoint_causal.cpp build-causal-adjoint/libqstate_core.a -pthread -o build-causal-adjoint/qstate_tensor_adjoint_causal_benchmark
+      - name: Test exact causal adjoint
+        run: ./build-causal-adjoint/qstate_tensor_adjoint_causal_test
+      - name: Benchmark exact causal adjoint
+        run: |
+          set -o pipefail
+          ./build-causal-adjoint/qstate_tensor_adjoint_causal_benchmark | tee causal-adjoint.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-adjoint-causal-evidence
+          path: causal-adjoint.txt
