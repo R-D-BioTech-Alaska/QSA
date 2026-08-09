@@ -4,6 +4,7 @@
 #include <atomic>
 #include <exception>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -256,27 +257,57 @@ ExactEstimatorBatchPlan::ExactEstimatorBatchPlan(
             lane_observables[lane].push_back(observables[index]);
         }
 
+        std::vector<std::optional<TensorExpectationPlan>> compiled(workers);
+        std::vector<std::exception_ptr> compile_errors(workers);
+        const auto compile_lane = [&](std::size_t lane) {
+            try {
+                compiled[lane].emplace(
+                    *circuit.tensor_,
+                    std::span<const PauliObservable>(
+                        lane_observables[lane].data(), lane_observables[lane].size()));
+            } catch (...) {
+                compile_errors[lane] = std::current_exception();
+            }
+        };
+
+        std::vector<std::jthread> threads;
+        threads.reserve(workers > 0U ? workers - 1U : 0U);
+        for (std::size_t lane = 1U; lane < workers; ++lane) {
+            threads.emplace_back(compile_lane, lane);
+        }
+        compile_lane(0U);
+        for (std::jthread& thread : threads) {
+            thread.join();
+        }
+
         std::vector<std::size_t> remaining;
         tensor_plans_.reserve(workers);
         tensor_indices_.reserve(workers);
         for (std::size_t lane = 0; lane < workers; ++lane) {
-            try {
-                TensorExpectationPlan plan(
-                    *circuit.tensor_,
-                    std::span<const PauliObservable>(
-                        lane_observables[lane].data(), lane_observables[lane].size()));
-                for (const std::size_t index : lane_indices[lane]) {
-                    results_[index].route = ExactExecutionRoute::TensorNetwork;
-                    results_[index].tensor_stats = plan.stats();
-                }
-                tensor_plans_.push_back(std::move(plan));
-                tensor_indices_.push_back(std::move(lane_indices[lane]));
-            } catch (const QStateError& error) {
-                for (const std::size_t index : lane_indices[lane]) {
-                    append_failure(results_[index].fallback_reason, "TensorNetwork", error.what());
-                    remaining.push_back(index);
+            if (compile_errors[lane] != nullptr) {
+                try {
+                    std::rethrow_exception(compile_errors[lane]);
+                } catch (const QStateError& error) {
+                    for (const std::size_t index : lane_indices[lane]) {
+                        append_failure(
+                            results_[index].fallback_reason,
+                            "TensorNetwork",
+                            error.what());
+                        remaining.push_back(index);
+                    }
+                    continue;
                 }
             }
+            if (!compiled[lane].has_value()) {
+                throw QStateError("Exact estimator tensor lane did not produce a plan");
+            }
+            TensorExpectationPlan plan = std::move(*compiled[lane]);
+            for (const std::size_t index : lane_indices[lane]) {
+                results_[index].route = ExactExecutionRoute::TensorNetwork;
+                results_[index].tensor_stats = plan.stats();
+            }
+            tensor_plans_.push_back(std::move(plan));
+            tensor_indices_.push_back(std::move(lane_indices[lane]));
         }
         tensor_candidates = std::move(remaining);
     } else if (!tensor_candidates.empty()) {
