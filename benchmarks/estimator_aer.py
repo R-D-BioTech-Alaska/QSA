@@ -75,6 +75,23 @@ def attach_observables(
     return measured
 
 
+def compile_circuit(
+    circuit: QuantumCircuit,
+    backend: AerSimulator,
+) -> tuple[str, QuantumCircuit]:
+    backend_width = backend.target.num_qubits
+    if backend_width is None or circuit.num_qubits <= backend_width:
+        return "backend_target", transpile(circuit, backend, optimization_level=0)
+    return (
+        "basis_gates_only",
+        transpile(
+            circuit,
+            basis_gates=backend.configuration().basis_gates,
+            optimization_level=0,
+        ),
+    )
+
+
 def execute(backend: AerSimulator, circuit: QuantumCircuit):
     return backend.run(circuit).result()
 
@@ -113,9 +130,8 @@ def run_case(
         )
     backend = AerSimulator(**options)
 
-    transpile_ms, compiled = timed(
-        lambda: transpile(measured, backend, optimization_level=0)
-    )
+    transpile_ms, compiled_pair = timed(lambda: compile_circuit(measured, backend))
+    transpile_mode, compiled = compiled_pair
 
     run_times: list[float] = []
     result = None
@@ -135,6 +151,8 @@ def run_case(
     print(f"{prefix}_qubits={qubits}")
     print(f"{prefix}_operations={len(circuit.data)}")
     print(f"{prefix}_queries={query_count}")
+    print(f"{prefix}_backend_target_qubits={backend.target.num_qubits}")
+    print(f"{prefix}_transpile_mode={transpile_mode}")
     print(f"{prefix}_circuit_build_ms={build_ms:.12g}")
     print(f"{prefix}_observable_attach_ms={attach_ms:.12g}")
     print(f"{prefix}_transpile_ms={transpile_ms:.12g}")
