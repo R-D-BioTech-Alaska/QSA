@@ -32,6 +32,9 @@ struct ExactAdjointGradientStats {
     std::size_t source_derivative_bindings{0U};
     std::size_t parameter_shift_equivalent_evaluations{0U};
     std::size_t worker_count{1U};
+    std::uint64_t estimated_work{0U};
+    std::uint64_t balanced_peak_estimated_work{0U};
+    std::uint64_t round_robin_peak_estimated_work{0U};
     TensorContractionStats tensor{};
 };
 
@@ -215,7 +218,13 @@ public:
                 if (term.identity) {
                     identity_values_[observable_index] += term.coefficient;
                 } else {
-                    jobs_.push_back({observable_index, term_index});
+                    jobs_.push_back({
+                        observable_index,
+                        term_index,
+                        estimate_term_work(
+                            term,
+                            term_derivative_bindings_[term_index].size()),
+                    });
                 }
             }
         }
@@ -228,6 +237,7 @@ public:
         }
         const std::size_t job_count = std::max<std::size_t>(1U, jobs_.size());
         worker_count_ = std::max<std::size_t>(1U, std::min(requested, job_count));
+        build_lane_schedule();
     }
 
     [[nodiscard]] ExactAdjointGradientWorkspace workspace() const {
@@ -287,9 +297,7 @@ public:
         std::vector<std::exception_ptr> errors(worker_count_);
         const auto worker = [&](std::size_t lane) {
             try {
-                for (std::size_t job_index = lane;
-                     job_index < jobs_.size();
-                     job_index += worker_count_) {
+                for (const std::size_t job_index : lane_jobs_[lane]) {
                     const TermJob job = jobs_[job_index];
                     const auto& term = plan.terms_[job.term_index];
                     const QComplex raw_value = forward_and_reverse(
@@ -433,6 +441,9 @@ public:
         result.parameter_shift_equivalent_evaluations =
             1U + 2U * occurrences_.size();
         result.worker_count = worker_count_;
+        result.estimated_work = estimated_work_;
+        result.balanced_peak_estimated_work = balanced_peak_estimated_work_;
+        result.round_robin_peak_estimated_work = round_robin_peak_estimated_work_;
         result.tensor = prototype_->stats();
         return result;
     }
@@ -450,7 +461,9 @@ public:
                             term_derivative_bindings_.capacity() *
                                 sizeof(std::vector<DerivativeBinding>) +
                             identity_values_.capacity() * sizeof(QComplex) +
-                            jobs_.capacity() * sizeof(TermJob);
+                            jobs_.capacity() * sizeof(TermJob) +
+                            lane_jobs_.capacity() * sizeof(std::vector<std::size_t>) +
+                            lane_estimated_work_.capacity() * sizeof(std::uint64_t);
         if (prototype_.has_value()) {
             bytes += prototype_->estimated_bytes();
         }
@@ -465,6 +478,9 @@ public:
         }
         for (const auto& list : term_derivative_bindings_) {
             bytes += list.capacity() * sizeof(DerivativeBinding);
+        }
+        for (const auto& lane : lane_jobs_) {
+            bytes += lane.capacity() * sizeof(std::size_t);
         }
         return bytes;
     }
@@ -496,6 +512,7 @@ private:
     struct TermJob {
         std::size_t observable_index{0U};
         std::size_t term_index{0U};
+        std::uint64_t estimated_work{1U};
     };
 
     static constexpr std::size_t kMaxWorkers = 32U;
@@ -521,10 +538,126 @@ private:
     std::vector<QComplex> identity_values_{};
     std::vector<TermJob> jobs_{};
     std::size_t worker_count_{1U};
+    std::vector<std::vector<std::size_t>> lane_jobs_{};
+    std::vector<std::uint64_t> lane_estimated_work_{};
+    std::uint64_t estimated_work_{0U};
+    std::uint64_t balanced_peak_estimated_work_{0U};
+    std::uint64_t round_robin_peak_estimated_work_{0U};
 
     [[nodiscard]] static std::uint64_t next_workspace_token() noexcept {
         static std::atomic<std::uint64_t> next{1U};
         return next.fetch_add(1U, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] static std::uint64_t saturating_add(
+        std::uint64_t first,
+        std::uint64_t second) noexcept {
+        if (second > std::numeric_limits<std::uint64_t>::max() - first) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+        return first + second;
+    }
+
+    [[nodiscard]] static std::uint64_t saturating_multiply(
+        std::uint64_t first,
+        std::uint64_t second) noexcept {
+        if (first == 0U || second == 0U) {
+            return 0U;
+        }
+        if (first > std::numeric_limits<std::uint64_t>::max() / second) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+        return first * second;
+    }
+
+    [[nodiscard]] static std::uint64_t estimate_term_work(
+        const TensorExpectationPlan::TermPlan& term,
+        std::size_t derivative_bindings) noexcept {
+        std::uint64_t work = 0U;
+        for (const auto& step : term.steps) {
+            const std::uint64_t entries = static_cast<std::uint64_t>(
+                std::max<std::size_t>(1U, step.output_entries));
+            const std::uint64_t inputs = static_cast<std::uint64_t>(
+                std::max<std::size_t>(1U, step.inputs.size()));
+            const std::uint64_t per_entry = saturating_add(
+                saturating_multiply(6U, inputs), 4U);
+            work = saturating_add(
+                work,
+                saturating_multiply(entries, per_entry));
+        }
+        work = saturating_add(
+            work,
+            saturating_multiply(
+                static_cast<std::uint64_t>(derivative_bindings), 16U));
+        return std::max<std::uint64_t>(1U, work);
+    }
+
+    void build_lane_schedule() {
+        lane_jobs_.assign(worker_count_, {});
+        lane_estimated_work_.assign(worker_count_, 0U);
+        estimated_work_ = 0U;
+        balanced_peak_estimated_work_ = 0U;
+        round_robin_peak_estimated_work_ = 0U;
+
+        std::vector<std::uint64_t> round_robin(worker_count_, 0U);
+        for (std::size_t job_index = 0U; job_index < jobs_.size(); ++job_index) {
+            estimated_work_ = saturating_add(
+                estimated_work_, jobs_[job_index].estimated_work);
+            const std::size_t lane = job_index % worker_count_;
+            round_robin[lane] = saturating_add(
+                round_robin[lane], jobs_[job_index].estimated_work);
+        }
+        for (const std::uint64_t lane_work : round_robin) {
+            round_robin_peak_estimated_work_ =
+                std::max(round_robin_peak_estimated_work_, lane_work);
+        }
+
+        if (worker_count_ == 1U) {
+            lane_jobs_.front().reserve(jobs_.size());
+            for (std::size_t job_index = 0U; job_index < jobs_.size(); ++job_index) {
+                lane_jobs_.front().push_back(job_index);
+            }
+            lane_estimated_work_.front() = estimated_work_;
+            balanced_peak_estimated_work_ = estimated_work_;
+            return;
+        }
+
+        std::vector<std::size_t> order(jobs_.size());
+        for (std::size_t index = 0U; index < order.size(); ++index) {
+            order[index] = index;
+        }
+        std::stable_sort(
+            order.begin(), order.end(),
+            [&](std::size_t first, std::size_t second) {
+                if (jobs_[first].estimated_work != jobs_[second].estimated_work) {
+                    return jobs_[first].estimated_work > jobs_[second].estimated_work;
+                }
+                if (jobs_[first].observable_index != jobs_[second].observable_index) {
+                    return jobs_[first].observable_index < jobs_[second].observable_index;
+                }
+                return jobs_[first].term_index < jobs_[second].term_index;
+            });
+
+        for (const std::size_t job_index : order) {
+            std::size_t selected_lane = 0U;
+            for (std::size_t lane = 1U; lane < worker_count_; ++lane) {
+                if (lane_estimated_work_[lane] <
+                    lane_estimated_work_[selected_lane]) {
+                    selected_lane = lane;
+                }
+            }
+            lane_jobs_[selected_lane].push_back(job_index);
+            lane_estimated_work_[selected_lane] = saturating_add(
+                lane_estimated_work_[selected_lane],
+                jobs_[job_index].estimated_work);
+        }
+        for (const std::uint64_t lane_work : lane_estimated_work_) {
+            balanced_peak_estimated_work_ =
+                std::max(balanced_peak_estimated_work_, lane_work);
+        }
+        if (balanced_peak_estimated_work_ > round_robin_peak_estimated_work_) {
+            throw QStateError("Exact adjoint gradient load balancing regressed estimated peak work");
+        }
     }
 
     void validate_parameters(std::span<const double> parameters) const {
