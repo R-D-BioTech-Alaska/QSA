@@ -35,6 +35,8 @@ The repository contains two related systems:
 
 QSA is being built as the native state engine for QELM, Qubit, and distributed quantum-channel work.
 
+The long-term purpose is straightforward: move as much useful quantum computation as possible onto ordinary computers by exploiting exact mathematical structure before resorting to a global exponential representation. Physical quantum hardware remains useful, but QSA is designed so access to large parts of quantum computation does not have to depend on owning or renting a QPU.
+
 ---
 
 ## The Main Idea
@@ -54,6 +56,8 @@ A QSA register is stored as a collection of state components:
 * Qubits can separate again when the state becomes factorable.
 * Noise is handled through pure-state trajectories instead of a global density matrix.
 * Specialized exact representations are used when stronger mathematical structure exists.
+* Local observables can move backward through a circuit instead of forcing the complete state forward.
+* Exact causal plans can skip gates outside an observable's backward light cone.
 
 Examples:
 
@@ -62,20 +66,106 @@ Examples:
 * A 50-qubit GHZ state remains a sparse component with two nonzero amplitudes.
 * A 60-qubit permutation-symmetric state can remain 61 Hamming-weight classes.
 * A large Clifford circuit can remain an exact stabilizer tableau instead of becoming a statevector.
+* A local Pauli observable can remain a small exact operator even when the logical register is extremely large.
 
-QSA avoids exponential allocation when the state has exploitable structure. It does not claim that every possible quantum state can be compressed.
+QSA avoids exponential allocation when the state, circuit, or requested observable has exploitable structure. It does not claim that every possible quantum state can be compressed.
+
+---
+
+## Current Main After QSA 0.1.7
+
+The released package remains QSA 0.1.7. Current `main` contains additional exact execution work that is being prepared for the next release.
+
+### Exact component factorization repair
+
+Component splitting now requires reconstruction of the original amplitudes before a candidate factorization is accepted.
+
+A reduced-density determinant or numerical tolerance can be useful as a candidate test, but it is not enough to prove exact separability. The current path reconstructs the state and rejects the split if the amplitudes do not agree within the engine's exactness contract.
+
+This preserves weak entanglement that would otherwise be at risk of being incorrectly removed by an overly permissive factorization threshold.
+
+### Batch-native exact weighted adjoints
+
+QSA now contains a native exact batch path for the weighted-adjoint workload used by the QELM Tripair training lane.
+
+The path keeps the same mathematical operation while reducing bridge and per-sample overhead:
+
+* contiguous batch input
+* one native primal pass per step
+* one native reverse pass per step
+* exact parameter gradients
+* direct NumPy pointer access at the Python boundary
+* zero-copy CPU Torch/NumPy handoff where the caller already owns compatible storage
+
+The existing scalar and general QRegister paths remain available.
+
+### Deterministic row-parallel exact execution
+
+Large independent row batches can be partitioned across CPU workers without changing per-row arithmetic.
+
+The row-parallel path uses deterministic contiguous partitions and preserves the serial result exactly. The validated 65,040-row workload produced bitwise-identical forward values, reverse values, and gradients while keeping the immutable root state unchanged.
+
+Parallel execution remains bounded and can be forced back to one worker when serial behavior is required.
+
+### Exact sparse Pauli observables
+
+QSA now includes `PauliObservable`, an exact sparse Heisenberg-picture observable engine.
+
+Instead of always evolving an entire state forward, QSA can propagate a requested Pauli observable backward through a supported circuit.
+
+The current exact route supports:
+
+* X, Y, and Z
+* H
+* S and S-dagger
+* T and T-dagger
+* Rx, Ry, and Rz
+* CNOT
+* CZ
+* SWAP
+
+Non-Clifford rotations may expand one Pauli word into several exact terms. Identical words are merged exactly. No approximate term pruning is used.
+
+A configurable exact term limit is fail-closed: if the operator becomes too large for the sparse route, QSA rejects that route instead of silently changing the mathematics.
+
+### Exact causal Pauli propagation
+
+`PauliPropagationPlan` adds circuit causality to sparse Pauli propagation.
+
+The circuit is indexed by logical qubit once. A query then walks backward only through operations that touch the current observable support.
+
+If an operation expands the support, the new qubits become part of the light cone. If the support stays local, unrelated gates are never visited.
+
+The plan reports:
+
+* source operation count
+* visited operation count
+* peak Pauli term count
+* peak support width
+* indexed references
+* estimated plan memory
+
+Trajectory-noise circuits are rejected by this exact route rather than partially interpreted.
+
+The causal path is not assumed to remain cheap. Adversarial tests force the light cone to expand across a complete CNOT chain and verify that every mathematically relevant gate is then visited.
+
+### Pauli-aware representation advice
+
+The representation advisor can now rank an exact Pauli route when eligibility is derived from a real validated `PauliObservable` with matching register width.
+
+Historical timing evidence may rank eligible representations, but it still cannot make an invalid representation eligible.
 
 ---
 
 ## What Changed in QSA 0.1.7
 
-QSA 0.1.7 is a major expansion of the engine.
+QSA 0.1.7 was a major expansion of the engine.
 
-The original QSA register remains in place, but it is now supported by several additional exact representations and execution systems.
+The original QSA register remains in place, but it is supported by several additional exact representations and execution systems.
 
 ### Exact structural gate acceleration
 
-QSA can now avoid merging disconnected components when the gate semantics prove that no entanglement can be created.
+QSA can avoid merging disconnected components when the gate semantics prove that no entanglement can be created.
 
 This includes exact fast paths for:
 
@@ -91,7 +181,7 @@ In a measured test involving two dense 12-qubit components, this changed the ope
 
 ### Native quantum-dot systems
 
-QSA now includes a native quantum-dot pocket engine.
+QSA includes a native quantum-dot pocket engine.
 
 Each dot is represented as a four-level local system using two logical qubits. The engine supports:
 
@@ -120,7 +210,7 @@ Measured improvements on persistent dense entanglement were approximately 4.3x t
 
 ### Exact representation advisor
 
-QSA now has a representation advisor for higher-level schedulers.
+QSA has a representation advisor for higher-level schedulers.
 
 It can rank eligible exact engines such as:
 
@@ -129,12 +219,13 @@ It can rank eligible exact engines such as:
 * `StabilizerState`
 * `PhaseGraphState`
 * `QuantumDotPocket`
+* `PauliObservable` on current `main`
 
 The advisor cannot make an invalid backend eligible. For example, a non-Clifford workload cannot be routed to the stabilizer engine simply because the stabilizer engine was previously fast.
 
 ### Component-aware symmetry discovery
 
-Symmetry discovery no longer has to begin by materializing the entire register.
+Symmetry discovery does not have to begin by materializing the entire register.
 
 QSA can inspect independent components directly and construct exact amplitude classes from their combined structure.
 
@@ -142,7 +233,7 @@ This allows some large structured states to be compressed without first paying t
 
 ### Exact stabilizer backend
 
-QSA now includes a packed binary symplectic tableau for Clifford circuits.
+QSA includes a packed binary symplectic tableau for Clifford circuits.
 
 Supported operations include:
 
@@ -161,7 +252,7 @@ A 4,096-qubit, 100,000-gate Clifford workload can be represented using only a fe
 
 ### Word-parallel stabilizer batches
 
-Long Clifford circuits can now be executed through `StabilizerState::apply_batch()`.
+Long Clifford circuits can be executed through `StabilizerState::apply_batch()`.
 
 The batch engine:
 
@@ -176,7 +267,7 @@ For a 4,096-qubit, 100,000-gate workload, the batch path measured roughly 120x t
 
 ### Exact phase-graph states
 
-QSA now includes a compact phase-graph backend for supported commuting phase circuits.
+QSA includes a compact phase-graph backend for supported commuting phase circuits.
 
 It stores local phases, edge phases, and global phase structure instead of allocating every basis amplitude.
 
@@ -184,7 +275,7 @@ A measured 100,000-qubit phase graph with 199,999 phase operations completed in 
 
 ### Dependency-aware execution
 
-The operation planner can now cancel or combine exact operations even when unrelated operations appear between them.
+The operation planner can cancel or combine exact operations even when unrelated operations appear between them.
 
 Examples include:
 
@@ -227,15 +318,16 @@ The plan verifies the component layout and storage mode before execution. If the
 
 ## Release History
 
-| Release   | Main work                                                                                                                                                                                                                                                                                                         |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **0.1.1** | Fixed the C++, C, Python, and QSC v1 compatibility surface. Added batch execution and QSC caching.                                                                                                                                                                                                                |
-| **0.1.2** | Reworked component storage and added specialized sparse and dense gate kernels.                                                                                                                                                                                                                                   |
-| **0.1.3** | Added compiled plans, gate fusion, parameter binding, parallel register batches, and bulk readout.                                                                                                                                                                                                                |
-| **0.1.4** | Added exact Grover operations and compressed Grover evolution.                                                                                                                                                                                                                                                    |
-| **0.1.5** | Added `SymmetryState`, exact amplitude classes, and Hamming-weight states.                                                                                                                                                                                                                                        |
-| **0.1.6** | Added installable CMake packages, stronger CI, hostile-QSC testing, compatibility checks, security documentation, and release tooling.                                                                                                                                                                            |
+| Release | Main work |
+| ------- | --------- |
+| **0.1.1** | Fixed the C++, C, Python, and QSC v1 compatibility surface. Added batch execution and QSC caching. |
+| **0.1.2** | Reworked component storage and added specialized sparse and dense gate kernels. |
+| **0.1.3** | Added compiled plans, gate fusion, parameter binding, parallel register batches, and bulk readout. |
+| **0.1.4** | Added exact Grover operations and compressed Grover evolution. |
+| **0.1.5** | Added `SymmetryState`, exact amplitude classes, and Hamming-weight states. |
+| **0.1.6** | Added installable CMake packages, stronger CI, hostile-QSC testing, compatibility checks, security documentation, and release tooling. |
 | **0.1.7** | Added quantum-dot systems, structural acceleration, Bayesian compaction, representation advice, component-aware symmetry discovery, stabilizer and phase-graph backends, parallel component execution, zero-copy views, compiled diagonal plans, structured sparse kernels, and word-parallel stabilizer batches. |
+| **Current main** | Adds exact factorization repair, batch-native weighted adjoints, deterministic row-parallel execution, exact sparse Pauli observables, exact causal Pauli propagation, and Pauli-aware representation advice. |
 
 The established QSA 0.1 interfaces remain available. New systems have been added through new methods and classes instead of replacing the original entry points.
 
@@ -243,7 +335,7 @@ The established QSA 0.1 interfaces remain available. New systems have been added
 
 ## Current Capabilities
 
-### State systems
+### State and operator systems
 
 * Geometric single-qubit Bloch cells
 * Sparse and dense local amplitude components
@@ -252,6 +344,8 @@ The established QSA 0.1 interfaces remain available. New systems have been added
 * Exact stabilizer tableaus
 * Exact phase-graph states
 * Native quantum-dot pockets
+* Exact sparse Pauli observables
+* Exact causal Pauli propagation plans
 * QSC binary state storage
 
 ### Gates and evolution
@@ -265,6 +359,7 @@ The established QSA 0.1 interfaces remain available. New systems have been added
 * Compiled diagonal plans
 * Parameterized plans
 * Pure-state noise trajectories
+* Exact backward Pauli propagation for the supported Pauli gate family
 
 ### Measurement and readout
 
@@ -274,6 +369,7 @@ The established QSA 0.1 interfaces remain available. New systems have been added
 * Bulk probability readout
 * Zero-copy component views
 * Reusable output buffers
+* Exact Pauli expectation values over existing QRegister components
 
 ### Execution
 
@@ -284,8 +380,11 @@ The established QSA 0.1 interfaces remain available. New systems have been added
 * Parallel independent registers
 * Parallel independent components
 * Stabilizer batch execution
+* Batch-native exact weighted adjoints
+* Deterministic row-parallel exact execution
 * Adaptive compaction
 * Representation advice
+* Exact observable light-cone execution
 * Optional native CPU optimization
 
 ### Interfaces
@@ -303,26 +402,29 @@ The established QSA 0.1 interfaces remain available. New systems have been added
 
 These are workload-specific measurements, not one universal multiplier for every circuit.
 
-| Workload                                                |                                           Result |
-| ------------------------------------------------------- | -----------------------------------------------: |
-| 1,000 independent Bell pairs compared with QSA 0.1.0    |                                **32.12x faster** |
-| 20 dense CNOT gates over 65,536 amplitudes              |                               **107.18x faster** |
-| 50,000 Python gate calls through one compiled plan      |                               **629.61x faster** |
-| Compressed 16-qubit Grover search                       | **160,665.80x faster than the dense exact path** |
-| 20-qubit symmetry fast-forward                          |                **130,750.18x faster than dense** |
-| Disconnected SWAP between two dense 12-qubit components |                approximately **745,000x faster** |
-| Joint measurement of one dense 20-qubit component       |                    approximately **489x faster** |
-| Bayesian compaction on persistent entanglement          |               approximately **4.3x–5.4x faster** |
-| Component-aware 20-qubit symmetry discovery             |                  approximately **3,845x faster** |
-| 18-qubit, 800-gate stabilizer workload                  |                  approximately **1,744x faster** |
-| Sparse X over 262,144 support entries                   |             up to approximately **23.3x faster** |
-| Sparse Y over 262,144 support entries                   |             up to approximately **15.4x faster** |
-| 4,096-qubit, 100,000-gate stabilizer batch              |               approximately **120x–138x faster** |
-| 100,000-qubit phase graph with 199,999 phase operations |                         approximately **4.6 ms** |
+| Workload | Result |
+| -------- | -----: |
+| 1,000 independent Bell pairs compared with QSA 0.1.0 | **32.12x faster** |
+| 20 dense CNOT gates over 65,536 amplitudes | **107.18x faster** |
+| 50,000 Python gate calls through one compiled plan | **629.61x faster** |
+| Compressed 16-qubit Grover search | **160,665.80x faster than the dense exact path** |
+| 20-qubit symmetry fast-forward | **130,750.18x faster than dense** |
+| Disconnected SWAP between two dense 12-qubit components | approximately **745,000x faster** |
+| Joint measurement of one dense 20-qubit component | approximately **489x faster** |
+| Bayesian compaction on persistent entanglement | approximately **4.3x–5.4x faster** |
+| Component-aware 20-qubit symmetry discovery | approximately **3,845x faster** |
+| 18-qubit, 800-gate stabilizer workload | approximately **1,744x faster** |
+| Sparse X over 262,144 support entries | up to approximately **23.3x faster** |
+| Sparse Y over 262,144 support entries | up to approximately **15.4x faster** |
+| 4,096-qubit, 100,000-gate stabilizer batch | approximately **120x–138x faster** |
+| 100,000-qubit phase graph with 199,999 phase operations | approximately **4.6 ms** |
+| 18-qubit entangled exact Pauli comparison on current main | **11,265.94x local measured ratio**, error `2.65121312491e-19` |
+| 100,000-qubit, 100,001-gate exact causal Pauli query | **0.000692 ms** after plan build, `2 / 100,001` operations visited, error `0` |
+| 65,040-row exact V10 parallel workload | approximately **2.2x–2.5x** on the measured four-core hosted runner with bitwise-identical results |
 
-The largest results come from exact mathematical compression or from avoiding work that the state does not require.
+The largest results come from exact mathematical compression, operator compression, causal pruning, or avoiding work that the state does not require.
 
-A fully general dense state still requires a fully general dense representation.
+A fully general dense state still requires a fully general dense representation. A Pauli observable can also become exponentially large under adversarial non-Clifford evolution; QSA exposes that growth and rejects the bounded sparse route when its configured exact limit is crossed.
 
 Benchmark code is available in [`benchmarks/`](benchmarks/).
 
@@ -368,13 +470,23 @@ amplitude-classes=61
 QSA engine-memory=1,592 bytes
 ```
 
-These results apply to states with the described structure. They are not compression ratios for arbitrary states.
+Current-main Pauli example:
+
+```text
+100,000 logical qubits
+100,001 source operations
+exact causal operations visited=2
+peak Pauli terms=2
+peak Pauli support=1
+```
+
+These results apply to states, circuits, and observables with the described structure. They are not compression ratios for arbitrary quantum workloads.
 
 ---
 
 ## Installation
 
-Install QSA 0.1.7 from GitHub:
+Install the latest released QSA, 0.1.7, from GitHub:
 
 ```bash
 python -m pip install "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@v0.1.7"
@@ -494,7 +606,7 @@ The checksum protects against accidental corruption. It is not authentication or
 
 ## QSA, Qubit, and QELM
 
-QSA handles the mathematical state.
+QSA handles the mathematical state and exact local quantum execution.
 
 **Qubit** handles distributed nodes and temporary channel work.
 
@@ -503,7 +615,7 @@ QSA handles the mathematical state.
 ```text
 QELM Base
     |
-    | creates a state or operation plan
+    | creates a state, observable, or operation plan
     v
 Qubit Network
     |
@@ -511,25 +623,25 @@ Qubit Network
     v
 QSA
     |
-    | executes, measures, or updates the state
+    | executes, propagates, measures, or updates the state
     v
 QSC or result returned to QELM Base
 ```
 
 A Qubit node does not need QELM's complete model, long-term memory, user history, or private knowledge. It can receive a temporary mathematical state and a bounded operation plan, then return only the result or updated state.
 
-QSA supports this design by keeping independent and structured work compact.
+QSA supports this design by keeping independent, structured, and observable-local work compact.
 
 ---
 
 ## Validation
 
-QSA 0.1.7 passed the complete repository test matrix across Linux, macOS, and Windows.
+QSA is gated by the complete repository test matrix across Linux, macOS, and Windows.
 
 Validation includes:
 
-* 29 complete CTest targets
-* 14,400 randomized NumPy comparison operations
+* Native CTest targets
+* Randomized NumPy comparison operations
 * Grover and symmetry comparison tests
 * Quantum-dot differential, safety, stress, robustness, and concurrency tests
 * Structural CNOT, CZ, and SWAP tests
@@ -544,6 +656,12 @@ Validation includes:
 * Invalid-batch atomicity
 * Scratch-memory rejection
 * Concurrent independent execution
+* Exact component-factorization reconstruction checks
+* Exact weighted-adjoint and V10 row-parallel comparison gates
+* Direct QRegister versus exact sparse Pauli propagation
+* Exact full-scan versus causal Pauli propagation
+* Adversarial Pauli term-growth rejection
+* Adversarial full causal-cone expansion
 * ASan and UBSan
 * Python 3.9, 3.12, and 3.13 package tests
 * Wheel and source-distribution installation tests
@@ -563,11 +681,13 @@ Run the independent NumPy comparison with:
 python3 benchmarks/compare_numpy.py
 ```
 
+The release checklist requires the default-branch `QSA Build and Test` workflow to be green before a release tag is published.
+
 ---
 
 ## Compatibility
 
-QSA 0.1.7 keeps the established QSA 0.1 C++, C, Python, and QSC v1 interfaces in place.
+The released QSA 0.1.7 interfaces remain the compatibility baseline while current `main` adds new exact paths.
 
 * Existing C++ names remain available.
 * Existing C ABI symbols remain available.
@@ -575,7 +695,7 @@ QSA 0.1.7 keeps the established QSA 0.1 C++, C, Python, and QSC v1 interfaces in
 * Existing gate and qubit ordering remain unchanged.
 * Existing QSC v1 packets remain readable.
 * Existing scalar execution paths remain available.
-* New structured and specialized paths are additive.
+* New structured, Pauli, causal, batch, and parallel paths are additive.
 * `QSA_NATIVE_LIB` is the preferred native-library override.
 * `QUBIT_NATIVE_LIB` remains supported for older projects.
 
@@ -585,13 +705,15 @@ Separate state objects may run concurrently. Do not mutate one state object from
 
 ## Limits
 
-QSA avoids exponential allocation when a state has exploitable structure.
+QSA avoids exponential allocation when a state, circuit, or requested observable has exploitable structure.
 
-It does not make every quantum state compact.
+It does not make every quantum state or every observable compact.
 
 A fully general globally entangled state may still require exponentially many independent amplitudes. If that information is present, an exact simulator has to store it somewhere.
 
-QSA is designed to delay, localize, or avoid that cost when the mathematics permits:
+A Pauli observable under sufficiently broad non-Clifford evolution can also grow exponentially in exact term count. QSA's sparse observable route tracks that growth explicitly and fails closed when the configured bound is exceeded.
+
+QSA is designed to delay, localize, transform, or avoid exponential cost when the mathematics permits:
 
 * Independent qubits remain cells.
 * Local entanglement remains local.
@@ -599,6 +721,8 @@ QSA is designed to delay, localize, or avoid that cost when the mathematics perm
 * Equal-amplitude states can remain symmetry classes.
 * Clifford circuits can remain stabilizer tableaus.
 * Supported phase structures can remain phase graphs.
+* Local Pauli observables can remain sparse operators.
+* Causal queries can remain inside their backward light cones.
 * Quantum-dot systems can remain bounded local components.
 * Structured operations can skip unrelated components.
 * Dense storage is used only where the state requires it.
@@ -609,19 +733,23 @@ Performance should be measured on the actual workload being run.
 
 ## Next Work
 
-1. Persistent compiled stabilizer plans
-2. Automatic exact migration between QSA representations
-3. Expanded Bayesian representation routing
-4. Selective GPU execution for dense local components
-5. Explicit SIMD kernels where they provide repeatable gains
-6. Matrix-product and tensor-linked components
-7. Wider factor and separability detection
-8. Larger trajectory and mixed-state workloads
-9. QELM operation compiler and scheduler
-10. Qubit node verification and state-destruction protocol
-11. Authenticated QSC network transport
-12. Android, iOS, and WebAssembly builds
-13. Additional differential testing against independent simulators
+1. Automatic exact migration between QSA representations
+2. Exact Schmidt-tree and tensor-linked components
+3. Exact decision-diagram state representations
+4. Expanded observable-space execution and gradients
+5. Clifford-plus-magic hybrid execution
+6. Phase-polynomial and wider commuting-circuit representations
+7. Conserved-charge and particle-number sectors
+8. Fermionic Gaussian and matchgate representations
+9. Selective GPU execution for dense local components
+10. Explicit SIMD kernels where they provide repeatable gains
+11. Wider factor and separability detection
+12. Larger trajectory and mixed-state workloads
+13. QELM operation compiler and scheduler
+14. Qubit node verification and state-destruction protocol
+15. Authenticated QSC network transport
+16. Android, iOS, and WebAssembly builds
+17. Additional differential testing against independent simulators
 
 ---
 
@@ -637,6 +765,7 @@ Performance should be measured on the actual workload being run.
 * [`docs/STABILIZER.md`](docs/STABILIZER.md)
 * [`docs/SCALING_FAST_PATHS.md`](docs/SCALING_FAST_PATHS.md)
 * [`docs/QUANTUM_DOTS.md`](docs/QUANTUM_DOTS.md)
+* [`docs/CAUSAL_RUNTIME.md`](docs/CAUSAL_RUNTIME.md)
 * [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md)
 
 ---
@@ -655,7 +784,7 @@ Security reports should follow [`SECURITY.md`](SECURITY.md) instead of being pos
 
 Use the DOI at the top of this README or the repository's [`CITATION.cff`](CITATION.cff) when citing Qubit State Algebra.
 
-For results or features specific to this release, identify the software version as **QSA 0.1.7**.
+For the latest published software release, identify the version as **QSA 0.1.7**. When reporting results from current `main`, record the exact commit SHA because `main` contains post-0.1.7 execution work.
 
 ---
 

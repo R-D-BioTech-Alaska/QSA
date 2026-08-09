@@ -15,3 +15,5 @@
 11. Verify that no build artifacts, caches, private data, credentials, or local
     QSC files are present.
 12. Generate SHA-256 checksums for release artifacts.
+13. Confirm the default-branch `QSA Build and Test` workflow is green before
+    publishing the release tag.
