@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"
 
 
 class QubitNativeError(RuntimeError):
