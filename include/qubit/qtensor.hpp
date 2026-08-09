@@ -220,6 +220,10 @@ private:
     struct InputMap {
         std::size_t node{0};
         std::vector<std::size_t> positions{};
+        std::size_t gather_mask{0};
+        std::size_t deposit_mask{0};
+        std::size_t selected_mask{0};
+        bool packed{false};
     };
 
     struct Step {
