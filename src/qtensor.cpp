@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <numeric>
 #include <utility>
 
 namespace qubit {
@@ -20,16 +19,11 @@ namespace {
     return std::size_t{1} << variables;
 }
 
-[[nodiscard]] bool contains(
-    std::span<const TensorNetworkCircuit::VariableId> variables,
-    TensorNetworkCircuit::VariableId target) noexcept {
-    return std::find(variables.begin(), variables.end(), target) != variables.end();
-}
-
-[[nodiscard]] std::vector<TensorNetworkCircuit::VariableId> union_variables(
-    const std::vector<TensorNetworkCircuit::Factor>& factors,
+template <typename FactorVector>
+[[nodiscard]] std::vector<std::uint32_t> union_variables(
+    const FactorVector& factors,
     std::span<const std::size_t> indices) {
-    std::vector<TensorNetworkCircuit::VariableId> variables;
+    std::vector<std::uint32_t> variables;
     for (const std::size_t index : indices) {
         variables.insert(
             variables.end(),
