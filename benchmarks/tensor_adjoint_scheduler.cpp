@@ -255,6 +255,15 @@ void run_case(
         scheduler_error = std::max(scheduler_error, (serial_gradients[index] - scheduler_gradients[index]).magnitude());
     }
 
+    QComplex value_checksum{};
+    QComplex gradient_checksum{};
+    for (const QComplex value : scheduler_values) {
+        value_checksum += value;
+    }
+    for (const QComplex value : scheduler_gradients) {
+        gradient_checksum += value;
+    }
+
     const double best_fixed_ms = std::min({serial_ms, term_ms, point_ms});
     double selected_fixed_ms = serial_ms;
     if (completed.route == ExactAdjointScheduleRoute::TermParallel) selected_fixed_ms = term_ms;
@@ -291,6 +300,10 @@ void run_case(
     std::cout << prefix << "_term_error=" << term_error << '\n';
     std::cout << prefix << "_point_error=" << point_error << '\n';
     std::cout << prefix << "_scheduler_error=" << scheduler_error << '\n';
+    std::cout << prefix << "_value_checksum_real=" << value_checksum.re << '\n';
+    std::cout << prefix << "_value_checksum_imag=" << value_checksum.im << '\n';
+    std::cout << prefix << "_gradient_checksum_real=" << gradient_checksum.re << '\n';
+    std::cout << prefix << "_gradient_checksum_imag=" << gradient_checksum.im << '\n';
     std::cout << prefix << "_scheduler_successful_points="
               << scheduler_workspace.successful_point_count() << '\n';
     std::cout << prefix << "_scheduler_workspace_bytes="
