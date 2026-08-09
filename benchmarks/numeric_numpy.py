@@ -48,6 +48,37 @@ def structured_dense(sites: int) -> np.ndarray:
     return (0.75 + 0.125j) * first + (-0.2 + 0.05j) * second
 
 
+def structured_operator(sites: int) -> list[tuple[complex, list[np.ndarray]]]:
+    first: list[np.ndarray] = []
+    second: list[np.ndarray] = []
+    for site in range(sites):
+        angle = 0.017 * float(site + 1)
+        phase = 0.011 * float(site + 1)
+        ca = math.cos(angle)
+        sa = math.sin(angle)
+        cp = math.cos(phase)
+        sp = math.sin(phase)
+        first.append(
+            np.asarray([[ca, sa], [sa, -ca]], dtype=np.complex128)
+        )
+        second.append(
+            np.asarray([[cp, -1j * sp], [1j * sp, -cp]], dtype=np.complex128)
+        )
+    return [(0.625 + 0.0j, first), (-0.275 + 0.0j, second)]
+
+
+def apply_product_operator(
+    state: np.ndarray,
+    factors: list[np.ndarray],
+) -> np.ndarray:
+    tensor = state.reshape((2,) * len(factors))
+    for axis, matrix in enumerate(factors):
+        moved = np.moveaxis(tensor, axis, 0)
+        transformed = np.tensordot(matrix, moved, axes=(1, 0))
+        tensor = np.moveaxis(transformed, 0, axis)
+    return tensor.reshape(-1)
+
+
 def parse_qsa_output(path: Path) -> dict[str, float]:
     values: dict[str, float] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -155,7 +186,32 @@ def main() -> None:
     print(f"numpy_kron20_norm_ms={kron20_ms:.12g}")
     print(f"numpy_kron20_norm2={kron20_norm:.17g}")
     print(f"numpy_kron20_bytes={kron20.nbytes}")
-    print(f"numpy_kron100_dense_bytes_estimate={16 * (1 << 100)}")
+
+    kron20_operator = structured_operator(20)
+    kron20_expectation = 0.0 + 0.0j
+    kron20_applied = np.empty_like(kron20)
+
+    def kron20_expectation_work() -> None:
+        nonlocal kron20_expectation, kron20_applied
+        kron20_applied = np.zeros_like(kron20)
+        for coefficient, factors in kron20_operator:
+            kron20_applied += coefficient * apply_product_operator(kron20, factors)
+        kron20_expectation = np.vdot(kron20, kron20_applied)
+
+    kron20_expectation_work()
+    kron20_expectation_ms = best_ms(kron20_expectation_work, 3)
+    operator_local_bytes = sum(
+        matrix.nbytes
+        for _, factors in kron20_operator
+        for matrix in factors
+    )
+    print(f"numpy_kron20_expectation_ms={kron20_expectation_ms:.12g}")
+    print(f"numpy_kron20_expectation_real={kron20_expectation.real:.17g}")
+    print(f"numpy_kron20_expectation_imag={kron20_expectation.imag:.17g}")
+    print(f"numpy_kron20_operator_local_bytes={operator_local_bytes}")
+    print(f"numpy_kron20_retained_working_bytes={kron20.nbytes + kron20_applied.nbytes + operator_local_bytes}")
+    print(f"numpy_kron100_dense_vector_bytes_estimate={16 * (1 << 100)}")
+    print(f"numpy_kron100_dense_matrix_bytes_estimate={16 * (1 << 200)}")
 
     if args.qsa_output is not None:
         qsa = parse_qsa_output(args.qsa_output)
@@ -194,6 +250,28 @@ def main() -> None:
         qsa_kron_bytes = qsa.get("kron20_bytes")
         if qsa_kron_bytes is not None and qsa_kron_bytes > 0.0:
             print(f"qsa_kron20_memory_ratio={kron20.nbytes / qsa_kron_bytes:.12g}")
+
+        qsa_expectation_ms = qsa.get("kron20_expectation_ms")
+        if qsa_expectation_ms is not None and qsa_expectation_ms > 0.0:
+            print(f"qsa_kron20_expectation_vs_numpy={kron20_expectation_ms / qsa_expectation_ms:.12g}")
+        qsa_expectation_real = qsa.get("kron20_expectation_real")
+        qsa_expectation_imag = qsa.get("kron20_expectation_imag")
+        if qsa_expectation_real is not None and qsa_expectation_imag is not None:
+            qsa_expectation = complex(qsa_expectation_real, qsa_expectation_imag)
+            scale = max(1.0, abs(qsa_expectation), abs(kron20_expectation))
+            print(
+                "qsa_kron20_expectation_numpy_relative_error="
+                f"{abs(qsa_expectation - kron20_expectation) / scale:.12g}"
+            )
+        qsa_operator_bytes = qsa.get("kron20_operator_bytes")
+        if (
+            qsa_kron_bytes is not None
+            and qsa_operator_bytes is not None
+            and qsa_kron_bytes + qsa_operator_bytes > 0.0
+        ):
+            qsa_retained = qsa_kron_bytes + qsa_operator_bytes
+            numpy_retained = kron20.nbytes + kron20_applied.nbytes + operator_local_bytes
+            print(f"qsa_kron20_operator_memory_ratio={numpy_retained / qsa_retained:.12g}")
 
 
 if __name__ == "__main__":
