@@ -1,0 +1,36 @@
+name: QSA Tensor Network Evidence
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qtensor.hpp"
+      - "src/qtensor.cpp"
+      - "tests/test_tensor_network.cpp"
+      - "benchmarks/tensor_network.cpp"
+      - "CMakeLists.txt"
+      - ".github/workflows/qsa-tensor-network.yml"
+  workflow_dispatch:
+
+jobs:
+  exact-tensor-network:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DQSTATE_BUILD_EXAMPLES=OFF -DQSTATE_BUILD_BENCHMARKS=ON
+      - name: Build tensor targets
+        run: >-
+          cmake --build build --config Release --parallel 2
+          --target qstate_tensor_network_tests qstate_tensor_network_benchmark
+      - name: Run exactness and collapse gates
+        run: ./build/qstate_tensor_network_tests
+      - name: Run structural benchmark
+        run: ./build/qstate_tensor_network_benchmark | tee tensor_network_evidence.txt
+      - name: Hash evidence
+        run: sha256sum tensor_network_evidence.txt | tee tensor_network_evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-tensor-network-evidence
+          path: |
+            tensor_network_evidence.txt
+            tensor_network_evidence.sha256
