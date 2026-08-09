@@ -33,7 +33,7 @@ Structural engines exploit a proof or a bounded mathematical variable:
 
 A structural route is eligible only while its governing structure is valid. If support, term count, component closure, contraction width, or another controlling quantity grows beyond its configured bound, the route must reject or return to an exact general path. It must not approximate silently.
 
-`RepresentationAdvisor::inspect_operations()` derives Clifford eligibility from the actual operation list. Callers do not need to assert that property manually. Existing explicit feature inspection remains available for compatibility where an external subsystem already owns a stronger certificate.
+`RepresentationAdvisor::inspect_operations()` derives Clifford eligibility from the actual operation list. Existing explicit feature inspection remains available for compatibility where an external subsystem already owns a stronger certificate.
 
 ### Exact tensor-network contraction
 
@@ -49,7 +49,9 @@ The first tensor route supports exact unitary circuit amplitudes. It intentional
 
 For Pauli expectations, the broker first attempts exact causal backward propagation. If operator growth, trajectory semantics, or another Pauli contract rejects that route, the broker executes the original operations on a copied `QRegister` and evaluates the same observable there.
 
-For basis amplitudes from |0>, the broker first attempts exact bounded tensor contraction. If the contraction certificate fails or the circuit is unsupported by the tensor route, the broker executes the original operations on `QRegister` and reads the requested amplitude.
+For basis probabilities from |0>, the broker first attempts exact bounded tensor contraction and takes the norm squared of the requested amplitude. If the contraction certificate fails or the circuit is unsupported by the tensor route, the broker executes the original operations on `QRegister` and evaluates the same basis probability there.
+
+The automatic tensor surface intentionally exposes basis probability rather than raw complex amplitude. QRegister and a circuit tensor network may use different global-phase gauges while representing the same physical pure state; probability is gauge invariant and therefore remains route independent.
 
 Every result reports the route that actually produced it. Specialized-route rejection is preserved as a fallback reason so an exact fallback is auditable rather than silent.
 
