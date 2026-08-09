@@ -1,9 +1,9 @@
 #pragma once
 
 #define QSTATE_VERSION_MAJOR 0
-#define QSTATE_VERSION_MINOR 1
-#define QSTATE_VERSION_PATCH 8
-#define QSTATE_VERSION_STRING "0.1.8"
+#define QSTATE_VERSION_MINOR 2
+#define QSTATE_VERSION_PATCH 0
+#define QSTATE_VERSION_STRING "0.2.0"
 
 // The ABI version changes only when an existing exported C contract becomes
 // incompatible. Additive symbols do not change the ABI major version.

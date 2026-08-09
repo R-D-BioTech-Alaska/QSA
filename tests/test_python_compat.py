@@ -17,12 +17,12 @@ from qubit_native import QubitRegister as LegacyQubitRegister
 
 
 def main() -> None:
-    assert __version__ == "0.1.8"
+    assert __version__ == "0.2.0"
     assert QRegister is QubitRegister
     assert LegacyQubitRegister is QubitRegister
 
     with QubitRegister(2) as state:
-        assert state.native_version == "0.1.8"
+        assert state.native_version == "0.2.0"
         assert state.abi_version >= (1, 5, 0)
 
         # Both property and historical method forms remain valid.

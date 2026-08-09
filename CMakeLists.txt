@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QubitNativeStateEngine VERSION 0.1.8 LANGUAGES CXX)
+project(QubitNativeStateEngine VERSION 0.2.0 LANGUAGES CXX)
 
 find_package(Threads REQUIRED)
 include(GNUInstallDirs)
@@ -33,13 +33,35 @@ add_library(qstate_core STATIC
     src/qstabilizer_batch.cpp
     src/qphase_graph.cpp
     src/qexecution.cpp
+    src/qnumeric.cpp
     src/qread.cpp
     src/qdiagonal.cpp
     src/qpauli.cpp
     src/qpauli_causal.cpp
     src/qtensor.cpp
     src/qbroker.cpp
+    src/qestimator.cpp
+    src/qtensor_plan.cpp
+    src/qtensor_expectation.cpp
 )
+
+set(QSTATE_NUMERIC_X86 FALSE)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+    set(QSTATE_NUMERIC_X86 TRUE)
+elseif(CMAKE_VS_PLATFORM_NAME MATCHES "^(x64|Win32)$")
+    set(QSTATE_NUMERIC_X86 TRUE)
+endif()
+
+if(QSTATE_NUMERIC_X86)
+    target_sources(qstate_core PRIVATE src/qnumeric_avx2.cpp)
+    target_compile_definitions(qstate_core PRIVATE QSTATE_NUMERIC_HAS_AVX2=1)
+    if(MSVC)
+        set_source_files_properties(src/qnumeric_avx2.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        set_source_files_properties(src/qnumeric_avx2.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+    endif()
+endif()
+
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -188,13 +210,37 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_transition_invariant_tests PRIVATE qstate_core)
     add_test(NAME qstate_transition_invariant_tests COMMAND qstate_transition_invariant_tests)
 
+    add_executable(qstate_numeric_tests tests/test_numeric.cpp)
+    target_link_libraries(qstate_numeric_tests PRIVATE qstate_core)
+    add_test(NAME qstate_numeric_tests COMMAND qstate_numeric_tests)
+
     add_executable(qstate_tensor_network_tests tests/test_tensor_network.cpp)
     target_link_libraries(qstate_tensor_network_tests PRIVATE qstate_core)
     add_test(NAME qstate_tensor_network_tests COMMAND qstate_tensor_network_tests)
 
+    add_executable(qstate_tensor_contraction_plan_tests tests/test_tensor_contraction_plan.cpp)
+    target_link_libraries(qstate_tensor_contraction_plan_tests PRIVATE qstate_core)
+    add_test(NAME qstate_tensor_contraction_plan_tests COMMAND qstate_tensor_contraction_plan_tests)
+
+    add_executable(qstate_tensor_expectation_tests tests/test_tensor_expectation.cpp)
+    target_link_libraries(qstate_tensor_expectation_tests PRIVATE qstate_core)
+    add_test(NAME qstate_tensor_expectation_tests COMMAND qstate_tensor_expectation_tests)
+
     add_executable(qstate_execution_broker_tests tests/test_execution_broker.cpp)
     target_link_libraries(qstate_execution_broker_tests PRIVATE qstate_core)
     add_test(NAME qstate_execution_broker_tests COMMAND qstate_execution_broker_tests)
+
+    add_executable(qstate_estimator_tests tests/test_estimator.cpp)
+    target_link_libraries(qstate_estimator_tests PRIVATE qstate_core)
+    add_test(NAME qstate_estimator_tests COMMAND qstate_estimator_tests)
+
+    add_executable(qstate_parameterized_estimator_tests tests/test_parameterized_estimator.cpp)
+    target_link_libraries(qstate_parameterized_estimator_tests PRIVATE qstate_core)
+    add_test(NAME qstate_parameterized_estimator_tests COMMAND qstate_parameterized_estimator_tests)
+
+    add_executable(qstate_tensor_adjoint_causal_tests tests/test_tensor_adjoint_causal.cpp)
+    target_link_libraries(qstate_tensor_adjoint_causal_tests PRIVATE qstate_core)
+    add_test(NAME qstate_tensor_adjoint_causal_tests COMMAND qstate_tensor_adjoint_causal_tests)
 
     add_executable(qstate_causal_runtime_tests tests/test_qcausal.cpp)
     target_link_libraries(qstate_causal_runtime_tests PRIVATE qstate_core)
@@ -313,8 +359,26 @@ if(QSTATE_BUILD_BENCHMARKS)
     add_executable(qstate_scaling_fast_paths_benchmark benchmarks/scaling_fast_paths.cpp)
     target_link_libraries(qstate_scaling_fast_paths_benchmark PRIVATE qstate_core)
 
+    add_executable(qstate_numeric_benchmark benchmarks/numeric.cpp)
+    target_link_libraries(qstate_numeric_benchmark PRIVATE qstate_core)
+
     add_executable(qstate_tensor_network_benchmark benchmarks/tensor_network.cpp)
     target_link_libraries(qstate_tensor_network_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_tensor_contraction_plan_benchmark benchmarks/tensor_contraction_plan.cpp)
+    target_link_libraries(qstate_tensor_contraction_plan_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_estimator_benchmark benchmarks/estimator.cpp)
+    target_link_libraries(qstate_estimator_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_parameterized_estimator_benchmark benchmarks/parameterized_estimator.cpp)
+    target_link_libraries(qstate_parameterized_estimator_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_tensor_adjoint_causal_benchmark benchmarks/tensor_adjoint_causal.cpp)
+    target_link_libraries(qstate_tensor_adjoint_causal_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_tensor_expectation_benchmark benchmarks/tensor_expectation.cpp)
+    target_link_libraries(qstate_tensor_expectation_benchmark PRIVATE qstate_core)
 
     add_executable(qstate_causal_runtime_benchmark benchmarks/causal_runtime.cpp)
     target_link_libraries(qstate_causal_runtime_benchmark PRIVATE qstate_core)
