@@ -15,6 +15,7 @@ using qubit::ExactAdjointGradientBatchConfig;
 using qubit::ExactAdjointGradientBatchPlan;
 using qubit::ExactAdjointGradientConfig;
 using qubit::ExactAdjointGradientPlan;
+using qubit::ExactAdjointGradientWorkspace;
 using qubit::OperationCode;
 using qubit::ParameterizedOperation;
 using qubit::PauliAxis;
