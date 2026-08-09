@@ -11,8 +11,11 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using qubit::ExactParameterShiftConfig;
+using qubit::ExactParameterShiftPlan;
 using qubit::Operation;
 using qubit::OperationCode;
+using qubit::ParameterizedOperation;
 using qubit::PauliAxis;
 using qubit::PauliFactor;
 using qubit::PauliObservable;
@@ -21,7 +24,7 @@ using qubit::QComplex;
 using qubit::TensorExpectationPlan;
 using qubit::TensorExpectationRebindPlan;
 using qubit::TensorNetworkCircuit;
-
+using qubit::TensorNetworkConfig;
 
 template <typename Function>
 [[nodiscard]] double milliseconds(Function&& function) {
@@ -68,6 +71,44 @@ std::vector<Operation> brickwork(
     return operations;
 }
 
+std::vector<ParameterizedOperation> parameterized_brickwork(
+    std::size_t qubits,
+    std::size_t layers,
+    std::size_t parameter_count) {
+    const std::vector<Operation> base = brickwork(qubits, layers, 1.0);
+    std::vector<ParameterizedOperation> result;
+    result.reserve(base.size());
+    std::size_t next_parameter = 0U;
+    for (const Operation& operation : base) {
+        ParameterizedOperation templated;
+        templated.operation = operation;
+        if (next_parameter < parameter_count &&
+            (operation.code == OperationCode::Rx ||
+             operation.code == OperationCode::Ry ||
+             operation.code == OperationCode::Rz)) {
+            templated.parameter_slot = static_cast<std::int32_t>(next_parameter++);
+        }
+        result.push_back(templated);
+    }
+    return result;
+}
+
+std::vector<Operation> bind_parameterized(
+    const std::vector<ParameterizedOperation>& operations,
+    const std::vector<double>& parameters) {
+    std::vector<Operation> result;
+    result.reserve(operations.size());
+    for (const ParameterizedOperation& templated : operations) {
+        Operation operation = templated.operation;
+        if (templated.parameter_slot >= 0) {
+            operation.parameter =
+                parameters[static_cast<std::size_t>(templated.parameter_slot)];
+        }
+        result.push_back(operation);
+    }
+    return result;
+}
+
 std::vector<PauliObservable> observables(std::size_t qubits, std::size_t count) {
     std::vector<PauliObservable> result;
     result.reserve(count);
@@ -90,6 +131,18 @@ std::vector<PauliObservable> observables(std::size_t qubits, std::size_t count) 
         result.push_back(std::move(observable));
     }
     return result;
+}
+
+void evaluate_fresh(
+    std::size_t qubits,
+    const std::vector<Operation>& operations,
+    const std::vector<PauliObservable>& queries,
+    TensorNetworkConfig config,
+    std::vector<QComplex>& values) {
+    const TensorNetworkCircuit circuit(qubits, operations, config);
+    TensorExpectationPlan plan(circuit, queries);
+    auto workspace = plan.workspace();
+    plan.expectations(values, workspace);
 }
 
 void run_case(
@@ -166,11 +219,139 @@ void run_case(
               << reusable.stats().peak_union_variables << '\n';
 }
 
+void run_gradient_case(
+    std::size_t qubits,
+    std::size_t query_count,
+    std::size_t parameter_count) {
+    constexpr double shift = 1.57079632679489661923;
+    const TensorNetworkConfig tensor{1U << 16U, 1'000'000U};
+    const std::vector<PauliObservable> queries = observables(qubits, query_count);
+    const std::vector<ParameterizedOperation> operations =
+        parameterized_brickwork(qubits, 5U, parameter_count);
+    std::vector<double> parameters(parameter_count);
+    for (std::size_t parameter = 0U; parameter < parameter_count; ++parameter) {
+        parameters[parameter] =
+            -0.41 + 0.137 * static_cast<double>(parameter + 1U);
+    }
+
+    std::vector<QComplex> fresh_values(query_count);
+    std::vector<QComplex> fresh_gradients(query_count * parameter_count);
+    const double fresh_ms = milliseconds([&] {
+        std::vector<Operation> bound = bind_parameterized(operations, parameters);
+        evaluate_fresh(qubits, bound, queries, tensor, fresh_values);
+        for (std::size_t operation_index = 0U;
+             operation_index < operations.size();
+             ++operation_index) {
+            if (operations[operation_index].parameter_slot < 0) {
+                continue;
+            }
+            const std::size_t parameter =
+                static_cast<std::size_t>(operations[operation_index].parameter_slot);
+            const double original = bound[operation_index].parameter;
+            std::vector<QComplex> plus(query_count);
+            std::vector<QComplex> minus(query_count);
+            bound[operation_index].parameter = original + shift;
+            evaluate_fresh(qubits, bound, queries, tensor, plus);
+            bound[operation_index].parameter = original - shift;
+            evaluate_fresh(qubits, bound, queries, tensor, minus);
+            bound[operation_index].parameter = original;
+            for (std::size_t observable = 0U; observable < query_count; ++observable) {
+                fresh_gradients[observable * parameter_count + parameter] +=
+                    (plus[observable] - minus[observable]) * 0.5;
+            }
+        }
+    });
+
+    std::unique_ptr<ExactParameterShiftPlan> serial;
+    const double serial_compile_ms = milliseconds([&] {
+        serial = std::make_unique<ExactParameterShiftPlan>(
+            qubits,
+            operations,
+            queries,
+            ExactParameterShiftConfig{tensor, 1U});
+    });
+    auto serial_workspace = serial->workspace();
+    std::vector<QComplex> serial_values(query_count);
+    std::vector<QComplex> serial_gradients(query_count * parameter_count);
+    const double serial_eval_ms = milliseconds([&] {
+        serial->value_and_gradient(
+            parameters, serial_values, serial_gradients, serial_workspace);
+    });
+
+    const std::size_t parallel_workers = std::min<std::size_t>(4U, parameter_count);
+    std::unique_ptr<ExactParameterShiftPlan> parallel;
+    const double parallel_compile_ms = milliseconds([&] {
+        parallel = std::make_unique<ExactParameterShiftPlan>(
+            qubits,
+            operations,
+            queries,
+            ExactParameterShiftConfig{tensor, parallel_workers});
+    });
+    auto parallel_workspace = parallel->workspace();
+    std::vector<QComplex> parallel_values(query_count);
+    std::vector<QComplex> parallel_gradients(query_count * parameter_count);
+    const double parallel_eval_ms = milliseconds([&] {
+        parallel->value_and_gradient(
+            parameters, parallel_values, parallel_gradients, parallel_workspace);
+    });
+
+    double value_error = 0.0;
+    double gradient_error = 0.0;
+    double parallel_error = 0.0;
+    for (std::size_t observable = 0U; observable < query_count; ++observable) {
+        value_error = std::max(
+            value_error,
+            (fresh_values[observable] - serial_values[observable]).magnitude());
+    }
+    for (std::size_t index = 0U; index < fresh_gradients.size(); ++index) {
+        gradient_error = std::max(
+            gradient_error,
+            (fresh_gradients[index] - serial_gradients[index]).magnitude());
+        parallel_error = std::max(
+            parallel_error,
+            (serial_gradients[index] - parallel_gradients[index]).magnitude());
+    }
+
+    const double serial_total_ms = serial_compile_ms + serial_eval_ms;
+    const double parallel_total_ms = parallel_compile_ms + parallel_eval_ms;
+    const std::string prefix = "gradient" + std::to_string(qubits);
+    std::cout << prefix << "_qubits=" << qubits << '\n';
+    std::cout << prefix << "_queries=" << query_count << '\n';
+    std::cout << prefix << "_parameters=" << parameter_count << '\n';
+    std::cout << prefix << "_occurrences="
+              << serial->parameterized_operation_count() << '\n';
+    std::cout << prefix << "_fresh_total_ms=" << fresh_ms << '\n';
+    std::cout << prefix << "_serial_compile_ms=" << serial_compile_ms << '\n';
+    std::cout << prefix << "_serial_eval_ms=" << serial_eval_ms << '\n';
+    std::cout << prefix << "_serial_first_total_ms=" << serial_total_ms << '\n';
+    std::cout << prefix << "_serial_reuse_speedup=" << fresh_ms / serial_total_ms << '\n';
+    std::cout << prefix << "_parallel_workers=" << parallel->worker_count() << '\n';
+    std::cout << prefix << "_parallel_compile_ms=" << parallel_compile_ms << '\n';
+    std::cout << prefix << "_parallel_eval_ms=" << parallel_eval_ms << '\n';
+    std::cout << prefix << "_parallel_first_total_ms=" << parallel_total_ms << '\n';
+    std::cout << prefix << "_parallel_eval_ratio="
+              << serial_eval_ms / parallel_eval_ms << '\n';
+    std::cout << prefix << "_value_error=" << value_error << '\n';
+    std::cout << prefix << "_gradient_error=" << gradient_error << '\n';
+    std::cout << prefix << "_parallel_error=" << parallel_error << '\n';
+    std::cout << prefix << "_serial_rebind_count="
+              << serial_workspace.rebind_count() << '\n';
+    std::cout << prefix << "_parallel_rebind_count="
+              << parallel_workspace.rebind_count() << '\n';
+    std::cout << prefix << "_evaluations="
+              << serial->stats().value_and_gradient_evaluations << '\n';
+    std::cout << prefix << "_plan_bytes=" << serial->estimated_bytes() << '\n';
+    std::cout << prefix << "_workspace_bytes="
+              << serial_workspace.estimated_bytes() << '\n';
+}
+
 }  // namespace
 
 int main() {
     std::cout << std::setprecision(12);
     run_case(18U, 24U, 12U);
     run_case(100U, 8U, 8U);
+    run_gradient_case(18U, 24U, 6U);
+    run_gradient_case(100U, 8U, 4U);
     return 0;
 }
