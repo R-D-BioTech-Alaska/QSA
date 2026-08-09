@@ -41,6 +41,10 @@ void require_close(const QComplex& actual, const QComplex& expected, const std::
     require(qubit::almost_equal(actual, expected, 2e-11), message);
 }
 
+void require_close(double actual, double expected, const std::string& message) {
+    require(std::abs(actual - expected) <= 2e-11, message);
+}
+
 }  // namespace
 
 int main() {
@@ -128,12 +132,12 @@ int main() {
         const std::array<std::uint8_t, 3> bits{{1U, 0U, 1U}};
 
         ExactExecutionBroker broker;
-        const auto result = broker.amplitude_from_zero(3U, operations, bits);
+        const auto result = broker.basis_probability_from_zero(3U, operations, bits);
         const QRegister direct = evolve(QRegister(3U), operations);
         require(result.route == ExactExecutionRoute::TensorNetwork,
-                "bounded unitary amplitude did not use tensor route");
-        require_close(result.value, direct.amplitude_bits(bits),
-                      "tensor broker amplitude differs from QRegister");
+                "bounded unitary probability did not use tensor route");
+        require_close(result.value, direct.amplitude_bits(bits).norm2(),
+                      "tensor broker probability differs from QRegister");
         require(result.fallback_reason.empty(),
                 "successful tensor route reported a fallback reason");
     }
@@ -146,14 +150,14 @@ int main() {
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
         }};
-        const auto result = broker.amplitude_from_zero(2U, operations, BasisIndex{0});
+        const auto result = broker.basis_probability_from_zero(2U, operations, BasisIndex{0});
         const QRegister direct = evolve(QRegister(2U), operations);
         require(result.route == ExactExecutionRoute::Register,
                 "tensor width collapse did not fall back to QRegister");
         require(!result.fallback_reason.empty(),
                 "tensor width fallback did not record its reason");
-        require_close(result.value, direct.amplitude(0U),
-                      "tensor width fallback changed the amplitude");
+        require_close(result.value, direct.amplitude(0U).norm2(),
+                      "tensor width fallback changed the basis probability");
     }
 
     {
@@ -162,14 +166,14 @@ int main() {
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::BitFlipTrajectory, 0U, 0U, 1.0, 0.0},
         }};
-        const auto result = broker.amplitude_from_zero(1U, operations, BasisIndex{1});
+        const auto result = broker.basis_probability_from_zero(1U, operations, BasisIndex{1});
         const QRegister direct = evolve(QRegister(1U), operations);
         require(result.route == ExactExecutionRoute::Register,
-                "trajectory amplitude did not fall back to QRegister");
+                "trajectory probability did not fall back to QRegister");
         require(!result.fallback_reason.empty(),
-                "trajectory amplitude fallback did not record its reason");
-        require_close(result.value, direct.amplitude(1U),
-                      "trajectory amplitude fallback changed the amplitude");
+                "trajectory probability fallback did not record its reason");
+        require_close(result.value, direct.amplitude(1U).norm2(),
+                      "trajectory probability fallback changed the result");
     }
 
     {
@@ -196,16 +200,16 @@ int main() {
         }
         std::vector<std::uint8_t> bits(qubits, 0U);
         ExactExecutionBroker broker;
-        const auto result = broker.amplitude_from_zero(qubits, operations, bits);
+        const auto result = broker.basis_probability_from_zero(qubits, operations, bits);
         long double expected = 1.0L;
         for (std::size_t qubit = 0; qubit < qubits; ++qubit) {
-            expected *= std::cos(0.0005 * static_cast<double>(qubit + 1U));
+            const long double amplitude = std::cos(0.0005 * static_cast<double>(qubit + 1U));
+            expected *= amplitude * amplitude;
         }
         require(result.route == ExactExecutionRoute::TensorNetwork,
                 "wide bounded circuit did not stay on tensor route");
-        require(std::abs(result.value.re - static_cast<double>(expected)) <= 2e-11 &&
-                    std::abs(result.value.im) <= 2e-11,
-                "wide tensor broker amplitude differs from analytic result");
+        require_close(result.value, static_cast<double>(expected),
+                      "wide tensor broker probability differs from analytic result");
     }
 
     {
@@ -213,7 +217,7 @@ int main() {
         bool rejected = false;
         try {
             const std::array<std::uint8_t, 2> bad_bits{{0U, 2U}};
-            static_cast<void>(broker.amplitude_from_zero(2U, {}, bad_bits));
+            static_cast<void>(broker.basis_probability_from_zero(2U, {}, bad_bits));
         } catch (const QStateError&) {
             rejected = true;
         }
