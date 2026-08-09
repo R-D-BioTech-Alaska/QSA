@@ -112,7 +112,8 @@ RepresentationFeatures RepresentationAdvisor::inspect(
     bool quantum_dot_declared,
     bool clifford_only,
     bool uniform_phase_graph,
-    std::size_t phase_graph_edges) {
+    std::size_t phase_graph_edges,
+    bool stabilizer_input_certified) {
     if (repeated_steps == 0U) {
         throw QStateError("Representation advisor repeated_steps must be positive");
     }
@@ -124,7 +125,7 @@ RepresentationFeatures RepresentationAdvisor::inspect(
     features.exact_symmetry_classes = exact_symmetry_classes;
     features.quantum_dot_declared = quantum_dot_declared;
     features.clifford_only = clifford_only;
-    features.stabilizer_input_certified = clifford_only;
+    features.stabilizer_input_certified = clifford_only && stabilizer_input_certified;
     features.uniform_phase_graph = uniform_phase_graph;
     features.phase_graph_edges = phase_graph_edges;
     for (std::size_t qubit = 0; qubit < state.qubit_count(); ++qubit) {
@@ -149,7 +150,8 @@ RepresentationFeatures RepresentationAdvisor::inspect_operations(
         quantum_dot_declared,
         false,
         false,
-        0U);
+        0U,
+        false);
     features.clifford_only = std::all_of(
         operations.begin(), operations.end(), [](const Operation& operation) {
             return is_clifford_operation(operation.code);
