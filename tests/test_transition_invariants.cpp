@@ -7,13 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
 
-using qubit::BasisIndex;
 using qubit::PauliAxis;
 using qubit::PauliFactor;
 using qubit::PauliObservable;
@@ -47,19 +47,8 @@ void require(bool condition, const std::string& message) {
 class DenseReference {
 public:
     explicit DenseReference(std::size_t qubit_count)
-        : qubit_count_(qubit_count), amplitudes_(std::size_t{1} << qubit_count) {
+        : amplitudes_(std::size_t{1} << qubit_count) {
         amplitudes_.front() = {1.0, 0.0};
-    }
-
-    explicit DenseReference(std::vector<QComplex> amplitudes)
-        : amplitudes_(std::move(amplitudes)) {
-        std::size_t dimension = amplitudes_.size();
-        while (dimension > 1U) {
-            require((dimension & 1U) == 0U, "dense reference dimension is not a power of two");
-            dimension >>= 1U;
-            ++qubit_count_;
-        }
-        normalize();
     }
 
     [[nodiscard]] const std::vector<QComplex>& amplitudes() const noexcept {
@@ -68,14 +57,14 @@ public:
 
     void apply_single(QubitId qubit, const QMatrix2& matrix) {
         const std::size_t mask = std::size_t{1} << qubit;
-        for (std::size_t base = 0; base < amplitudes_.size(); ++base) {
-            if ((base & mask) != 0U) {
+        for (std::size_t zero = 0; zero < amplitudes_.size(); ++zero) {
+            if ((zero & mask) != 0U) {
                 continue;
             }
-            const std::size_t one = base | mask;
-            const QComplex zero_value = amplitudes_[base];
+            const std::size_t one = zero | mask;
+            const QComplex zero_value = amplitudes_[zero];
             const QComplex one_value = amplitudes_[one];
-            amplitudes_[base] = matrix(0U, 0U) * zero_value + matrix(0U, 1U) * one_value;
+            amplitudes_[zero] = matrix(0U, 0U) * zero_value + matrix(0U, 1U) * one_value;
             amplitudes_[one] = matrix(1U, 0U) * zero_value + matrix(1U, 1U) * one_value;
         }
     }
@@ -121,8 +110,7 @@ public:
     }
 
     int measure(QubitId qubit, double sample) {
-        const double probability = probability_one(qubit);
-        const int outcome = sample < probability ? 1 : 0;
+        const int outcome = sample < probability_one(qubit) ? 1 : 0;
         const std::size_t mask = std::size_t{1} << qubit;
         for (std::size_t basis = 0; basis < amplitudes_.size(); ++basis) {
             const int bit = (basis & mask) == 0U ? 0 : 1;
@@ -198,13 +186,12 @@ public:
                         break;
                 }
             }
-            result += amplitudes_[basis].conjugate() * phase * amplitudes_[mapped];
+            result += amplitudes_[mapped].conjugate() * phase * amplitudes_[basis];
         }
         return result;
     }
 
 private:
-    std::size_t qubit_count_{0};
     std::vector<QComplex> amplitudes_{};
 
     void normalize() {
@@ -228,16 +215,16 @@ void require_equivalent(
     require(actual.size() == expected.size(), label + ": state sizes differ");
 
     QComplex phase{1.0, 0.0};
-    bool phase_found = false;
+    bool found = false;
     for (std::size_t index = 0; index < actual.size(); ++index) {
         if (actual[index].magnitude() > tolerance && expected[index].magnitude() > tolerance) {
             phase = actual[index] / expected[index];
             phase /= phase.magnitude();
-            phase_found = true;
+            found = true;
             break;
         }
     }
-    require(phase_found, label + ": no nonzero amplitude found");
+    require(found, label + ": no nonzero amplitude found");
 
     for (std::size_t index = 0; index < actual.size(); ++index) {
         if (!qubit::almost_equal(actual[index], phase * expected[index], tolerance)) {
@@ -294,9 +281,8 @@ void run_transition_sequence(std::uint64_t seed) {
             second = static_cast<QubitId>((second + 1U) % qubit_count);
         }
         const double angle = (generator.unit() - 0.5) * 2.0;
-        const std::uint64_t operation = generator.next() % 15U;
 
-        switch (operation) {
+        switch (generator.next() % 15U) {
             case 0U:
                 state.apply_x(first);
                 reference.apply_single(first, qubit::gates::x());
@@ -350,38 +336,33 @@ void run_transition_sequence(std::uint64_t seed) {
                 reference.apply_two(first, second, qubit::gates::swap());
                 break;
             case 10U: {
-                const double probability = 0.35;
                 const double sample = generator.unit();
-                state.apply_bit_flip_trajectory(first, probability, sample);
-                reference.apply_bit_flip_trajectory(first, probability, sample);
+                state.apply_bit_flip_trajectory(first, 0.35, sample);
+                reference.apply_bit_flip_trajectory(first, 0.35, sample);
                 break;
             }
             case 11U: {
-                const double probability = 0.4;
                 const double sample = generator.unit();
-                state.apply_phase_flip_trajectory(first, probability, sample);
-                reference.apply_phase_flip_trajectory(first, probability, sample);
+                state.apply_phase_flip_trajectory(first, 0.4, sample);
+                reference.apply_phase_flip_trajectory(first, 0.4, sample);
                 break;
             }
             case 12U: {
-                const double probability = 0.3;
                 const double sample = generator.unit();
-                state.apply_depolarizing_trajectory(first, probability, sample);
-                reference.apply_depolarizing_trajectory(first, probability, sample);
+                state.apply_depolarizing_trajectory(first, 0.3, sample);
+                reference.apply_depolarizing_trajectory(first, 0.3, sample);
                 break;
             }
             case 13U: {
-                const double gamma = 0.2;
                 const double sample = generator.unit();
-                state.apply_amplitude_damping_trajectory(first, gamma, sample);
-                reference.apply_amplitude_damping_trajectory(first, gamma, sample);
+                state.apply_amplitude_damping_trajectory(first, 0.2, sample);
+                reference.apply_amplitude_damping_trajectory(first, 0.2, sample);
                 break;
             }
             case 14U: {
                 const double sample = generator.unit();
-                const int actual = state.measure(first, sample);
-                const int expected = reference.measure(first, sample);
-                require(actual == expected, "measurement outcome differs from dense reference");
+                require(state.measure(first, sample) == reference.measure(first, sample),
+                        "measurement outcome differs from dense reference");
                 break;
             }
             default:
@@ -392,8 +373,7 @@ void run_transition_sequence(std::uint64_t seed) {
         verify_state(state, reference, label);
 
         if (step % 17U == 0U) {
-            const std::vector<std::uint8_t> packet = state.encode_qsc();
-            QRegister restored = QRegister::decode_qsc(packet);
+            QRegister restored = QRegister::decode_qsc(state.encode_qsc());
             verify_state(restored, reference, label + " QSC roundtrip");
             state = std::move(restored);
         }
@@ -408,16 +388,22 @@ void run_transition_sequence(std::uint64_t seed) {
         }
 
         if (step % 29U == 0U) {
-            std::vector<PauliFactor> factors;
-            factors.push_back({first, static_cast<PauliAxis>(1U + generator.next() % 3U)});
-            if (second != first && (generator.next() & 1U) != 0U) {
-                factors.push_back({second, static_cast<PauliAxis>(1U + generator.next() % 3U)});
+            std::vector<PauliFactor> factors{{
+                first,
+                static_cast<PauliAxis>(1U + generator.next() % 3U),
+            }};
+            if ((generator.next() & 1U) != 0U) {
+                factors.push_back({
+                    second,
+                    static_cast<PauliAxis>(1U + generator.next() % 3U),
+                });
             }
             PauliObservable observable(qubit_count);
             observable.add_term({1.0, 0.0}, factors);
-            const QComplex actual = observable.expectation(state);
-            const QComplex expected = reference.pauli_expectation(factors);
-            require(qubit::almost_equal(actual, expected, 2e-10),
+            require(qubit::almost_equal(
+                        observable.expectation(state),
+                        reference.pauli_expectation(factors),
+                        2e-10),
                     label + ": Pauli expectation differs from dense reference");
         }
     }
