@@ -160,6 +160,8 @@ int main() {
                 "single-Ry adjoint used more than one circuit rebind");
         require(plan.stats().parameter_shift_equivalent_evaluations == 3U,
                 "single-Ry parameter-shift equivalent count is incorrect");
+        require(plan.worker_count() == 1U,
+                "default adjoint worker count changed");
     }
 
     {
@@ -247,6 +249,48 @@ int main() {
         require(workspace.rebind_count() == 1U,
                 "adjoint gradient should rebind the circuit once per gradient call");
 
+        ExactAdjointGradientPlan parallel(
+            qubits,
+            operations,
+            queries,
+            ExactAdjointGradientConfig{tensor, 4U});
+        auto parallel_workspace = parallel.workspace();
+        std::vector<QComplex> parallel_values(queries.size());
+        std::vector<QComplex> parallel_gradient(
+            queries.size() * parameters.size());
+        parallel.value_and_gradient(
+            parameters,
+            parallel_values,
+            parallel_gradient,
+            parallel_workspace);
+        require(parallel.worker_count() == 3U,
+                "parallel adjoint worker count did not clamp to differentiated terms");
+        require(parallel.stats().worker_count == parallel.worker_count(),
+                "parallel adjoint stats worker count changed");
+        for (std::size_t index = 0U; index < parallel_values.size(); ++index) {
+            require_close(
+                parallel_values[index], adjoint_values[index], 2e-13,
+                "parallel adjoint value differs from serial adjoint");
+        }
+        for (std::size_t index = 0U; index < parallel_gradient.size(); ++index) {
+            require_close(
+                parallel_gradient[index], adjoint_gradient[index], 2e-13,
+                "parallel adjoint gradient differs from serial adjoint");
+        }
+        const std::vector<QComplex> first_parallel_values = parallel_values;
+        const std::vector<QComplex> first_parallel_gradient = parallel_gradient;
+        parallel.value_and_gradient(
+            parameters,
+            parallel_values,
+            parallel_gradient,
+            parallel_workspace);
+        require(parallel_values == first_parallel_values,
+                "parallel adjoint value reduction is not deterministic");
+        require(parallel_gradient == first_parallel_gradient,
+                "parallel adjoint gradient reduction is not deterministic");
+        require(parallel_workspace.rebind_count() == 2U,
+                "parallel adjoint rebind count changed");
+
         ExactParameterShiftPlan shift(
             qubits,
             operations,
@@ -325,6 +369,27 @@ int main() {
             rejected = true;
         }
         require(rejected, "adjoint gradient accepted a stochastic sample slot");
+    }
+
+    {
+        const std::vector<ParameterizedOperation> operations{
+            {{OperationCode::Ry, 0U, 0U, 0.0, 0.0}, 0, -1},
+        };
+        PauliObservable z(1U);
+        const PauliFactor factor{0U, PauliAxis::Z};
+        z.add_term({1.0, 0.0}, std::span<const PauliFactor>(&factor, 1U));
+        const std::vector<PauliObservable> queries{z};
+        bool rejected = false;
+        try {
+            static_cast<void>(ExactAdjointGradientPlan(
+                1U,
+                operations,
+                queries,
+                ExactAdjointGradientConfig{{}, 33U}));
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "adjoint gradient accepted an unbounded worker count");
     }
 
     return 0;
