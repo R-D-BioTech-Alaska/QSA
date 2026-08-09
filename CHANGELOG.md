@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 — 2026-08-08
 
 - Preserved weak entanglement during component factorization by requiring exact amplitude reconstruction before accepting a split
 - Added batch-native exact weighted-adjoint execution for Tripair training without changing the matched optimization contract
