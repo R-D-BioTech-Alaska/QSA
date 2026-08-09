@@ -5,6 +5,9 @@
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <numeric>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
