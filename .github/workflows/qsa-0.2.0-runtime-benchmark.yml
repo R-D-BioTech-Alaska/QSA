@@ -39,6 +39,7 @@ jobs:
           qstate_tensor_contraction_plan_benchmark
           qstate_tensor_expectation_benchmark
           qstate_estimator_benchmark
+          qstate_parameterized_estimator_benchmark
       - name: Build structural runtime checks
         run: |
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_kron_operator.cpp -o build-runtime/qstate_kron_operator_test
@@ -126,6 +127,20 @@ jobs:
         run: |
           set -o pipefail
           python benchmarks/estimator_aer.py --qsa-output estimator.txt | tee qsa-vs-aer.txt
+      - name: Run exact parameterized estimator sweep
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_parameterized_estimator_benchmark | tee parameterized-estimator.txt
+      - name: Run matched Qiskit Aer parameter sweep
+        env:
+          OMP_NUM_THREADS: "4"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          VECLIB_MAXIMUM_THREADS: "1"
+          NUMEXPR_NUM_THREADS: "1"
+        run: |
+          set -o pipefail
+          python benchmarks/parameterized_estimator_aer.py --qsa-output parameterized-estimator.txt | tee parameterized-estimator-vs-aer.txt
       - uses: actions/upload-artifact@v4
         with:
           name: qsa-0.2.0-runtime-evidence
@@ -142,3 +157,5 @@ jobs:
             qsa-gradient-vs-aer.txt
             estimator.txt
             qsa-vs-aer.txt
+            parameterized-estimator.txt
+            parameterized-estimator-vs-aer.txt
