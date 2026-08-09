@@ -1,14 +1,21 @@
 #include "qubit/qparameterized_estimator.hpp"
+#include "qubit/qtensor_rebind.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
+#include <exception>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <numeric>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -17,17 +24,27 @@ using Clock = std::chrono::steady_clock;
 using qubit::ExactExecutionRoute;
 using qubit::ExactParameterizedEstimatorConfig;
 using qubit::ExactParameterizedEstimatorPlan;
+using qubit::Operation;
 using qubit::OperationCode;
 using qubit::ParameterizedOperation;
 using qubit::PauliAxis;
 using qubit::PauliFactor;
 using qubit::PauliObservable;
 using qubit::QComplex;
+using qubit::TensorExpectationRebindPlan;
+using qubit::TensorExpectationWorkspace;
+using qubit::TensorNetworkCircuit;
 
 struct Workload {
     std::vector<ParameterizedOperation> operations{};
     std::vector<PauliObservable> observables{};
     std::vector<double> parameters{};
+};
+
+struct LegacySweep {
+    std::vector<TensorExpectationRebindPlan> lanes{};
+    std::vector<TensorExpectationWorkspace> workspaces{};
+    std::vector<QComplex> values{};
 };
 
 template <typename Function>
@@ -113,6 +130,116 @@ template <typename Function>
     return result;
 }
 
+[[nodiscard]] std::vector<Operation> bind_operations(
+    const std::vector<ParameterizedOperation>& operations,
+    std::span<const double> parameters) {
+    std::vector<Operation> bound;
+    bound.reserve(operations.size());
+    for (const ParameterizedOperation& templated : operations) {
+        Operation operation = templated.operation;
+        if (templated.parameter_slot >= 0) {
+            operation.parameter =
+                parameters[static_cast<std::size_t>(templated.parameter_slot)];
+        }
+        bound.push_back(operation);
+    }
+    return bound;
+}
+
+[[nodiscard]] LegacySweep make_legacy_sweep(
+    std::size_t qubits,
+    const Workload& workload,
+    std::size_t parameter_count,
+    std::size_t point_count,
+    std::size_t worker_count) {
+    const std::vector<double> zeros(parameter_count, 0.0);
+    const std::vector<Operation> initial_operations =
+        bind_operations(workload.operations, zeros);
+    const TensorNetworkCircuit initial(qubits, initial_operations);
+    const TensorExpectationRebindPlan prototype(initial, workload.observables);
+
+    LegacySweep result;
+    result.lanes.reserve(worker_count);
+    result.workspaces.reserve(worker_count);
+    for (std::size_t lane = 0U; lane < worker_count; ++lane) {
+        result.lanes.push_back(prototype);
+        result.workspaces.push_back(result.lanes.back().workspace());
+    }
+    result.values.resize(point_count * workload.observables.size());
+    return result;
+}
+
+void run_legacy_sweep(
+    std::size_t qubits,
+    const Workload& workload,
+    std::size_t parameter_count,
+    std::size_t point_count,
+    LegacySweep& legacy) {
+    std::atomic<std::size_t> next{0U};
+    std::atomic<bool> stop{false};
+    std::mutex error_mutex;
+    std::exception_ptr first_error;
+
+    const auto worker = [&](std::size_t lane) {
+        while (!stop.load(std::memory_order_relaxed)) {
+            const std::size_t point = next.fetch_add(1U, std::memory_order_relaxed);
+            if (point >= point_count) {
+                return;
+            }
+            try {
+                const std::span<const double> parameters(
+                    workload.parameters.data() + point * parameter_count,
+                    parameter_count);
+                const std::vector<Operation> bound =
+                    bind_operations(workload.operations, parameters);
+                const TensorNetworkCircuit circuit(qubits, bound);
+                legacy.lanes[lane].rebind(circuit);
+                std::span<QComplex> point_results(
+                    legacy.values.data() + point * workload.observables.size(),
+                    workload.observables.size());
+                legacy.lanes[lane].expectations(
+                    point_results, legacy.workspaces[lane]);
+            } catch (...) {
+                {
+                    std::lock_guard<std::mutex> lock(error_mutex);
+                    if (first_error == nullptr) {
+                        first_error = std::current_exception();
+                    }
+                }
+                stop.store(true, std::memory_order_relaxed);
+                return;
+            }
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(legacy.lanes.size() > 0U ? legacy.lanes.size() - 1U : 0U);
+    for (std::size_t lane = 1U; lane < legacy.lanes.size(); ++lane) {
+        threads.emplace_back(worker, lane);
+    }
+    worker(0U);
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+    if (first_error != nullptr) {
+        std::rethrow_exception(first_error);
+    }
+}
+
+[[nodiscard]] double max_error(
+    std::span<const QComplex> first,
+    std::span<const QComplex> second) {
+    if (first.size() != second.size()) {
+        throw std::runtime_error("parameterized estimator comparison shapes differ");
+    }
+    double error = 0.0;
+    for (std::size_t index = 0U; index < first.size(); ++index) {
+        const QComplex difference = first[index] - second[index];
+        error = std::max(error, std::sqrt(difference.norm2()));
+    }
+    return error;
+}
+
 void run_case(
     std::size_t qubits,
     std::size_t observable_count,
@@ -155,10 +282,38 @@ void run_case(
         sweep_times.push_back(elapsed);
     }
 
+    LegacySweep legacy;
+    const double legacy_compile_workspace_ms = milliseconds([&] {
+        legacy = make_legacy_sweep(
+            qubits,
+            workload,
+            parameter_count,
+            point_count,
+            workspace.worker_count());
+    });
+    std::vector<double> legacy_sweep_times;
+    legacy_sweep_times.reserve(repetitions);
+    for (std::size_t repetition = 0U; repetition < repetitions; ++repetition) {
+        const double elapsed = milliseconds([&] {
+            run_legacy_sweep(
+                qubits, workload, parameter_count, point_count, legacy);
+        });
+        legacy_sweep_times.push_back(elapsed);
+    }
+
+    const double legacy_error = max_error(values, legacy.values);
+    if (legacy_error > 5e-12) {
+        throw std::runtime_error(
+            "direct parameter rebinding differs from full tensor reconstruction");
+    }
+
     const QComplex checksum = std::accumulate(
         values.begin(), values.end(), QComplex{});
     const double first_ms = sweep_times.front();
     const double best_ms = *std::min_element(sweep_times.begin(), sweep_times.end());
+    const double legacy_first_ms = legacy_sweep_times.front();
+    const double legacy_best_ms =
+        *std::min_element(legacy_sweep_times.begin(), legacy_sweep_times.end());
     const double setup_ms = workload_build_ms + compile_ms + workspace_ms;
 
     std::cout << prefix << "_qubits=" << qubits << '\n';
@@ -177,6 +332,15 @@ void run_case(
     std::cout << prefix << "_plan_bytes=" << plan->estimated_bytes() << '\n';
     std::cout << prefix << "_workspace_bytes=" << workspace.estimated_bytes() << '\n';
     std::cout << prefix << "_rebind_count=" << workspace.rebind_count() << '\n';
+    std::cout << prefix << "_legacy_compile_workspace_ms="
+              << legacy_compile_workspace_ms << '\n';
+    std::cout << prefix << "_legacy_first_sweep_ms=" << legacy_first_ms << '\n';
+    std::cout << prefix << "_legacy_best_sweep_ms=" << legacy_best_ms << '\n';
+    std::cout << prefix << "_direct_vs_legacy_first="
+              << legacy_first_ms / first_ms << '\n';
+    std::cout << prefix << "_direct_vs_legacy_best="
+              << legacy_best_ms / best_ms << '\n';
+    std::cout << prefix << "_legacy_max_error=" << legacy_error << '\n';
     std::cout << prefix << "_checksum_real=" << checksum.re << '\n';
     std::cout << prefix << "_checksum_imag=" << checksum.im << '\n';
 
