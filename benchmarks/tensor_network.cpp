@@ -115,8 +115,8 @@ int main() {
         std::cout << "tensor_setup_ms=" << tensor_setup_ms << '\n';
         std::cout << "qregister_query_ms=" << reference_query_ms << '\n';
         std::cout << "tensor_query_ms=" << tensor_query_ms << '\n';
-        std::cout << "small_amplitude_error="
-                  << (reference_value - tensor_value).magnitude() << '\n';
+        std::cout << "small_probability_error="
+                  << std::abs(reference_value.norm2() - tensor_value.norm2()) << '\n';
         std::cout << "small_tensor_peak_entries=" << stats.peak_contraction_entries << '\n';
         std::cout << "small_tensor_peak_variables=" << stats.peak_union_variables << '\n';
         std::cout << "qregister_bytes=" << reference.estimated_bytes() << '\n';
