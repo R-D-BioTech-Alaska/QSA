@@ -44,6 +44,7 @@ jobs:
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_kron_operator.cpp -o build-runtime/qstate_kron_operator_test
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_rebind.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_rebind_test
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_adjoint.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_test
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_adjoint_runtime_width.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_runtime_width_test
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_adjoint_batch.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_batch_test
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_adjoint_scheduler.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_scheduler_test
           c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_rebind.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_rebind_benchmark
@@ -55,6 +56,7 @@ jobs:
           ./build-runtime/qstate_kron_operator_test
           ./build-runtime/qstate_tensor_rebind_test
           ./build-runtime/qstate_tensor_adjoint_test
+          ./build-runtime/qstate_tensor_adjoint_runtime_width_test
           ./build-runtime/qstate_tensor_adjoint_batch_test
           ./build-runtime/qstate_tensor_adjoint_scheduler_test
       - name: Run native numeric benchmark
