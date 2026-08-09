@@ -44,7 +44,9 @@ jobs:
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_kron_operator.cpp -o build-runtime/qstate_kron_operator_test
           ./build-runtime/qstate_kron_operator_test
       - name: Run native numeric benchmark
-        run: ./build-runtime/qstate_numeric_benchmark | tee qsa-numeric.txt
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_numeric_benchmark | tee qsa-numeric.txt
       - name: Run matched NumPy benchmark
         env:
           OMP_NUM_THREADS: "1"
@@ -52,13 +54,21 @@ jobs:
           MKL_NUM_THREADS: "1"
           VECLIB_MAXIMUM_THREADS: "1"
           NUMEXPR_NUM_THREADS: "1"
-        run: python benchmarks/numeric_numpy.py --qsa-output qsa-numeric.txt | tee qsa-vs-numpy.txt
+        run: |
+          set -o pipefail
+          python benchmarks/numeric_numpy.py --qsa-output qsa-numeric.txt | tee qsa-vs-numpy.txt
       - name: Run compiled tensor benchmark
-        run: ./build-runtime/qstate_tensor_contraction_plan_benchmark | tee tensor-plan.txt
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_tensor_contraction_plan_benchmark | tee tensor-plan.txt
       - name: Run tensor expectation benchmark
-        run: ./build-runtime/qstate_tensor_expectation_benchmark | tee tensor-expectation.txt
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_tensor_expectation_benchmark | tee tensor-expectation.txt
       - name: Run exact estimator benchmark
-        run: ./build-runtime/qstate_estimator_benchmark | tee estimator.txt
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_estimator_benchmark | tee estimator.txt
       - name: Run matched Qiskit Aer benchmark
         env:
           OMP_NUM_THREADS: "4"
@@ -66,7 +76,9 @@ jobs:
           MKL_NUM_THREADS: "1"
           VECLIB_MAXIMUM_THREADS: "1"
           NUMEXPR_NUM_THREADS: "1"
-        run: python benchmarks/estimator_aer.py --qsa-output estimator.txt | tee qsa-vs-aer.txt
+        run: |
+          set -o pipefail
+          python benchmarks/estimator_aer.py --qsa-output estimator.txt | tee qsa-vs-aer.txt
       - uses: actions/upload-artifact@v4
         with:
           name: qsa-0.2.0-runtime-evidence
