@@ -31,7 +31,7 @@ void require_near(double actual, double expected, double tolerance, const std::s
 int main() {
     require(qstate_abi_version_major() == 1U, "ABI major must remain 1");
     require(qstate_abi_version_minor() >= 5U, "compiled-plan ABI must be available");
-    require(std::string(qstate_version_string()) == "0.1.7", "native version string");
+    require(std::string(qstate_version_string()) == "0.1.8", "native version string");
 
     qstate_handle state = qstate_create(2);
     require(state != nullptr, "qstate_create");
