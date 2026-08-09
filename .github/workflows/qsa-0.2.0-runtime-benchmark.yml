@@ -44,13 +44,16 @@ jobs:
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_kron_operator.cpp -o build-runtime/qstate_kron_operator_test
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_rebind.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_rebind_test
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_adjoint.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_test
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_adjoint_batch.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_batch_test
           c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_rebind.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_rebind_benchmark
           c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_adjoint.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_benchmark
+          c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_adjoint_batch.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_batch_benchmark
       - name: Test structured runtime additions
         run: |
           ./build-runtime/qstate_kron_operator_test
           ./build-runtime/qstate_tensor_rebind_test
           ./build-runtime/qstate_tensor_adjoint_test
+          ./build-runtime/qstate_tensor_adjoint_batch_test
       - name: Run native numeric benchmark
         run: |
           set -o pipefail
@@ -81,6 +84,10 @@ jobs:
         run: |
           set -o pipefail
           ./build-runtime/qstate_tensor_adjoint_benchmark | tee tensor-adjoint.txt
+      - name: Run tensor adjoint point-batch benchmark
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_tensor_adjoint_batch_benchmark | tee tensor-adjoint-batch.txt
       - name: Run exact estimator benchmark
         run: |
           set -o pipefail
@@ -105,5 +112,6 @@ jobs:
             tensor-expectation.txt
             tensor-rebind.txt
             tensor-adjoint.txt
+            tensor-adjoint-batch.txt
             estimator.txt
             qsa-vs-aer.txt
