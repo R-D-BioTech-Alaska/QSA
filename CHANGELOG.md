@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added deterministic randomized state-transition differential validation against an independent dense reference
+- Added explicit copy-on-write branch-isolation, QSC round-trip, measurement, trajectory-noise, and Pauli-read invariants
+- Added architecture-layer dependency checks so the QRegister core cannot acquire causal-runtime internals
+- Added operation-derived Clifford certification for representation routing instead of relying only on caller-supplied flags
+- Documented the core, structural, differentiation, and runtime boundaries and the acceptance gate for new specialized paths
+
 ## 0.1.8 — 2026-08-08
 
 - Preserved weak entanglement during component factorization by requiring exact amplitude reconstruction before accepting a split
