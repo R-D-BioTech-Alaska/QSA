@@ -37,6 +37,7 @@ BROKER_FILES = (
     "src/qbroker.cpp",
     "include/qubit/qestimator.hpp",
     "src/qestimator.cpp",
+    "include/qubit/qparameterized_estimator.hpp",
 )
 
 
