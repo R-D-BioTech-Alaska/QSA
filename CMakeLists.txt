@@ -39,6 +39,7 @@ add_library(qstate_core STATIC
     src/qpauli_causal.cpp
     src/qtensor.cpp
     src/qbroker.cpp
+    src/qtensor_plan.cpp
 )
 set_target_properties(qstate_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(qstate_core PUBLIC
@@ -192,6 +193,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_tensor_network_tests PRIVATE qstate_core)
     add_test(NAME qstate_tensor_network_tests COMMAND qstate_tensor_network_tests)
 
+    add_executable(qstate_tensor_contraction_plan_tests tests/test_tensor_contraction_plan.cpp)
+    target_link_libraries(qstate_tensor_contraction_plan_tests PRIVATE qstate_core)
+    add_test(NAME qstate_tensor_contraction_plan_tests COMMAND qstate_tensor_contraction_plan_tests)
+
     add_executable(qstate_execution_broker_tests tests/test_execution_broker.cpp)
     target_link_libraries(qstate_execution_broker_tests PRIVATE qstate_core)
     add_test(NAME qstate_execution_broker_tests COMMAND qstate_execution_broker_tests)
@@ -315,6 +320,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_tensor_network_benchmark benchmarks/tensor_network.cpp)
     target_link_libraries(qstate_tensor_network_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_tensor_contraction_plan_benchmark benchmarks/tensor_contraction_plan.cpp)
+    target_link_libraries(qstate_tensor_contraction_plan_benchmark PRIVATE qstate_core)
 
     add_executable(qstate_causal_runtime_benchmark benchmarks/causal_runtime.cpp)
     target_link_libraries(qstate_causal_runtime_benchmark PRIVATE qstate_core)
