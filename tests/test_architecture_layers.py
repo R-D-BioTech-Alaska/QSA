@@ -22,6 +22,7 @@ FORBIDDEN_CORE_INCLUDES = (
     '"qubit/detail/qcausal',
     '"qubit/qbroker.hpp"',
     '"qubit/qestimator.hpp"',
+    '"qubit/qparameterized_estimator.hpp"',
 )
 
 STRUCTURAL_FILES = (
@@ -37,6 +38,7 @@ BROKER_FILES = (
     "src/qbroker.cpp",
     "include/qubit/qestimator.hpp",
     "src/qestimator.cpp",
+    "include/qubit/qparameterized_estimator.hpp",
 )
 
 
