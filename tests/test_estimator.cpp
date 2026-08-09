@@ -169,6 +169,87 @@ int main() {
     }
 
     {
+        constexpr std::size_t qubits = 8U;
+        std::vector<Operation> operations;
+        for (std::size_t qubit = 0; qubit < qubits; ++qubit) {
+            operations.push_back({
+                OperationCode::Ry,
+                static_cast<qubit::QubitId>(qubit),
+                0U,
+                0.11 + 0.017 * static_cast<double>(qubit),
+                0.0,
+            });
+        }
+        for (std::size_t qubit = 0; qubit + 1U < qubits; qubit += 2U) {
+            operations.push_back({
+                OperationCode::Cnot,
+                static_cast<qubit::QubitId>(qubit),
+                static_cast<qubit::QubitId>(qubit + 1U),
+                0.0,
+                0.0,
+            });
+        }
+
+        std::vector<PauliObservable> observables;
+        for (std::size_t qubit = 0; qubit < qubits; ++qubit) {
+            PauliObservable observable(qubits, PauliPropagationConfig{1U});
+            const PauliFactor z{static_cast<qubit::QubitId>(qubit), PauliAxis::Z};
+            observable.add_term({1.0, 0.0}, std::span<const PauliFactor>(&z, 1U));
+            observables.push_back(std::move(observable));
+        }
+
+        ExactEstimatorConfig serial_config;
+        serial_config.max_pauli_terms = 1U;
+        serial_config.tensor_worker_count = 1U;
+        ExactEstimatorPlan serial_estimator(qubits, operations, serial_config);
+        auto serial_batch = serial_estimator.compile(observables);
+        require(serial_batch.tensor_observable_count() == observables.size(),
+                "serial estimator did not route the bounded batch through tensor execution");
+        require(serial_batch.tensor_worker_count() == 1U,
+                "serial estimator did not preserve the requested tensor worker count");
+
+        ExactEstimatorConfig parallel_config = serial_config;
+        parallel_config.tensor_worker_count = 4U;
+        ExactEstimatorPlan parallel_estimator(qubits, operations, parallel_config);
+        auto parallel_batch = parallel_estimator.compile(observables);
+        require(parallel_batch.tensor_observable_count() == observables.size(),
+                "parallel estimator lost tensor-routable observables");
+        require(parallel_batch.tensor_worker_count() == 4U,
+                "parallel estimator did not materialize the requested tensor lanes");
+
+        auto serial_workspace = serial_batch.workspace();
+        auto parallel_workspace = parallel_batch.workspace();
+        std::vector<ExactEstimatorResult> serial_results(observables.size());
+        std::vector<ExactEstimatorResult> parallel_results(observables.size());
+        serial_batch.estimate(serial_results, serial_workspace);
+        parallel_batch.estimate(parallel_results, parallel_workspace);
+
+        QRegister state(qubits);
+        OperationPlan state_plan(operations, false);
+        state_plan.execute(state);
+        for (std::size_t index = 0; index < observables.size(); ++index) {
+            const QComplex reference = observables[index].expectation(state);
+            require_close(serial_results[index].value, reference, 2e-12,
+                          "serial tensor estimator differs from QRegister");
+            require_close(parallel_results[index].value, reference, 2e-12,
+                          "parallel tensor estimator differs from QRegister");
+            require_close(parallel_results[index].value, serial_results[index].value, 0.0,
+                          "parallel tensor estimator changed exact arithmetic");
+        }
+        require(parallel_workspace.estimated_bytes() > serial_workspace.estimated_bytes(),
+                "parallel tensor estimator did not account for lane workspaces");
+
+        bool rejected = false;
+        try {
+            qubit::ExactEstimatorBatchWorkspace wrong_workspace;
+            parallel_batch.estimate(parallel_results, wrong_workspace);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "parallel estimator accepted an unbound workspace");
+    }
+
+    {
         const std::vector<Operation> operations{
             {OperationCode::Rx, 0U, 0U, 0.37, 0.0},
         };
@@ -284,6 +365,16 @@ int main() {
             rejected = true;
         }
         require(rejected, "estimator accepted a mismatched observable width");
+
+        ExactEstimatorConfig invalid_config;
+        invalid_config.tensor_worker_count = 129U;
+        rejected = false;
+        try {
+            static_cast<void>(ExactEstimatorPlan(2U, {}, invalid_config));
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "estimator accepted an unbounded tensor worker count");
     }
 
     return 0;
