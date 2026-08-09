@@ -23,11 +23,6 @@ FORBIDDEN_CORE_INCLUDES = (
 )
 
 STRUCTURAL_FILES = (
-    "include/qubit/qstructure.hpp",
-    "include/qubit/qadaptive.hpp",
-    "include/qubit/qdot.hpp",
-    "include/qubit/qgrover.hpp",
-    "include/qubit/qsymmetry.hpp",
     "include/qubit/qrouter.hpp",
     "include/qubit/qstabilizer.hpp",
     "include/qubit/qphase_graph.hpp",
