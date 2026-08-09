@@ -78,16 +78,16 @@ ExactExpectationResult ExactExecutionBroker::expectation(
     return result;
 }
 
-ExactAmplitudeResult ExactExecutionBroker::amplitude_from_zero(
+ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
     std::size_t qubit_count,
     std::span<const Operation> operations,
     std::span<const std::uint8_t> basis_bits) const {
     validate_basis_width(qubit_count, basis_bits);
 
-    ExactAmplitudeResult result;
+    ExactProbabilityResult result;
     try {
         TensorNetworkCircuit tensor(qubit_count, operations, config_.tensor);
-        result.value = tensor.amplitude(basis_bits, &result.tensor_stats);
+        result.value = tensor.amplitude(basis_bits, &result.tensor_stats).norm2();
         result.route = ExactExecutionRoute::TensorNetwork;
         return result;
     } catch (const QStateError& error) {
@@ -97,12 +97,12 @@ ExactAmplitudeResult ExactExecutionBroker::amplitude_from_zero(
     QRegister state(qubit_count, config_.register_state);
     OperationPlan plan(operations);
     plan.execute(state);
-    result.value = state.amplitude_bits(basis_bits);
+    result.value = state.amplitude_bits(basis_bits).norm2();
     result.route = ExactExecutionRoute::Register;
     return result;
 }
 
-ExactAmplitudeResult ExactExecutionBroker::amplitude_from_zero(
+ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
     std::size_t qubit_count,
     std::span<const Operation> operations,
     BasisIndex basis) const {
@@ -121,7 +121,7 @@ ExactAmplitudeResult ExactExecutionBroker::amplitude_from_zero(
     for (std::size_t qubit = 0; qubit < qubit_count; ++qubit) {
         bits[qubit] = static_cast<std::uint8_t>((basis >> qubit) & BasisIndex{1});
     }
-    return amplitude_from_zero(qubit_count, operations, bits);
+    return basis_probability_from_zero(qubit_count, operations, bits);
 }
 
 }  // namespace qubit
