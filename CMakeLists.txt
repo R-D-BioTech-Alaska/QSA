@@ -238,6 +238,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_parameterized_estimator_tests PRIVATE qstate_core)
     add_test(NAME qstate_parameterized_estimator_tests COMMAND qstate_parameterized_estimator_tests)
 
+    add_executable(qstate_tensor_adjoint_causal_tests tests/test_tensor_adjoint_causal.cpp)
+    target_link_libraries(qstate_tensor_adjoint_causal_tests PRIVATE qstate_core)
+    add_test(NAME qstate_tensor_adjoint_causal_tests COMMAND qstate_tensor_adjoint_causal_tests)
+
     add_executable(qstate_causal_runtime_tests tests/test_qcausal.cpp)
     target_link_libraries(qstate_causal_runtime_tests PRIVATE qstate_core)
     add_test(NAME qstate_causal_runtime_tests COMMAND qstate_causal_runtime_tests)
@@ -369,6 +373,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_parameterized_estimator_benchmark benchmarks/parameterized_estimator.cpp)
     target_link_libraries(qstate_parameterized_estimator_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_tensor_adjoint_causal_benchmark benchmarks/tensor_adjoint_causal.cpp)
+    target_link_libraries(qstate_tensor_adjoint_causal_benchmark PRIVATE qstate_core)
 
     add_executable(qstate_tensor_expectation_benchmark benchmarks/tensor_expectation.cpp)
     target_link_libraries(qstate_tensor_expectation_benchmark PRIVATE qstate_core)

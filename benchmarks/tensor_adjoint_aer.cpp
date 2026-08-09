@@ -1,4 +1,4 @@
-#include "qubit/qtensor_adjoint_scheduler.hpp"
+#include "qubit/qtensor_adjoint_causal.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -12,10 +12,9 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
-using qubit::ExactAdjointGradientSchedule;
-using qubit::ExactAdjointGradientSchedulerConfig;
-using qubit::ExactAdjointGradientSchedulerPlan;
-using qubit::ExactAdjointScheduleRoute;
+using qubit::ExactAdjointGradientConfig;
+using qubit::ExactCausalAdjointGradientConfig;
+using qubit::ExactCausalAdjointGradientPlan;
 using qubit::OperationCode;
 using qubit::ParameterizedOperation;
 using qubit::PauliAxis;
@@ -121,18 +120,6 @@ template <typename Function>
     return result;
 }
 
-[[nodiscard]] const char* route_name(ExactAdjointScheduleRoute route) {
-    switch (route) {
-        case ExactAdjointScheduleRoute::Serial:
-            return "serial";
-        case ExactAdjointScheduleRoute::TermParallel:
-            return "term_parallel";
-        case ExactAdjointScheduleRoute::PointParallel:
-            return "point_parallel";
-    }
-    return "invalid";
-}
-
 void run_case(
     std::size_t qubits,
     std::size_t query_count,
@@ -149,18 +136,20 @@ void run_case(
         parameters = parameter_point(parameter_count);
     });
 
-    std::unique_ptr<ExactAdjointGradientSchedulerPlan> scheduler;
+    std::unique_ptr<ExactCausalAdjointGradientPlan> plan;
     const double compile_ms = milliseconds([&] {
-        scheduler = std::make_unique<ExactAdjointGradientSchedulerPlan>(
+        plan = std::make_unique<ExactCausalAdjointGradientPlan>(
             qubits,
             operations,
             queries,
-            ExactAdjointGradientSchedulerConfig{tensor, 4U, 0U});
+            ExactCausalAdjointGradientConfig{
+                ExactAdjointGradientConfig{tensor, 4U},
+            });
     });
-    const auto predicted = scheduler->choose(1U);
+    const auto plan_stats = plan->stats();
 
     const auto workspace_start = Clock::now();
-    auto workspace = scheduler->workspace();
+    auto workspace = plan->workspace();
     const double workspace_ms =
         std::chrono::duration<double, std::milli>(Clock::now() - workspace_start)
             .count();
@@ -174,16 +163,13 @@ void run_case(
 
     std::vector<double> run_times;
     run_times.reserve(repetitions);
-    ExactAdjointGradientSchedule completed;
     for (std::size_t repetition = 0U; repetition < repetitions; ++repetition) {
         run_times.push_back(milliseconds([&] {
-            scheduler->value_and_gradient_batch(
+            plan->value_and_gradient(
                 parameters,
-                1U,
                 values,
                 gradients,
-                workspace,
-                &completed);
+                workspace);
         }));
     }
 
@@ -208,13 +194,18 @@ void run_case(
     std::cout << prefix << "_queries=" << query_count << '\n';
     std::cout << prefix << "_parameters=" << parameter_count << '\n';
     std::cout << prefix << "_repetitions=" << repetitions << '\n';
-    std::cout << prefix << "_selected_route=" << route_name(completed.route) << '\n';
-    std::cout << prefix << "_selected_workers=" << completed.worker_count << '\n';
+    std::cout << prefix << "_selected_route=causal_term_parallel\n";
+    std::cout << prefix << "_selected_workers="
+              << workspace.execution_worker_count() << '\n';
+    std::cout << prefix << "_dynamic_terms="
+              << plan_stats.dynamic_term_count << '\n';
+    std::cout << prefix << "_static_terms="
+              << plan_stats.static_term_count << '\n';
     std::cout << prefix << "_estimated_critical_work="
-              << predicted.estimated_critical_work << '\n';
+              << plan_stats.dynamic.balanced_peak_estimated_work << '\n';
     std::cout << prefix << "_estimated_workspace_bytes="
-              << predicted.estimated_workspace_bytes << '\n';
-    std::cout << prefix << "_plan_bytes=" << scheduler->estimated_bytes() << '\n';
+              << workspace.estimated_bytes() << '\n';
+    std::cout << prefix << "_plan_bytes=" << plan->estimated_bytes() << '\n';
     std::cout << prefix << "_workspace_bytes=" << workspace.estimated_bytes() << '\n';
     std::cout << prefix << "_workload_build_ms=" << workload_build_ms << '\n';
     std::cout << prefix << "_compile_ms=" << compile_ms << '\n';
