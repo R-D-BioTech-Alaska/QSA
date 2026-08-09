@@ -31,6 +31,23 @@ def complex_data(size: int, shift: float) -> np.ndarray:
     return real + 1j * imag
 
 
+def structured_dense(sites: int) -> np.ndarray:
+    first = np.asarray([1.0 + 0.0j], dtype=np.complex128)
+    second = np.asarray([1.0 + 0.0j], dtype=np.complex128)
+    for site in range(sites):
+        angle = 0.01 * float(site + 1)
+        phase = 0.013 * float(site + 1)
+        first = np.kron(
+            first,
+            np.asarray([math.cos(angle), math.sin(angle)], dtype=np.complex128),
+        )
+        second = np.kron(
+            second,
+            np.asarray([math.cos(phase), 1j * math.sin(phase)], dtype=np.complex128),
+        )
+    return (0.75 + 0.125j) * first + (-0.2 + 0.05j) * second
+
+
 def parse_qsa_output(path: Path) -> dict[str, float]:
     values: dict[str, float] = {}
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -124,6 +141,22 @@ def main() -> None:
     print(f"numpy_matrix2_ms={matrix_ms:.12g}")
     print(f"numpy_matrix2_checksum={matrix_checksum:.17g}")
 
+    kron20 = structured_dense(20)
+    kron20_norm = 0.0
+
+    def kron20_work() -> None:
+        nonlocal kron20_norm
+        kron20_norm = float(np.vdot(kron20, kron20).real)
+
+    kron20_work()
+    kron20_ms = best_ms(kron20_work, max(5, args.repetitions))
+    print("numpy_kron20_sites=20")
+    print(f"numpy_kron20_logical_elements={kron20.size}")
+    print(f"numpy_kron20_norm_ms={kron20_ms:.12g}")
+    print(f"numpy_kron20_norm2={kron20_norm:.17g}")
+    print(f"numpy_kron20_bytes={kron20.nbytes}")
+    print(f"numpy_kron100_dense_bytes_estimate={16 * (1 << 100)}")
+
     if args.qsa_output is not None:
         qsa = parse_qsa_output(args.qsa_output)
         comparisons = (
@@ -150,6 +183,17 @@ def main() -> None:
                 continue
             scale = max(1.0, abs(qsa_value), abs(numpy_value))
             print(f"qsa_{name}_numpy_relative_error={abs(qsa_value - numpy_value) / scale:.12g}")
+
+        qsa_kron_ms = qsa.get("kron20_norm_ms")
+        if qsa_kron_ms is not None and qsa_kron_ms > 0.0:
+            print(f"qsa_kron20_vs_numpy={kron20_ms / qsa_kron_ms:.12g}")
+        qsa_kron_norm = qsa.get("kron20_norm2")
+        if qsa_kron_norm is not None:
+            scale = max(1.0, abs(qsa_kron_norm), abs(kron20_norm))
+            print(f"qsa_kron20_numpy_relative_error={abs(qsa_kron_norm - kron20_norm) / scale:.12g}")
+        qsa_kron_bytes = qsa.get("kron20_bytes")
+        if qsa_kron_bytes is not None and qsa_kron_bytes > 0.0:
+            print(f"qsa_kron20_memory_ratio={kron20.nbytes / qsa_kron_bytes:.12g}")
 
 
 if __name__ == "__main__":
