@@ -29,10 +29,19 @@ Structural engines exploit a proof or a bounded mathematical variable:
 - phase graphs
 - sparse Pauli observables
 - causal Pauli light cones
+- bounded exact tensor-network contraction
 
-A structural route is eligible only while its governing structure is valid. If support, term count, component closure, or another controlling quantity grows beyond its configured bound, the route must reject or return to an exact general path. It must not approximate silently.
+A structural route is eligible only while its governing structure is valid. If support, term count, component closure, contraction width, or another controlling quantity grows beyond its configured bound, the route must reject or return to an exact general path. It must not approximate silently.
 
 `RepresentationAdvisor::inspect_operations()` derives Clifford eligibility from the actual operation list. Callers do not need to assert that property manually. Existing explicit feature inspection remains available for compatibility where an external subsystem already owns a stronger certificate.
+
+### Exact tensor-network contraction
+
+`TensorNetworkCircuit` represents a unitary circuit as binary tensor factors over wire-segment variables. Initial |0> states, one-qubit gates, two-qubit gates, and requested output-basis pins become factors. A basis amplitude is evaluated by deterministic variable elimination.
+
+The controlling structural resource is the largest binary factor union encountered during contraction. `max_contraction_entries` is a hard bound on that intermediate work. If the requested contraction would exceed the bound, the query throws instead of truncating a bond or approximating an amplitude.
+
+The first tensor route supports exact unitary circuit amplitudes. It intentionally does not accept trajectory-noise operations, automatically convert arbitrary QRegister state, or replace QRegister. Automatic migration requires a separate exact eligibility and reconstruction certificate.
 
 ## Differentiation
 
@@ -74,6 +83,8 @@ Representation and storage changes are tested against the same invariants:
 
 `qstate_transition_invariant_tests` runs deterministic randomized sequences that mix gates, structured two-qubit paths, measurement, trajectory noise, QSC replacement, branch mutation, and Pauli reads. This is intended to exercise combinations rather than only individual features.
 
+The tensor backend has a separate bounded-system differential gate against QRegister, a wide structured circuit with an analytic amplitude check, deterministic resource statistics, and an explicit contraction-limit rejection case.
+
 ## Review gate for new specialized paths
 
 A new exact backend or fast path should include all of the following before integration:
@@ -90,4 +101,4 @@ Performance evidence cannot replace an exactness gate.
 
 ## Next structural expansion
 
-The largest remaining representation gap is general bounded-entanglement structure. The next major backend should target tensor-network or Schmidt-width scaling rather than another narrow three-qubit optimization. Its acceptance criterion is exact reconstruction or exact observable agreement under a bounded contraction/bond certificate, with fail-closed behavior when that certificate grows beyond the configured limit.
+The tensor-network route closes the first general bounded-entanglement execution gap without making arbitrary state migration automatic. The next structural step is a certified representation broker and, where useful, persistent tensor forms such as Schmidt trees or matrix-product states. Those paths must preserve the same fail-closed rule when bond or contraction width ceases to be bounded.
