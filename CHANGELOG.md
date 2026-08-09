@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+- Preserved weak entanglement during component factorization by requiring exact amplitude reconstruction before accepting a split
+- Added batch-native exact weighted-adjoint execution for Tripair training without changing the matched optimization contract
+- Added deterministic row-parallel exact V10 execution with bitwise-identical serial and parallel results on the validated row batch
+- Added exact sparse Pauli observables with backward Heisenberg propagation through supported Clifford and non-Clifford gates
+- Added exact causal Pauli propagation plans that execute only the observable's backward light cone
+- Added fail-closed Pauli term-growth limits and adversarial collapse gates for both operator growth and causal-cone growth
+- Added Pauli-derived representation-advisor eligibility without making unsupported representations eligible
+- Preserved the existing QSA register path as the exact general fallback
+
+## 0.1.7 — 2026-07-24
+
+- Added native quantum-dot pocket systems and exact QRegister comparison paths
+- Added exact structural gate acceleration for disconnected and structure-preserving operations
+- Added Bayesian adaptive compaction with mandatory exact audits
+- Added exact representation advice for QRegister, symmetry, quantum-dot, stabilizer, and phase-graph workloads
+- Added component-aware exact symmetry discovery without requiring global statevector materialization first
+- Added packed exact stabilizer tableaux and word-parallel stabilizer batches
+- Added exact phase-graph states for supported commuting phase circuits
+- Added dependency-aware execution, parallel independent-component execution, and zero-copy component read views
+- Added compiled diagonal plans and structured sparse kernels
+- Preserved the established QSA 0.1 interfaces and QSC v1 compatibility surface
+
 ## 0.1.6 — 2026-07-24
 
 - Added installable CMake package targets for native C and C++ consumers
