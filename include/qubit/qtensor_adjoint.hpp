@@ -625,36 +625,7 @@ private:
         if (lane_count == worker_count_) {
             return lane_jobs_;
         }
-
-        std::vector<std::vector<std::size_t>> lanes(lane_count);
-        std::vector<std::uint64_t> lane_work(lane_count, 0U);
-        std::vector<std::size_t> order(jobs_.size());
-        for (std::size_t index = 0U; index < order.size(); ++index) {
-            order[index] = index;
-        }
-        std::stable_sort(
-            order.begin(), order.end(),
-            [&](std::size_t first, std::size_t second) {
-                if (jobs_[first].estimated_work != jobs_[second].estimated_work) {
-                    return jobs_[first].estimated_work > jobs_[second].estimated_work;
-                }
-                if (jobs_[first].observable_index != jobs_[second].observable_index) {
-                    return jobs_[first].observable_index < jobs_[second].observable_index;
-                }
-                return jobs_[first].term_index < jobs_[second].term_index;
-            });
-        for (const std::size_t job_index : order) {
-            std::size_t lane = 0U;
-            for (std::size_t candidate = 1U; candidate < lane_count; ++candidate) {
-                if (lane_work[candidate] < lane_work[lane]) {
-                    lane = candidate;
-                }
-            }
-            lanes[lane].push_back(job_index);
-            lane_work[lane] = saturating_add(
-                lane_work[lane], jobs_[job_index].estimated_work);
-        }
-        return lanes;
+        return make_balanced_lane_schedule(lane_count);
     }
 
     void build_lane_schedule() {
@@ -740,29 +711,34 @@ private:
                 throw QStateError("Exact adjoint gradient workspace job is invalid");
             }
             const auto& term = prototype_->terms_[jobs_[job_index].term_index];
-            if (scratch.forward_steps.size() < term.steps.size()) {
-                scratch.forward_steps.resize(term.steps.size());
-                scratch.step_adjoints.resize(term.steps.size());
-            }
+            scratch.forward_steps.resize(term.steps.size());
+            scratch.step_adjoints.resize(term.steps.size());
             for (std::size_t step_index = 0U;
                  step_index < term.steps.size();
                  ++step_index) {
                 const auto& step = term.steps[step_index];
-                scratch.forward_steps[step_index].reserve(step.output_entries);
-                scratch.step_adjoints[step_index].reserve(step.output_entries);
-                scratch.input_indices.reserve(step.inputs.size());
-                scratch.input_values.reserve(step.inputs.size());
-                scratch.prefix.reserve(step.inputs.size() + 1U);
-                scratch.suffix.reserve(step.inputs.size() + 1U);
+                scratch.forward_steps[step_index].assign(
+                    step.output_entries, QComplex{});
+                scratch.step_adjoints[step_index].assign(
+                    step.output_entries, QComplex{});
             }
-            if (scratch.source_adjoints.size() < term.sources.size()) {
-                scratch.source_adjoints.resize(term.sources.size());
-            }
+
+            scratch.source_adjoints.resize(term.sources.size());
             for (std::size_t source = 0U; source < term.sources.size(); ++source) {
-                scratch.source_adjoints[source].reserve(
-                    term.sources[source].values.size());
+                scratch.source_adjoints[source].assign(
+                    term.sources[source].values.size(), QComplex{});
             }
-            scratch.terminal_values.reserve(term.terminal_nodes.size());
+            scratch.terminal_values.resize(term.terminal_nodes.size());
+
+            for (std::size_t reverse_index = term.steps.size();
+                 reverse_index-- > 0U;) {
+                const std::size_t input_count =
+                    term.steps[reverse_index].inputs.size();
+                scratch.input_indices.resize(input_count);
+                scratch.input_values.resize(input_count);
+                scratch.prefix.resize(input_count + 1U);
+                scratch.suffix.resize(input_count + 1U);
+            }
         }
     }
 
@@ -1099,12 +1075,8 @@ private:
     [[nodiscard]] static QComplex forward_and_reverse(
         const TensorExpectationPlan::TermPlan& term,
         ExactAdjointGradientWorkspace::Scratch& scratch) {
-        if (scratch.forward_steps.size() < term.steps.size()) {
-            scratch.forward_steps.resize(term.steps.size());
-        }
-        if (scratch.step_adjoints.size() < term.steps.size()) {
-            scratch.step_adjoints.resize(term.steps.size());
-        }
+        scratch.forward_steps.resize(term.steps.size());
+        scratch.step_adjoints.resize(term.steps.size());
         for (std::size_t step_index = 0U; step_index < term.steps.size(); ++step_index) {
             const auto& step = term.steps[step_index];
             scratch.forward_steps[step_index].assign(step.output_entries, QComplex{});
@@ -1143,9 +1115,7 @@ private:
             }
         }
 
-        if (scratch.source_adjoints.size() < term.sources.size()) {
-            scratch.source_adjoints.resize(term.sources.size());
-        }
+        scratch.source_adjoints.resize(term.sources.size());
         for (std::size_t source = 0U; source < term.sources.size(); ++source) {
             scratch.source_adjoints[source].assign(
                 term.sources[source].values.size(), QComplex{});
