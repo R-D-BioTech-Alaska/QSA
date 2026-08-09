@@ -13,6 +13,7 @@ namespace qubit {
 struct ExactEstimatorConfig {
     ExactExecutionBrokerConfig execution{};
     std::size_t max_pauli_terms{512U};
+    std::size_t tensor_worker_count{0U};
 };
 
 struct ExactEstimatorResult {
@@ -32,8 +33,8 @@ public:
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
 
 private:
-    TensorExpectationWorkspace tensor_{};
-    std::vector<QComplex> tensor_values_{};
+    std::vector<TensorExpectationWorkspace> tensor_{};
+    std::vector<std::vector<QComplex>> tensor_values_{};
 
     friend class ExactEstimatorBatchPlan;
 };
@@ -92,8 +93,9 @@ public:
     [[nodiscard]] std::size_t observable_count() const noexcept {
         return results_.size();
     }
-    [[nodiscard]] std::size_t tensor_observable_count() const noexcept {
-        return tensor_indices_.size();
+    [[nodiscard]] std::size_t tensor_observable_count() const noexcept;
+    [[nodiscard]] std::size_t tensor_worker_count() const noexcept {
+        return tensor_plans_.size();
     }
     [[nodiscard]] std::size_t register_observable_count() const noexcept {
         return register_indices_.size();
@@ -105,10 +107,10 @@ private:
     QStateConfig register_state_{};
     std::vector<Operation> operations_{};
     std::vector<ExactEstimatorResult> results_{};
-    std::vector<std::size_t> tensor_indices_{};
+    std::vector<std::vector<std::size_t>> tensor_indices_{};
+    std::vector<TensorExpectationPlan> tensor_plans_{};
     std::vector<std::size_t> register_indices_{};
     std::vector<PauliObservable> register_observables_{};
-    std::optional<TensorExpectationPlan> tensor_plan_{};
     std::optional<OperationPlan> register_plan_{};
 };
 
