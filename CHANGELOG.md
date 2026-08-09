@@ -7,6 +7,9 @@
 - Added architecture-layer dependency checks so the QRegister core cannot acquire causal-runtime internals
 - Added operation-derived Clifford certification for representation routing instead of relying only on caller-supplied flags
 - Documented the core, structural, differentiation, and runtime boundaries and the acceptance gate for new specialized paths
+- Added exact bounded tensor-network circuit contraction for unitary basis-amplitude queries without constructing a global statevector
+- Added deterministic contraction-width statistics and fail-closed `max_contraction_entries` and `max_factors` resource certificates
+- Added randomized QRegister differential gates, a 100-qubit structured analytic-amplitude gate, contraction-collapse rejection, and reproducible tensor evidence
 
 ## 0.1.8 — 2026-08-08
 
