@@ -1,8 +1,18 @@
 # Exact representation advisor
 
-QSA contains several exact state engines whose performance depends on workload structure. `RepresentationAdvisor` ranks the existing `QRegister`, `SymmetryState`, `QuantumDotPocket`, `StabilizerState`, and `PhaseGraphState` paths using explicit workload evidence and Bayesian outcome history.
+QSA contains several exact state engines whose performance depends on workload structure. `RepresentationAdvisor` ranks the existing `QRegister`, `SymmetryState`, `QuantumDotPocket`, `StabilizerState`, `PhaseGraphState`, and sparse Pauli paths using explicit workload evidence and Bayesian outcome history.
 
 The advisor does not convert state, execute a backend, or approximate a result. It returns a recommendation with eligibility, estimated work, posterior success, adjusted score, and a short reason. The caller remains responsible for choosing and constructing the representation.
+
+## Operation-derived certification
+
+`RepresentationAdvisor::inspect_operations()` accepts the actual QSA `Operation` sequence and derives Clifford eligibility from the operation codes. X, Y, Z, H, S, S-dagger, CNOT, CZ, and SWAP remain eligible. T, arbitrary rotations, and trajectory-noise operations remove the Clifford certificate.
+
+This route is preferred when the caller has an operation list. Bayesian timing history can rank a certified route but cannot manufacture eligibility after the operation contract rejects it.
+
+Phase-graph eligibility is not inferred from a gate list alone because `PhaseGraphState` also requires the correct uniform-magnitude state family. The existing explicit feature path remains available when an external subsystem already owns that stronger state certificate.
+
+Pauli eligibility is derived by `inspect_pauli()` from an actual validated `PauliObservable` with matching register width.
 
 ## Component-aware symmetry discovery
 
@@ -14,6 +24,6 @@ Discovery stops before class growth exceeds `max_classes`. This prevents an unhe
 
 ## Bayesian evidence
 
-Each representation has a Beta posterior within six workload contexts: general, fragmented, symmetry-supported, uniform phase-graph, Clifford-only, and declared quantum-dot work. `observe()` records whether a backend was fastest for a comparable workload. The posterior adjusts future rankings but cannot make an ineligible backend eligible.
+Each representation has a Beta posterior within seven workload contexts: general, fragmented, symmetry-supported, uniform phase-graph, Clifford-only, declared quantum-dot work, and Pauli-observable work. `observe()` records whether a backend was fastest for a comparable workload. The posterior adjusts future rankings but cannot make an ineligible backend eligible.
 
 The reproducible benchmark target is `qstate_representation_advisor_benchmark`.

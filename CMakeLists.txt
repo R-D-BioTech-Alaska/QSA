@@ -146,6 +146,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_representation_advisor_tests PRIVATE qstate_core)
     add_test(NAME qstate_representation_advisor_tests COMMAND qstate_representation_advisor_tests)
 
+    add_executable(qstate_representation_certification_tests tests/test_representation_certification.cpp)
+    target_link_libraries(qstate_representation_certification_tests PRIVATE qstate_core)
+    add_test(NAME qstate_representation_certification_tests COMMAND qstate_representation_certification_tests)
+
     add_executable(qstate_pauli_propagation_tests tests/test_pauli_propagation.cpp)
     target_link_libraries(qstate_pauli_propagation_tests PRIVATE qstate_core)
     add_test(NAME qstate_pauli_propagation_tests COMMAND qstate_pauli_propagation_tests)
@@ -178,6 +182,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_scaling_fast_paths_tests PRIVATE qstate_core)
     add_test(NAME qstate_scaling_fast_paths_tests COMMAND qstate_scaling_fast_paths_tests)
 
+    add_executable(qstate_transition_invariant_tests tests/test_transition_invariants.cpp)
+    target_link_libraries(qstate_transition_invariant_tests PRIVATE qstate_core)
+    add_test(NAME qstate_transition_invariant_tests COMMAND qstate_transition_invariant_tests)
+
     add_executable(qstate_causal_runtime_tests tests/test_qcausal.cpp)
     target_link_libraries(qstate_causal_runtime_tests PRIVATE qstate_core)
     add_test(NAME qstate_causal_runtime_tests COMMAND qstate_causal_runtime_tests)
@@ -206,6 +214,10 @@ if(QSTATE_BUILD_TESTS)
                 COMMAND ${CMAKE_COMMAND} -E env
                     "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/python"
                     ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_contract_manifest.py
+            )
+            add_test(
+                NAME qstate_architecture_layers
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_architecture_layers.py
             )
             add_test(
                 NAME qstate_version_sync

@@ -1,0 +1,31 @@
+name: QSA Structural Hardening
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/**"
+      - "src/**"
+      - "tests/**"
+      - "docs/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/qsa-structural-hardening.yml"
+  workflow_dispatch:
+
+jobs:
+  invariant-gates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Configure
+        run: cmake -S . -B build -DQSTATE_BUILD_EXAMPLES=OFF -DQSTATE_BUILD_BENCHMARKS=OFF
+      - name: Build hardening targets
+        run: >-
+          cmake --build build --config Release --parallel 2
+          --target qstate_transition_invariant_tests qstate_representation_certification_tests qstate_representation_advisor_tests
+      - name: Run hardening gates
+        run: >-
+          ctest --test-dir build --output-on-failure
+          -R "qstate_(transition_invariant|representation_certification|representation_advisor|architecture_layers)"
