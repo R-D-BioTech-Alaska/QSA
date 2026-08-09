@@ -162,6 +162,9 @@ int main() {
                 "single-Ry parameter-shift equivalent count is incorrect");
         require(plan.worker_count() == 1U,
                 "default adjoint worker count changed");
+        require(plan.stats().balanced_peak_estimated_work ==
+                    plan.stats().round_robin_peak_estimated_work,
+                "single-lane adjoint balancing changed its work estimate");
     }
 
     {
@@ -265,8 +268,14 @@ int main() {
             parallel_workspace);
         require(parallel.worker_count() == 3U,
                 "parallel adjoint worker count did not clamp to differentiated terms");
-        require(parallel.stats().worker_count == parallel.worker_count(),
+        const auto parallel_stats = parallel.stats();
+        require(parallel_stats.worker_count == parallel.worker_count(),
                 "parallel adjoint stats worker count changed");
+        require(parallel_stats.estimated_work > 0U,
+                "parallel adjoint produced no estimated work");
+        require(parallel_stats.balanced_peak_estimated_work <=
+                    parallel_stats.round_robin_peak_estimated_work,
+                "parallel adjoint balanced schedule regressed estimated peak work");
         for (std::size_t index = 0U; index < parallel_values.size(); ++index) {
             require_close(
                 parallel_values[index], adjoint_values[index], 2e-13,
