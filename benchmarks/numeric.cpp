@@ -1,3 +1,4 @@
+#include "qubit/qkron.hpp"
 #include "qubit/qnumeric.hpp"
 
 #include <algorithm>
@@ -13,6 +14,7 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using qubit::KronVector;
 using qubit::NumericConfig;
 using qubit::NumericExecutor;
 using qubit::QComplex;
@@ -62,6 +64,23 @@ template <typename Function>
         };
     }
     return values;
+}
+
+[[nodiscard]] KronVector structured_vector(std::size_t sites) {
+    KronVector result(std::vector<std::size_t>(sites, 2U), 4U);
+    std::vector<std::vector<QComplex>> first;
+    std::vector<std::vector<QComplex>> second;
+    first.reserve(sites);
+    second.reserve(sites);
+    for (std::size_t site = 0; site < sites; ++site) {
+        const double angle = 0.01 * static_cast<double>(site + 1U);
+        const double phase = 0.013 * static_cast<double>(site + 1U);
+        first.push_back({{std::cos(angle), 0.0}, {std::sin(angle), 0.0}});
+        second.push_back({{std::cos(phase), 0.0}, {0.0, std::sin(phase)}});
+    }
+    result.add_term({0.75, 0.125}, first);
+    result.add_term({-0.2, 0.05}, second);
+    return result;
 }
 
 }  // namespace
@@ -236,6 +255,39 @@ int main() {
         std::cout << "matrix2_parallel_ratio=" << serial_ms / parallel_ms << '\n';
         std::cout << "matrix2_max_error=" << max_error << '\n';
         std::cout << "matrix2_checksum=" << checksum << '\n';
+    }
+
+    {
+        constexpr std::size_t sites = 20U;
+        KronVector structured = structured_vector(sites);
+        double structured_norm = 0.0;
+        const double structured_ms = best_milliseconds([&] {
+            structured_norm = structured.norm2();
+        }, 25U);
+        std::cout << "kron20_sites=" << sites << '\n';
+        std::cout << "kron20_logical_elements=" << structured.logical_size() << '\n';
+        std::cout << "kron20_terms=" << structured.term_count() << '\n';
+        std::cout << "kron20_norm_ms=" << structured_ms << '\n';
+        std::cout << "kron20_norm2=" << structured_norm << '\n';
+        std::cout << "kron20_bytes=" << structured.estimated_bytes() << '\n';
+    }
+
+    {
+        constexpr std::size_t sites = 100U;
+        KronVector structured = structured_vector(sites);
+        double structured_norm = 0.0;
+        const double structured_ms = best_milliseconds([&] {
+            structured_norm = structured.norm2();
+        }, 25U);
+        std::cout << "kron100_sites=" << sites << '\n';
+        std::cout << "kron100_log2_elements="
+                  << static_cast<double>(structured.log2_logical_size()) << '\n';
+        std::cout << "kron100_dense_size_fits="
+                  << static_cast<int>(structured.logical_size_fits()) << '\n';
+        std::cout << "kron100_terms=" << structured.term_count() << '\n';
+        std::cout << "kron100_norm_ms=" << structured_ms << '\n';
+        std::cout << "kron100_norm2=" << structured_norm << '\n';
+        std::cout << "kron100_bytes=" << structured.estimated_bytes() << '\n';
     }
 
     return 0;
