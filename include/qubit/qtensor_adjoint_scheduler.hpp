@@ -120,55 +120,34 @@ public:
         std::span<const ParameterizedOperation> operations,
         std::span<const PauliObservable> observables,
         ExactAdjointGradientSchedulerConfig config = {})
-        : serial_(
+        : config_(config),
+          resolved_worker_count_(resolve_worker_count(config.total_worker_count)),
+          plan_(
               qubit_count,
               operations,
               observables,
-              ExactAdjointGradientConfig{config.tensor, 1U}),
-          config_(config),
+              ExactAdjointGradientConfig{
+                  config.tensor,
+                  resolved_worker_count_,
+              }),
           workspace_token_(next_workspace_token()) {
-        if (serial_.parameter_count() == 0U) {
+        if (plan_.parameter_count() == 0U) {
             throw QStateError(
                 "Exact adjoint scheduler requires at least one parameterized operation");
         }
-        if (config_.total_worker_count > kMaxWorkers) {
-            throw QStateError(
-                "Exact adjoint scheduler total_worker_count exceeds the supported limit");
-        }
 
-        std::size_t requested = config_.total_worker_count;
-        if (requested == 0U) {
-            const unsigned int hardware = std::thread::hardware_concurrency();
-            requested = hardware == 0U ? 1U : static_cast<std::size_t>(hardware);
-            requested = std::min(requested, kMaxWorkers);
-        }
-        resolved_worker_count_ = std::max<std::size_t>(1U, requested);
-
-        const ExactAdjointGradientStats serial_stats = serial_.stats();
-        serial_estimated_work_ = serial_stats.estimated_work;
+        const ExactAdjointGradientStats plan_stats = plan_.stats();
+        serial_estimated_work_ = plan_stats.estimated_work;
         if (serial_estimated_work_ == 0U) {
             throw QStateError("Exact adjoint scheduler received an empty differentiated workload");
         }
-        serial_workspace_bytes_ = profiled_workspace_bytes(serial_);
 
-        if (resolved_worker_count_ > 1U &&
-            serial_stats.differentiated_term_count > 1U) {
-            term_.emplace(
-                qubit_count,
-                operations,
-                observables,
-                ExactAdjointGradientConfig{
-                    config_.tensor,
-                    resolved_worker_count_,
-                });
-            if (term_->worker_count() > 1U) {
-                const ExactAdjointGradientStats term_stats = term_->stats();
-                term_peak_estimated_work_ =
-                    term_stats.balanced_peak_estimated_work;
-                term_workspace_bytes_ = profiled_workspace_bytes(*term_);
-            } else {
-                term_.reset();
-            }
+        serial_workspace_bytes_ = plan_.workspace(1U).estimated_bytes();
+        if (plan_.worker_count() > 1U) {
+            term_peak_estimated_work_ =
+                plan_stats.balanced_peak_estimated_work;
+            term_workspace_bytes_ =
+                plan_.workspace(plan_.worker_count()).estimated_bytes();
         }
     }
 
@@ -199,7 +178,7 @@ public:
         schedule.serial_eligible = fits_workspace(
             schedule.serial_estimated_workspace_bytes);
 
-        if (term_.has_value()) {
+        if (plan_.worker_count() > 1U) {
             schedule.term_estimated_critical_work = saturating_multiply(
                 term_peak_estimated_work_, static_cast<std::uint64_t>(point_count));
             schedule.term_estimated_workspace_bytes = saturating_add_size(
@@ -260,10 +239,10 @@ public:
              schedule.serial_estimated_critical_work,
              schedule.serial_estimated_workspace_bytes},
             schedule.serial_eligible);
-        if (term_.has_value()) {
+        if (plan_.worker_count() > 1U) {
             consider(
                 {ExactAdjointScheduleRoute::TermParallel,
-                 term_->worker_count(),
+                 plan_.worker_count(),
                  schedule.term_estimated_critical_work,
                  schedule.term_estimated_workspace_bytes},
                 schedule.term_eligible);
@@ -343,17 +322,8 @@ public:
 
         switch (schedule.route) {
             case ExactAdjointScheduleRoute::Serial:
-                evaluate_sequential(
-                    serial_,
-                    *workspace_value.single_workspace_,
-                    parameters,
-                    point_count,
-                    point_gradient_entries,
-                    workspace_value);
-                break;
             case ExactAdjointScheduleRoute::TermParallel:
                 evaluate_sequential(
-                    *term_,
                     *workspace_value.single_workspace_,
                     parameters,
                     point_count,
@@ -402,11 +372,11 @@ public:
     }
 
     [[nodiscard]] std::size_t parameter_count() const noexcept {
-        return serial_.parameter_count();
+        return plan_.parameter_count();
     }
 
     [[nodiscard]] std::size_t observable_count() const noexcept {
-        return serial_.observable_count();
+        return plan_.observable_count();
     }
 
     [[nodiscard]] std::size_t resolved_worker_count() const noexcept {
@@ -415,13 +385,13 @@ public:
 
     [[nodiscard]] ExactAdjointGradientSchedulerStats stats() const noexcept {
         ExactAdjointGradientSchedulerStats result;
-        const ExactAdjointGradientStats serial_stats = serial_.stats();
+        const ExactAdjointGradientStats plan_stats = plan_.stats();
         result.resolved_worker_count = resolved_worker_count_;
         result.max_workspace_bytes = config_.max_workspace_bytes;
         result.parameter_count = parameter_count();
         result.observable_count = observable_count();
         result.differentiated_term_count =
-            serial_stats.differentiated_term_count;
+            plan_stats.differentiated_term_count;
         result.serial_estimated_work = serial_estimated_work_;
         result.term_balanced_peak_estimated_work =
             term_peak_estimated_work_;
@@ -431,39 +401,42 @@ public:
     }
 
     [[nodiscard]] std::size_t estimated_bytes() const noexcept {
+        const std::size_t plan_bytes = plan_.estimated_bytes();
         return sizeof(*this) +
-               serial_.estimated_bytes() +
-               (term_.has_value() ? term_->estimated_bytes() : 0U);
+               (plan_bytes > sizeof(ExactAdjointGradientPlan)
+                    ? plan_bytes - sizeof(ExactAdjointGradientPlan)
+                    : 0U);
     }
 
 private:
     static constexpr std::size_t kMaxWorkers = 16U;
 
-    ExactAdjointGradientPlan serial_;
-    std::optional<ExactAdjointGradientPlan> term_{};
     ExactAdjointGradientSchedulerConfig config_{};
     std::size_t resolved_worker_count_{1U};
+    ExactAdjointGradientPlan plan_;
     std::uint64_t serial_estimated_work_{0U};
     std::uint64_t term_peak_estimated_work_{0U};
     std::size_t serial_workspace_bytes_{0U};
     std::size_t term_workspace_bytes_{0U};
     std::uint64_t workspace_token_{0U};
 
+    [[nodiscard]] static std::size_t resolve_worker_count(
+        std::size_t requested) {
+        if (requested > kMaxWorkers) {
+            throw QStateError(
+                "Exact adjoint scheduler total_worker_count exceeds the supported limit");
+        }
+        if (requested == 0U) {
+            const unsigned int hardware = std::thread::hardware_concurrency();
+            requested = hardware == 0U ? 1U : static_cast<std::size_t>(hardware);
+            requested = std::min(requested, kMaxWorkers);
+        }
+        return std::max<std::size_t>(1U, requested);
+    }
+
     [[nodiscard]] static std::uint64_t next_workspace_token() noexcept {
         static std::atomic<std::uint64_t> next{1U};
         return next.fetch_add(1U, std::memory_order_relaxed);
-    }
-
-    [[nodiscard]] static std::size_t profiled_workspace_bytes(
-        const ExactAdjointGradientPlan& plan) {
-        ExactAdjointGradientWorkspace workspace_value = plan.workspace();
-        std::vector<double> parameters(plan.parameter_count(), 0.0);
-        std::vector<QComplex> values(plan.observable_count());
-        std::vector<QComplex> gradients(
-            plan.observable_count() * plan.parameter_count());
-        plan.value_and_gradient(
-            parameters, values, gradients, workspace_value);
-        return workspace_value.estimated_bytes();
     }
 
     [[nodiscard]] static std::uint64_t saturating_multiply(
@@ -550,7 +523,7 @@ private:
                 std::vector<ExactAdjointGradientWorkspace> fresh;
                 fresh.reserve(schedule.worker_count);
                 for (std::size_t lane = 0U; lane < schedule.worker_count; ++lane) {
-                    fresh.push_back(serial_.workspace());
+                    fresh.push_back(plan_.workspace(1U));
                 }
                 workspace_value.point_workspaces_ = std::move(fresh);
             }
@@ -559,21 +532,21 @@ private:
 
         std::vector<ExactAdjointGradientWorkspace>().swap(
             workspace_value.point_workspaces_);
+        const std::size_t execution_workers =
+            schedule.route == ExactAdjointScheduleRoute::TermParallel
+                ? plan_.worker_count()
+                : 1U;
         if (!workspace_value.single_workspace_.has_value() ||
             !workspace_value.single_route_.has_value() ||
             *workspace_value.single_route_ != schedule.route) {
             workspace_value.single_workspace_.reset();
-            if (schedule.route == ExactAdjointScheduleRoute::TermParallel) {
-                workspace_value.single_workspace_.emplace(term_->workspace());
-            } else {
-                workspace_value.single_workspace_.emplace(serial_.workspace());
-            }
+            workspace_value.single_workspace_.emplace(
+                plan_.workspace(execution_workers));
             workspace_value.single_route_ = schedule.route;
         }
     }
 
     void evaluate_sequential(
-        const ExactAdjointGradientPlan& plan,
         ExactAdjointGradientWorkspace& plan_workspace,
         std::span<const double> parameters,
         std::size_t point_count,
@@ -583,7 +556,7 @@ private:
             const std::size_t parameter_offset = point * parameter_count();
             const std::size_t value_offset = point * observable_count();
             const std::size_t gradient_offset = point * point_gradient_entries;
-            plan.value_and_gradient(
+            plan_.value_and_gradient(
                 std::span<const double>(
                     parameters.data() + parameter_offset,
                     parameter_count()),
@@ -612,7 +585,7 @@ private:
                     const std::size_t parameter_offset = point * parameter_count();
                     const std::size_t value_offset = point * observable_count();
                     const std::size_t gradient_offset = point * point_gradient_entries;
-                    serial_.value_and_gradient(
+                    plan_.value_and_gradient(
                         std::span<const double>(
                             parameters.data() + parameter_offset,
                             parameter_count()),
