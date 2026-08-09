@@ -253,6 +253,137 @@ int main() {
     }
 
     {
+        constexpr std::size_t qubits = 4U;
+        constexpr std::size_t point_count = 6U;
+        std::vector<ParameterizedOperation> operations;
+
+        ParameterizedOperation ry;
+        ry.operation = {OperationCode::Ry, 0U, 0U, 0.0, 0.0};
+        ry.parameter_slot = 0;
+        operations.push_back(ry);
+
+        ParameterizedOperation rz;
+        rz.operation = {OperationCode::Rz, 1U, 0U, 0.0, 0.0};
+        rz.parameter_slot = 0;
+        operations.push_back(rz);
+
+        ParameterizedOperation cnot;
+        cnot.operation = {OperationCode::Cnot, 0U, 2U, 0.0, 0.0};
+        operations.push_back(cnot);
+
+        ParameterizedOperation rx;
+        rx.operation = {OperationCode::Rx, 3U, 0U, 0.0, 0.0};
+        rx.parameter_slot = 1;
+        operations.push_back(rx);
+
+        const std::vector<PauliObservable> query = observables(qubits, 4U);
+        ExactParameterizedEstimatorConfig config;
+        config.point_worker_count = 3U;
+        ExactParameterizedEstimatorPlan estimator(qubits, operations, query, config);
+        require(estimator.route() == ExactExecutionRoute::TensorNetwork,
+                "shared-slot circuit did not retain tensor route");
+        require(estimator.parameter_count() == 2U,
+                "shared-slot circuit parameter count changed");
+        require(estimator.parameterized_operation_count() == 3U,
+                "shared-slot circuit occurrence count changed");
+
+        const std::vector<double> points{
+            -0.8, 0.3,
+             0.7, -0.5,
+            -0.2, 1.1,
+             1.0, 0.0,
+            -1.3, 0.6,
+             0.4, -0.9,
+        };
+        auto workspace = estimator.workspace(point_count);
+        std::vector<QComplex> results(point_count * query.size());
+        estimator.estimate_points(points, point_count, results, workspace);
+        require(workspace.rebind_count() == point_count,
+                "shared-slot estimator did not rebind every point");
+
+        for (std::size_t point = 0U; point < point_count; ++point) {
+            const std::span<const double> parameters(points.data() + 2U * point, 2U);
+            const std::vector<QComplex> expected =
+                register_reference(qubits, operations, query, parameters);
+            for (std::size_t observable = 0U; observable < query.size(); ++observable) {
+                require_close(
+                    results[point * query.size() + observable],
+                    expected[observable],
+                    5e-12,
+                    "shared parameter slot did not update every bound tensor source");
+            }
+        }
+    }
+
+    {
+        constexpr std::size_t qubits = 4U;
+        constexpr std::size_t point_count = 5U;
+        std::vector<ParameterizedOperation> operations;
+
+        ParameterizedOperation ry;
+        ry.operation = {OperationCode::Ry, 0U, 0U, 0.0, 0.0};
+        ry.parameter_slot = 0;
+        operations.push_back(ry);
+
+        ParameterizedOperation h;
+        h.operation = {OperationCode::H, 2U, 0U, 0.0, 0.0};
+        operations.push_back(h);
+
+        PauliObservable dynamic_observable(qubits);
+        const PauliFactor dynamic_factor{0U, PauliAxis::Z};
+        dynamic_observable.add_term(
+            {1.0, 0.0},
+            std::span<const PauliFactor>(&dynamic_factor, 1U));
+
+        PauliObservable static_observable(qubits);
+        const PauliFactor static_factor{3U, PauliAxis::Z};
+        static_observable.add_term(
+            {1.0, 0.0},
+            std::span<const PauliFactor>(&static_factor, 1U));
+
+        const std::vector<PauliObservable> query{
+            dynamic_observable,
+            static_observable,
+        };
+        ExactParameterizedEstimatorConfig config;
+        config.point_worker_count = 2U;
+        ExactParameterizedEstimatorPlan estimator(qubits, operations, query, config);
+        require(estimator.route() == ExactExecutionRoute::TensorNetwork,
+                "causal-cache test did not retain tensor route");
+        const auto stats = estimator.stats();
+        require(stats.dynamic_term_count == 1U,
+                "causal-cache test did not identify the parameter-dependent term");
+        require(stats.static_term_count == 1U,
+                "causal-cache test did not identify the parameter-independent term");
+        require(stats.dynamic_observable_count == 1U,
+                "causal-cache test did not identify the dynamic observable");
+        require(stats.static_observable_count == 1U,
+                "causal-cache test did not identify the static observable");
+
+        const std::vector<double> points{-1.1, -0.3, 0.2, 0.8, 1.4};
+        auto workspace = estimator.workspace(point_count);
+        std::vector<QComplex> results(point_count * query.size());
+        estimator.estimate_points(points, point_count, results, workspace);
+        for (std::size_t point = 0U; point < point_count; ++point) {
+            const std::span<const double> parameters(points.data() + point, 1U);
+            const std::vector<QComplex> expected =
+                register_reference(qubits, operations, query, parameters);
+            for (std::size_t observable = 0U; observable < query.size(); ++observable) {
+                require_close(
+                    results[point * query.size() + observable],
+                    expected[observable],
+                    5e-12,
+                    "causal static-term cache differs from QRegister");
+            }
+            require_close(
+                results[point * query.size() + 1U],
+                results[1U],
+                0.0,
+                "cached static observable changed across parameter points");
+        }
+    }
+
+    {
         constexpr std::size_t qubits = 3U;
         std::vector<ParameterizedOperation> operations;
         ParameterizedOperation ry;

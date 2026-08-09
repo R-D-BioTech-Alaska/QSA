@@ -18,6 +18,7 @@ class TensorExpectationPlan;
 class TensorExpectationWorkspace;
 class TensorExpectationRebindPlan;
 class ExactAdjointGradientPlan;
+class ExactParameterizedEstimatorPlan;
 
 struct TensorNetworkConfig {
     std::size_t max_contraction_entries{1U << 20U};
@@ -94,6 +95,7 @@ private:
     friend class TensorExpectationPlan;
     friend class TensorExpectationRebindPlan;
     friend class ExactAdjointGradientPlan;
+    friend class ExactParameterizedEstimatorPlan;
 };
 
 class TensorContractionWorkspace {
@@ -274,6 +276,7 @@ private:
 
     friend class TensorExpectationRebindPlan;
     friend class ExactAdjointGradientPlan;
+    friend class ExactParameterizedEstimatorPlan;
 };
 
 }  // namespace qubit
