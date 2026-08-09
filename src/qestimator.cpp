@@ -1,10 +1,16 @@
 #include "qubit/qestimator.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <exception>
+#include <mutex>
+#include <thread>
 #include <utility>
 
 namespace qubit {
 namespace {
+
+constexpr std::size_t kMaxEstimatorTensorWorkers = 128U;
 
 void append_failure(std::string& destination, const char* route, const std::string& message) {
     if (!destination.empty()) {
@@ -13,6 +19,23 @@ void append_failure(std::string& destination, const char* route, const std::stri
     destination += route;
     destination += ": ";
     destination += message;
+}
+
+[[nodiscard]] std::size_t resolved_tensor_workers(
+    std::size_t requested,
+    std::size_t jobs) {
+    if (requested > kMaxEstimatorTensorWorkers) {
+        throw QStateError("Exact estimator tensor_worker_count exceeds the supported limit");
+    }
+    if (jobs == 0U) {
+        return 0U;
+    }
+    if (requested == 0U) {
+        const unsigned int hardware = std::thread::hardware_concurrency();
+        requested = hardware == 0U ? 1U : static_cast<std::size_t>(hardware);
+    }
+    return std::max<std::size_t>(
+        1U, std::min({requested, jobs, kMaxEstimatorTensorWorkers}));
 }
 
 }  // namespace
@@ -33,6 +56,9 @@ ExactEstimatorPlan::ExactEstimatorPlan(
     }
     if (config_.max_pauli_terms == 0U) {
         throw QStateError("Exact estimator Pauli term budget must be positive");
+    }
+    if (config_.tensor_worker_count > kMaxEstimatorTensorWorkers) {
+        throw QStateError("Exact estimator tensor_worker_count exceeds the supported limit");
     }
     try {
         pauli_plan_.emplace(qubit_count_, operations_);
@@ -219,27 +245,40 @@ ExactEstimatorBatchPlan::ExactEstimatorBatchPlan(
     }
 
     if (!tensor_candidates.empty() && circuit.tensor_.has_value()) {
-        std::vector<PauliObservable> tensor_observables;
-        tensor_observables.reserve(tensor_candidates.size());
-        for (const std::size_t index : tensor_candidates) {
-            tensor_observables.push_back(observables[index]);
+        const std::size_t workers = resolved_tensor_workers(
+            circuit.config_.tensor_worker_count, tensor_candidates.size());
+        std::vector<std::vector<std::size_t>> lane_indices(workers);
+        std::vector<std::vector<PauliObservable>> lane_observables(workers);
+        for (std::size_t local = 0; local < tensor_candidates.size(); ++local) {
+            const std::size_t lane = local % workers;
+            const std::size_t index = tensor_candidates[local];
+            lane_indices[lane].push_back(index);
+            lane_observables[lane].push_back(observables[index]);
         }
-        try {
-            tensor_plan_.emplace(
-                *circuit.tensor_,
-                std::span<const PauliObservable>(
-                    tensor_observables.data(), tensor_observables.size()));
-            tensor_indices_ = tensor_candidates;
-            for (const std::size_t index : tensor_indices_) {
-                results_[index].route = ExactExecutionRoute::TensorNetwork;
-                results_[index].tensor_stats = tensor_plan_->stats();
-            }
-            tensor_candidates.clear();
-        } catch (const QStateError& error) {
-            for (const std::size_t index : tensor_candidates) {
-                append_failure(results_[index].fallback_reason, "TensorNetwork", error.what());
+
+        std::vector<std::size_t> remaining;
+        tensor_plans_.reserve(workers);
+        tensor_indices_.reserve(workers);
+        for (std::size_t lane = 0; lane < workers; ++lane) {
+            try {
+                TensorExpectationPlan plan(
+                    *circuit.tensor_,
+                    std::span<const PauliObservable>(
+                        lane_observables[lane].data(), lane_observables[lane].size()));
+                for (const std::size_t index : lane_indices[lane]) {
+                    results_[index].route = ExactExecutionRoute::TensorNetwork;
+                    results_[index].tensor_stats = plan.stats();
+                }
+                tensor_plans_.push_back(std::move(plan));
+                tensor_indices_.push_back(std::move(lane_indices[lane]));
+            } catch (const QStateError& error) {
+                for (const std::size_t index : lane_indices[lane]) {
+                    append_failure(results_[index].fallback_reason, "TensorNetwork", error.what());
+                    remaining.push_back(index);
+                }
             }
         }
+        tensor_candidates = std::move(remaining);
     } else if (!tensor_candidates.empty()) {
         for (const std::size_t index : tensor_candidates) {
             append_failure(
@@ -262,11 +301,21 @@ ExactEstimatorBatchPlan::ExactEstimatorBatchPlan(
     }
 }
 
+std::size_t ExactEstimatorBatchPlan::tensor_observable_count() const noexcept {
+    std::size_t count = 0U;
+    for (const auto& lane : tensor_indices_) {
+        count += lane.size();
+    }
+    return count;
+}
+
 ExactEstimatorBatchWorkspace ExactEstimatorBatchPlan::workspace() const {
     ExactEstimatorBatchWorkspace result;
-    if (tensor_plan_.has_value()) {
-        result.tensor_ = tensor_plan_->workspace();
-        result.tensor_values_.resize(tensor_indices_.size());
+    result.tensor_.reserve(tensor_plans_.size());
+    result.tensor_values_.reserve(tensor_plans_.size());
+    for (const TensorExpectationPlan& plan : tensor_plans_) {
+        result.tensor_.push_back(plan.workspace());
+        result.tensor_values_.emplace_back(plan.observable_count());
     }
     return result;
 }
@@ -283,16 +332,55 @@ void ExactEstimatorBatchPlan::estimate(
     if (results.size() != results_.size()) {
         throw QStateError("Compiled estimator result count does not match observable count");
     }
+    if (workspace_value.tensor_.size() != tensor_plans_.size() ||
+        workspace_value.tensor_values_.size() != tensor_plans_.size()) {
+        throw QStateError("Compiled estimator workspace does not match its tensor lanes");
+    }
     std::copy(results_.begin(), results_.end(), results.begin());
 
-    if (tensor_plan_.has_value()) {
-        if (workspace_value.tensor_values_.size() != tensor_indices_.size()) {
-            throw QStateError("Compiled estimator workspace does not match its plan");
+    if (!tensor_plans_.empty()) {
+        std::atomic<bool> stop{false};
+        std::mutex error_mutex;
+        std::exception_ptr first_error;
+
+        const auto execute_lane = [&](std::size_t lane) {
+            if (stop.load(std::memory_order_relaxed)) {
+                return;
+            }
+            try {
+                if (workspace_value.tensor_values_[lane].size() !=
+                    tensor_indices_[lane].size()) {
+                    throw QStateError("Compiled estimator tensor value lane has the wrong size");
+                }
+                tensor_plans_[lane].expectations(
+                    workspace_value.tensor_values_[lane],
+                    workspace_value.tensor_[lane]);
+                for (std::size_t local = 0; local < tensor_indices_[lane].size(); ++local) {
+                    results[tensor_indices_[lane][local]].value =
+                        workspace_value.tensor_values_[lane][local];
+                }
+            } catch (...) {
+                {
+                    std::lock_guard<std::mutex> lock(error_mutex);
+                    if (first_error == nullptr) {
+                        first_error = std::current_exception();
+                    }
+                }
+                stop.store(true, std::memory_order_relaxed);
+            }
+        };
+
+        std::vector<std::thread> threads;
+        threads.reserve(tensor_plans_.size() - 1U);
+        for (std::size_t lane = 1U; lane < tensor_plans_.size(); ++lane) {
+            threads.emplace_back(execute_lane, lane);
         }
-        tensor_plan_->expectations(
-            workspace_value.tensor_values_, workspace_value.tensor_);
-        for (std::size_t local = 0; local < tensor_indices_.size(); ++local) {
-            results[tensor_indices_[local]].value = workspace_value.tensor_values_[local];
+        execute_lane(0U);
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+        if (first_error != nullptr) {
+            std::rethrow_exception(first_error);
         }
     }
 
@@ -307,29 +395,40 @@ void ExactEstimatorBatchPlan::estimate(
 }
 
 std::size_t ExactEstimatorBatchWorkspace::estimated_bytes() const noexcept {
-    return sizeof(*this) +
-           tensor_.estimated_bytes() +
-           tensor_values_.capacity() * sizeof(QComplex);
+    std::size_t bytes = sizeof(*this) +
+                        tensor_.capacity() * sizeof(TensorExpectationWorkspace) +
+                        tensor_values_.capacity() * sizeof(std::vector<QComplex>);
+    for (const TensorExpectationWorkspace& workspace : tensor_) {
+        bytes += workspace.estimated_bytes();
+    }
+    for (const auto& values : tensor_values_) {
+        bytes += values.capacity() * sizeof(QComplex);
+    }
+    return bytes;
 }
 
 std::size_t ExactEstimatorBatchPlan::estimated_bytes() const noexcept {
     std::size_t bytes = sizeof(*this) +
                         operations_.capacity() * sizeof(Operation) +
                         results_.capacity() * sizeof(ExactEstimatorResult) +
-                        tensor_indices_.capacity() * sizeof(std::size_t) +
+                        tensor_indices_.capacity() * sizeof(std::vector<std::size_t>) +
+                        tensor_plans_.capacity() * sizeof(TensorExpectationPlan) +
                         register_indices_.capacity() * sizeof(std::size_t) +
                         register_observables_.capacity() * sizeof(PauliObservable);
     for (const ExactEstimatorResult& result : results_) {
         bytes += result.fallback_reason.capacity();
+    }
+    for (const auto& lane : tensor_indices_) {
+        bytes += lane.capacity() * sizeof(std::size_t);
+    }
+    for (const TensorExpectationPlan& plan : tensor_plans_) {
+        bytes += plan.estimated_bytes();
     }
     for (const PauliObservable& observable : register_observables_) {
         bytes += observable.terms().capacity() * sizeof(PauliTerm);
         for (const PauliTerm& term : observable.terms()) {
             bytes += term.factors.capacity() * sizeof(PauliFactor);
         }
-    }
-    if (tensor_plan_.has_value()) {
-        bytes += tensor_plan_->estimated_bytes();
     }
     return bytes;
 }
