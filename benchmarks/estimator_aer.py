@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 import time
 from pathlib import Path
 
@@ -83,10 +82,10 @@ def compile_circuit(
     if backend_width is None or circuit.num_qubits <= backend_width:
         return "backend_target", transpile(circuit, backend, optimization_level=0)
     return (
-        "basis_gates_only",
+        "wide_standard_basis",
         transpile(
             circuit,
-            basis_gates=backend.configuration().basis_gates,
+            basis_gates=["rx", "ry", "rz", "cx"],
             optimization_level=0,
         ),
     )
@@ -111,7 +110,6 @@ def run_case(
     prefix = f"aer{qubits}"
     build_ms, circuit = timed(lambda: brickwork(qubits, 5))
     observables = pauli_observables(qubits, query_count)
-    attach_ms, measured = timed(lambda: attach_observables(circuit, observables))
 
     options = {
         "method": method,
@@ -130,8 +128,11 @@ def run_case(
         )
     backend = AerSimulator(**options)
 
-    transpile_ms, compiled_pair = timed(lambda: compile_circuit(measured, backend))
-    transpile_mode, compiled = compiled_pair
+    transpile_ms, compiled_pair = timed(lambda: compile_circuit(circuit, backend))
+    transpile_mode, compiled_base = compiled_pair
+    attach_ms, compiled = timed(
+        lambda: attach_observables(compiled_base, observables)
+    )
 
     run_times: list[float] = []
     result = None
@@ -145,7 +146,7 @@ def run_case(
 
     first_run_ms = run_times[0]
     best_run_ms = min(run_times)
-    setup_ms = build_ms + attach_ms + transpile_ms
+    setup_ms = build_ms + transpile_ms + attach_ms
 
     print(f"{prefix}_method={method}")
     print(f"{prefix}_qubits={qubits}")
@@ -154,8 +155,8 @@ def run_case(
     print(f"{prefix}_backend_target_qubits={backend.target.num_qubits}")
     print(f"{prefix}_transpile_mode={transpile_mode}")
     print(f"{prefix}_circuit_build_ms={build_ms:.12g}")
-    print(f"{prefix}_observable_attach_ms={attach_ms:.12g}")
     print(f"{prefix}_transpile_ms={transpile_ms:.12g}")
+    print(f"{prefix}_observable_attach_ms={attach_ms:.12g}")
     print(f"{prefix}_first_run_ms={first_run_ms:.12g}")
     print(f"{prefix}_best_run_ms={best_run_ms:.12g}")
     print(f"{prefix}_setup_plus_first_run_ms={setup_ms + first_run_ms:.12g}")
