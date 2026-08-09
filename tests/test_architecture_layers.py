@@ -9,8 +9,6 @@ CORE_FILES = (
     "include/qubit/qshared_vector.hpp",
     "include/qubit/qstate.hpp",
     "include/qubit/qplan.hpp",
-    "include/qubit/qread.hpp",
-    "include/qubit/qdiagonal.hpp",
     "src/qstate.cpp",
     "src/qsc.cpp",
     "src/qplan.cpp",
