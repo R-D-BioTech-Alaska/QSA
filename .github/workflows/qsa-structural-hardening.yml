@@ -25,11 +25,7 @@ jobs:
         run: >-
           cmake --build build --config Release --parallel 2
           --target qstate_transition_invariant_tests qstate_representation_certification_tests qstate_representation_advisor_tests
-      - name: Run transition invariants
-        run: ./build/qstate_transition_invariant_tests
-      - name: Run representation certification
-        run: ./build/qstate_representation_certification_tests
-      - name: Run inherited representation advisor tests
-        run: ./build/qstate_representation_advisor_tests
-      - name: Enforce architecture layers
-        run: python tests/test_architecture_layers.py
+      - name: Run hardening gates
+        run: >-
+          ctest --test-dir build --output-on-failure
+          -R "qstate_(transition_invariant|representation_certification|representation_advisor|architecture_layers)"
