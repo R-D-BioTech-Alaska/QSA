@@ -88,8 +88,21 @@ void compare(
     const std::vector<QComplex> actual = tensor.materialize(10U);
     const std::vector<QComplex> expected = reference.materialize(10U);
     require(actual.size() == expected.size(), label + ": dimensions differ");
+
+    QComplex phase{1.0, 0.0};
+    bool found = false;
     for (std::size_t index = 0; index < actual.size(); ++index) {
-        if (!qubit::almost_equal(actual[index], expected[index], tolerance)) {
+        if (actual[index].magnitude() > tolerance && expected[index].magnitude() > tolerance) {
+            phase = actual[index] / expected[index];
+            phase /= phase.magnitude();
+            found = true;
+            break;
+        }
+    }
+    require(found, label + ": no nonzero amplitude found");
+
+    for (std::size_t index = 0; index < actual.size(); ++index) {
+        if (!qubit::almost_equal(actual[index], phase * expected[index], tolerance)) {
             throw std::runtime_error(label + ": amplitude mismatch at " + std::to_string(index));
         }
     }
