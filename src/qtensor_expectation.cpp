@@ -14,6 +14,36 @@ namespace {
     return std::size_t{1} << variables;
 }
 
+[[nodiscard]] std::size_t mapped_factor_index(
+    std::size_t union_index,
+    const std::vector<std::size_t>& positions) noexcept {
+    switch (positions.size()) {
+        case 0U:
+            return 0U;
+        case 1U:
+            return (union_index >> positions[0]) & 1U;
+        case 2U:
+            return ((union_index >> positions[0]) & 1U) |
+                   (((union_index >> positions[1]) & 1U) << 1U);
+        case 3U:
+            return ((union_index >> positions[0]) & 1U) |
+                   (((union_index >> positions[1]) & 1U) << 1U) |
+                   (((union_index >> positions[2]) & 1U) << 2U);
+        case 4U:
+            return ((union_index >> positions[0]) & 1U) |
+                   (((union_index >> positions[1]) & 1U) << 1U) |
+                   (((union_index >> positions[2]) & 1U) << 2U) |
+                   (((union_index >> positions[3]) & 1U) << 3U);
+        default:
+            break;
+    }
+    std::size_t factor_index = 0U;
+    for (std::size_t local = 0; local < positions.size(); ++local) {
+        factor_index |= ((union_index >> positions[local]) & 1U) << local;
+    }
+    return factor_index;
+}
+
 }  // namespace
 
 TensorExpectationPlan TensorNetworkCircuit::compile_expectation(
@@ -165,12 +195,30 @@ TensorExpectationPlan::TensorExpectationPlan(
         }
         std::sort(ket_factor_indices.begin(), ket_factor_indices.end());
 
-        if (ket_factor_indices.size() >
-            (circuit.config_.max_factors - factors.size()) / 2U) {
+        if (factors.size() > circuit.config_.max_factors ||
+            ket_factor_indices.size() >
+                (circuit.config_.max_factors - factors.size()) / 2U) {
             throw QStateError("Tensor expectation term exceeded max_factors");
         }
 
-        term.sources.reserve(ket_factor_indices.size() * 2U);
+        std::vector<VariableId> variable_map(total_variables);
+        std::vector<std::uint8_t> variable_invert(total_variables, 0U);
+        for (std::size_t variable = 0; variable < total_variables; ++variable) {
+            variable_map[variable] = static_cast<VariableId>(variable);
+        }
+        for (const VariableId terminal : identity_terminals) {
+            variable_map[static_cast<std::size_t>(terminal + bra_offset)] = terminal;
+        }
+        for (const PauliFactor& factor : factors) {
+            const VariableId ket_wire = circuit.current_wires_[factor.qubit];
+            const VariableId bra_wire = static_cast<VariableId>(ket_wire + bra_offset);
+            variable_map[bra_wire] = ket_wire;
+            if (factor.axis == PauliAxis::X || factor.axis == PauliAxis::Y) {
+                variable_invert[bra_wire] = 1U;
+            }
+        }
+
+        term.sources.reserve(ket_factor_indices.size() * 2U + factors.size());
         for (const std::size_t factor_index : ket_factor_indices) {
             const TensorNetworkCircuit::Factor& factor = circuit.factors_[factor_index];
             SourceFactor source;
@@ -185,23 +233,36 @@ TensorExpectationPlan::TensorExpectationPlan(
             for (const VariableId variable : factor.variables) {
                 source.variables.push_back(static_cast<VariableId>(variable + bra_offset));
             }
-            source.values.reserve(factor.values.size());
-            for (const QComplex value : factor.values) {
-                source.values.push_back(value.conjugate());
+            source.values.resize(factor.values.size());
+            for (std::size_t source_index = 0; source_index < factor.values.size(); ++source_index) {
+                std::size_t mapped_index = source_index;
+                for (std::size_t local = 0; local < factor.variables.size(); ++local) {
+                    const std::size_t bra_variable =
+                        static_cast<std::size_t>(factor.variables[local] + bra_offset);
+                    if (variable_invert[bra_variable] != 0U) {
+                        mapped_index ^= std::size_t{1} << local;
+                    }
+                }
+                source.values[mapped_index] = factor.values[source_index].conjugate();
             }
             term.sources.push_back(std::move(source));
         }
-
-        std::vector<VariableId> variable_map(total_variables);
-        for (std::size_t variable = 0; variable < total_variables; ++variable) {
-            variable_map[variable] = static_cast<VariableId>(variable);
-        }
-        for (const VariableId terminal : identity_terminals) {
-            variable_map[static_cast<std::size_t>(terminal + bra_offset)] = terminal;
+        for (const PauliFactor& factor : factors) {
+            if (factor.axis != PauliAxis::Y && factor.axis != PauliAxis::Z) {
+                continue;
+            }
+            SourceFactor phase;
+            phase.variables.push_back(circuit.current_wires_[factor.qubit]);
+            if (factor.axis == PauliAxis::Y) {
+                phase.values = {{0.0, 1.0}, {0.0, -1.0}};
+            } else {
+                phase.values = {{1.0, 0.0}, {-1.0, 0.0}};
+            }
+            term.sources.push_back(std::move(phase));
         }
 
         std::vector<std::vector<VariableId>> scopes;
-        scopes.reserve(term.sources.size() + factors.size() + total_variables);
+        scopes.reserve(term.sources.size() + total_variables);
         for (const SourceFactor& source : term.sources) {
             std::vector<VariableId> scope;
             scope.reserve(source.variables.size());
@@ -209,15 +270,6 @@ TensorExpectationPlan::TensorExpectationPlan(
                 scope.push_back(variable_map[variable]);
             }
             scopes.push_back(std::move(scope));
-        }
-
-        term.operators.resize(factors.size());
-        for (std::size_t index = 0; index < factors.size(); ++index) {
-            const PauliFactor factor = factors[index];
-            const VariableId ket_wire = circuit.current_wires_[factor.qubit];
-            const VariableId bra_wire = static_cast<VariableId>(ket_wire + bra_offset);
-            scopes.push_back({ket_wire, bra_wire});
-            set_operator(term.operators[index], factor.axis);
         }
         term.step_node_begin = scopes.size();
 
@@ -461,26 +513,26 @@ QComplex TensorExpectationPlan::contract(
                 : (std::size_t{1} << step.selected_position) - 1U;
 
         for (std::size_t reduced_index = 0; reduced_index < output.size(); ++reduced_index) {
+            const std::size_t low = reduced_index & lower_mask;
+            const std::size_t high = reduced_index >> step.selected_position;
+            const std::size_t base_union_index =
+                low | (high << (step.selected_position + 1U));
             QComplex sum{};
             for (std::size_t selected_bit = 0; selected_bit < 2U; ++selected_bit) {
-                const std::size_t low = reduced_index & lower_mask;
-                const std::size_t high = reduced_index >> step.selected_position;
                 const std::size_t union_index =
-                    low |
-                    (selected_bit << step.selected_position) |
-                    (high << (step.selected_position + 1U));
-
+                    base_union_index | (selected_bit << step.selected_position);
                 QComplex product{1.0, 0.0};
                 for (const InputMap& input : step.inputs) {
                     const std::span<const QComplex> values =
                         node_values(term, input.node, workspace_value);
-                    std::size_t factor_index = 0U;
-                    for (std::size_t local = 0; local < input.positions.size(); ++local) {
-                        const std::size_t bit =
-                            (union_index >> input.positions[local]) & 1U;
-                        factor_index |= bit << local;
+                    const QComplex value = values[mapped_factor_index(union_index, input.positions)];
+                    if (value.re == 0.0 && value.im == 0.0) {
+                        product = {};
+                        break;
                     }
-                    product *= values[factor_index];
+                    if (value.re != 1.0 || value.im != 0.0) {
+                        product *= value;
+                    }
                 }
                 sum += product;
             }
