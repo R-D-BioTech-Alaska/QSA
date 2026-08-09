@@ -288,6 +288,15 @@ void run_case(
               << stats.source_derivative_bindings << '\n';
     std::cout << prefix << "_parameter_shift_equivalent_evaluations="
               << stats.parameter_shift_equivalent_evaluations << '\n';
+    std::cout << prefix << "_estimated_work=" << stats.estimated_work << '\n';
+    std::cout << prefix << "_balanced_peak_estimated_work="
+              << stats.balanced_peak_estimated_work << '\n';
+    std::cout << prefix << "_round_robin_peak_estimated_work="
+              << stats.round_robin_peak_estimated_work << '\n';
+    std::cout << prefix << "_estimated_balance_ratio="
+              << static_cast<double>(stats.round_robin_peak_estimated_work) /
+                     static_cast<double>(stats.balanced_peak_estimated_work)
+              << '\n';
     std::cout << prefix << "_serial_plan_bytes="
               << adjoint_serial->estimated_bytes() << '\n';
     std::cout << prefix << "_serial_workspace_bytes="
