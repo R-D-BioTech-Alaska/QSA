@@ -8,9 +8,11 @@ The advisor does not convert state, execute a backend, or approximate a result. 
 
 `RepresentationAdvisor::inspect_operations()` accepts the actual QSA `Operation` sequence and derives Clifford compatibility from the operation codes. X, Y, Z, H, S, S-dagger, CNOT, CZ, and SWAP remain compatible. T, arbitrary rotations, and trajectory-noise operations remove the Clifford certificate.
 
-Clifford gates alone are not sufficient to prove that an arbitrary QRegister can be converted to a stabilizer tableau. Automatic stabilizer eligibility therefore also requires an input-state certificate. The current automatic certificate is deliberately conservative: every QRegister component must be one independent Bloch cell lying on a Pauli eigenaxis. This exactly covers computational-basis, X-eigenstate, and Y-eigenstate product inputs. Entangled states and non-Pauli product states remain on QRegister unless a stronger external certificate is supplied through the existing explicit feature path.
+Clifford gates alone are not sufficient to prove that an arbitrary QRegister can be converted to a stabilizer tableau. Automatic stabilizer eligibility therefore also requires an input-state certificate. The current automatic certificate is deliberately conservative: every QRegister component must be one independent Bloch cell lying on a Pauli eigenaxis. This exactly covers computational-basis, X-eigenstate, and Y-eigenstate product inputs. Entangled states and non-Pauli product states remain on QRegister unless a stronger certificate is available.
 
-This route is preferred when the caller has an operation list. Bayesian timing history can rank a certified route but cannot manufacture eligibility after either the operation or input-state contract rejects it.
+The explicit `inspect()` path keeps Clifford compatibility and stabilizer input proof separate as well. Setting `clifford_only=true` does not make the stabilizer backend eligible by itself. A caller that already owns a stronger exact input-state proof must also set `stabilizer_input_certified=true`.
+
+Bayesian timing history can rank a certified route but cannot manufacture eligibility after either the operation or input-state contract rejects it.
 
 Phase-graph eligibility is not inferred from a gate list alone because `PhaseGraphState` also requires the correct uniform-magnitude state family. The existing explicit feature path remains available when an external subsystem already owns that stronger state certificate.
 
