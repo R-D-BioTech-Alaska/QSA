@@ -14,6 +14,7 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using qubit::KronOperator;
 using qubit::KronVector;
 using qubit::NumericConfig;
 using qubit::NumericExecutor;
@@ -67,7 +68,7 @@ template <typename Function>
 }
 
 [[nodiscard]] KronVector structured_vector(std::size_t sites) {
-    KronVector result(std::vector<std::size_t>(sites, 2U), 4U);
+    KronVector result(std::vector<std::size_t>(sites, 2U), 8U);
     std::vector<std::vector<QComplex>> first;
     std::vector<std::vector<QComplex>> second;
     first.reserve(sites);
@@ -80,6 +81,33 @@ template <typename Function>
     }
     result.add_term({0.75, 0.125}, first);
     result.add_term({-0.2, 0.05}, second);
+    return result;
+}
+
+[[nodiscard]] KronOperator structured_operator(std::size_t sites) {
+    KronOperator result(std::vector<std::size_t>(sites, 2U), 8U);
+    std::vector<std::vector<QComplex>> first;
+    std::vector<std::vector<QComplex>> second;
+    first.reserve(sites);
+    second.reserve(sites);
+    for (std::size_t site = 0; site < sites; ++site) {
+        const double angle = 0.017 * static_cast<double>(site + 1U);
+        const double phase = 0.011 * static_cast<double>(site + 1U);
+        const double ca = std::cos(angle);
+        const double sa = std::sin(angle);
+        const double cp = std::cos(phase);
+        const double sp = std::sin(phase);
+        first.push_back({
+            {ca, 0.0}, {sa, 0.0},
+            {sa, 0.0}, {-ca, 0.0},
+        });
+        second.push_back({
+            {cp, 0.0}, {0.0, -sp},
+            {0.0, sp}, {-cp, 0.0},
+        });
+    }
+    result.add_term({0.625, 0.0}, first);
+    result.add_term({-0.275, 0.0}, second);
     return result;
 }
 
@@ -260,9 +288,19 @@ int main() {
     {
         constexpr std::size_t sites = 20U;
         KronVector structured = structured_vector(sites);
+        KronOperator operation = structured_operator(sites);
         double structured_norm = 0.0;
+        QComplex expectation{};
+        std::size_t applied_terms = 0U;
         const double structured_ms = best_milliseconds([&] {
             structured_norm = structured.norm2();
+        }, 25U);
+        const double expectation_ms = best_milliseconds([&] {
+            expectation = operation.expectation(structured);
+        }, 25U);
+        const double apply_ms = best_milliseconds([&] {
+            const KronVector output = operation.apply(structured);
+            applied_terms = output.term_count();
         }, 25U);
         std::cout << "kron20_sites=" << sites << '\n';
         std::cout << "kron20_logical_elements=" << structured.logical_size() << '\n';
@@ -270,14 +308,31 @@ int main() {
         std::cout << "kron20_norm_ms=" << structured_ms << '\n';
         std::cout << "kron20_norm2=" << structured_norm << '\n';
         std::cout << "kron20_bytes=" << structured.estimated_bytes() << '\n';
+        std::cout << "kron20_operator_terms=" << operation.term_count() << '\n';
+        std::cout << "kron20_operator_bytes=" << operation.estimated_bytes() << '\n';
+        std::cout << "kron20_expectation_ms=" << expectation_ms << '\n';
+        std::cout << "kron20_expectation_real=" << expectation.re << '\n';
+        std::cout << "kron20_expectation_imag=" << expectation.im << '\n';
+        std::cout << "kron20_apply_ms=" << apply_ms << '\n';
+        std::cout << "kron20_applied_terms=" << applied_terms << '\n';
     }
 
     {
         constexpr std::size_t sites = 100U;
         KronVector structured = structured_vector(sites);
+        KronOperator operation = structured_operator(sites);
         double structured_norm = 0.0;
+        QComplex expectation{};
+        std::size_t applied_terms = 0U;
         const double structured_ms = best_milliseconds([&] {
             structured_norm = structured.norm2();
+        }, 25U);
+        const double expectation_ms = best_milliseconds([&] {
+            expectation = operation.expectation(structured);
+        }, 25U);
+        const double apply_ms = best_milliseconds([&] {
+            const KronVector output = operation.apply(structured);
+            applied_terms = output.term_count();
         }, 25U);
         std::cout << "kron100_sites=" << sites << '\n';
         std::cout << "kron100_log2_elements="
@@ -288,6 +343,13 @@ int main() {
         std::cout << "kron100_norm_ms=" << structured_ms << '\n';
         std::cout << "kron100_norm2=" << structured_norm << '\n';
         std::cout << "kron100_bytes=" << structured.estimated_bytes() << '\n';
+        std::cout << "kron100_operator_terms=" << operation.term_count() << '\n';
+        std::cout << "kron100_operator_bytes=" << operation.estimated_bytes() << '\n';
+        std::cout << "kron100_expectation_ms=" << expectation_ms << '\n';
+        std::cout << "kron100_expectation_real=" << expectation.re << '\n';
+        std::cout << "kron100_expectation_imag=" << expectation.im << '\n';
+        std::cout << "kron100_apply_ms=" << apply_ms << '\n';
+        std::cout << "kron100_applied_terms=" << applied_terms << '\n';
     }
 
     return 0;
