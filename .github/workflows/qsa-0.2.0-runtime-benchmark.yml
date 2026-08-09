@@ -37,6 +37,10 @@ jobs:
           qstate_tensor_contraction_plan_benchmark
           qstate_tensor_expectation_benchmark
           qstate_estimator_benchmark
+      - name: Test structured Kronecker operators
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_kron_operator.cpp -o build-runtime/qstate_kron_operator_test
+          ./build-runtime/qstate_kron_operator_test
       - name: Run native numeric benchmark
         run: ./build-runtime/qstate_numeric_benchmark | tee qsa-numeric.txt
       - name: Run matched NumPy benchmark
