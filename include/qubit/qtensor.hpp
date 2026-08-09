@@ -17,6 +17,7 @@ class TensorContractionWorkspace;
 class TensorExpectationPlan;
 class TensorExpectationWorkspace;
 class TensorExpectationRebindPlan;
+class ExactAdjointGradientPlan;
 
 struct TensorNetworkConfig {
     std::size_t max_contraction_entries{1U << 20U};
@@ -92,6 +93,7 @@ private:
     friend class TensorContractionPlan;
     friend class TensorExpectationPlan;
     friend class TensorExpectationRebindPlan;
+    friend class ExactAdjointGradientPlan;
 };
 
 class TensorContractionWorkspace {
@@ -271,6 +273,7 @@ private:
     static void set_operator(std::array<QComplex, 4>& values, PauliAxis axis);
 
     friend class TensorExpectationRebindPlan;
+    friend class ExactAdjointGradientPlan;
 };
 
 }  // namespace qubit
