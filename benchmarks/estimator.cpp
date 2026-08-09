@@ -11,6 +11,7 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using qubit::ExactEstimatorConfig;
 using qubit::ExactEstimatorPlan;
 using qubit::ExactEstimatorResult;
 using qubit::ExactExecutionRoute;
@@ -135,6 +136,20 @@ int main() {
             }
         });
 
+        ExactEstimatorConfig serial_config;
+        serial_config.tensor_worker_count = 1U;
+        ExactEstimatorPlan serial_estimator(qubits, operations, serial_config);
+        std::unique_ptr<qubit::ExactEstimatorBatchPlan> serial_batch;
+        const double serial_compile_ms = milliseconds([&] {
+            serial_batch = std::make_unique<qubit::ExactEstimatorBatchPlan>(
+                serial_estimator.compile(queries));
+        });
+        auto serial_workspace = serial_batch->workspace();
+        std::vector<ExactEstimatorResult> serial_results(queries.size());
+        const double serial_query_ms = milliseconds([&] {
+            serial_batch->estimate(serial_results, serial_workspace);
+        });
+
         std::unique_ptr<ExactEstimatorPlan> estimator;
         const double estimator_circuit_compile_ms = milliseconds([&] {
             estimator = std::make_unique<ExactEstimatorPlan>(qubits, operations);
@@ -151,6 +166,7 @@ int main() {
         });
 
         double max_error = 0.0;
+        double serial_parallel_error = 0.0;
         std::size_t peak_terms = 0U;
         std::size_t peak_support = 0U;
         std::size_t visited_operations = 0U;
@@ -158,6 +174,9 @@ int main() {
             max_error = std::max(
                 max_error,
                 (qregister_values[index] - results[index].value).magnitude());
+            serial_parallel_error = std::max(
+                serial_parallel_error,
+                (serial_results[index].value - results[index].value).magnitude());
             peak_terms = std::max(peak_terms, results[index].pauli_stats.peak_terms);
             peak_support = std::max(peak_support, results[index].pauli_stats.peak_support);
             visited_operations += results[index].pauli_stats.visited_operations;
@@ -168,9 +187,14 @@ int main() {
         std::cout << "est18_queries=" << queries.size() << '\n';
         std::cout << "est18_qregister_setup_ms=" << qregister_setup_ms << '\n';
         std::cout << "est18_qregister_query_ms=" << qregister_query_ms << '\n';
+        std::cout << "est18_serial_tensor_workers=" << serial_batch->tensor_worker_count() << '\n';
+        std::cout << "est18_serial_observable_compile_ms=" << serial_compile_ms << '\n';
+        std::cout << "est18_serial_query_ms=" << serial_query_ms << '\n';
         std::cout << "est18_circuit_compile_ms=" << estimator_circuit_compile_ms << '\n';
         std::cout << "est18_observable_compile_ms=" << estimator_observable_compile_ms << '\n';
+        std::cout << "est18_tensor_workers=" << batch->tensor_worker_count() << '\n';
         std::cout << "est18_query_ms=" << estimator_query_ms << '\n';
+        std::cout << "est18_parallel_ratio=" << serial_query_ms / estimator_query_ms << '\n';
         std::cout << "est18_end_to_end_ratio="
                   << (qregister_setup_ms + qregister_query_ms) /
                          (estimator_circuit_compile_ms +
@@ -179,6 +203,7 @@ int main() {
                   << '\n';
         std::cout << "est18_post_state_ratio=" << qregister_query_ms / estimator_query_ms << '\n';
         std::cout << "est18_max_error=" << max_error << '\n';
+        std::cout << "est18_serial_parallel_error=" << serial_parallel_error << '\n';
         std::cout << "est18_causal_routes=" << counts.causal << '\n';
         std::cout << "est18_tensor_routes=" << counts.tensor << '\n';
         std::cout << "est18_register_routes=" << counts.register_state << '\n';
@@ -194,6 +219,17 @@ int main() {
         constexpr std::size_t qubits = 100U;
         const std::vector<Operation> operations = brickwork(qubits, 5U);
         const std::vector<PauliObservable> queries = observables(qubits, 8U);
+
+        ExactEstimatorConfig serial_config;
+        serial_config.tensor_worker_count = 1U;
+        ExactEstimatorPlan serial_estimator(qubits, operations, serial_config);
+        auto serial_batch = serial_estimator.compile(queries);
+        auto serial_workspace = serial_batch.workspace();
+        std::vector<ExactEstimatorResult> serial_results(queries.size());
+        const double serial_query_ms = milliseconds([&] {
+            serial_batch.estimate(serial_results, serial_workspace);
+        });
+
         std::unique_ptr<ExactEstimatorPlan> estimator;
         const double circuit_compile_ms = milliseconds([&] {
             estimator = std::make_unique<ExactEstimatorPlan>(qubits, operations);
@@ -209,11 +245,16 @@ int main() {
             batch->estimate(results, estimator_workspace);
         });
         QComplex checksum{};
+        double serial_parallel_error = 0.0;
         std::size_t peak_terms = 0U;
         std::size_t peak_support = 0U;
         std::size_t visited_operations = 0U;
-        for (const ExactEstimatorResult& result : results) {
+        for (std::size_t index = 0; index < results.size(); ++index) {
+            const ExactEstimatorResult& result = results[index];
             checksum += result.value;
+            serial_parallel_error = std::max(
+                serial_parallel_error,
+                (serial_results[index].value - result.value).magnitude());
             peak_terms = std::max(peak_terms, result.pauli_stats.peak_terms);
             peak_support = std::max(peak_support, result.pauli_stats.peak_support);
             visited_operations += result.pauli_stats.visited_operations;
@@ -222,9 +263,14 @@ int main() {
         std::cout << "est100_qubits=" << qubits << '\n';
         std::cout << "est100_operations=" << operations.size() << '\n';
         std::cout << "est100_queries=" << queries.size() << '\n';
+        std::cout << "est100_serial_tensor_workers=" << serial_batch.tensor_worker_count() << '\n';
+        std::cout << "est100_serial_query_ms=" << serial_query_ms << '\n';
         std::cout << "est100_circuit_compile_ms=" << circuit_compile_ms << '\n';
         std::cout << "est100_observable_compile_ms=" << observable_compile_ms << '\n';
+        std::cout << "est100_tensor_workers=" << batch->tensor_worker_count() << '\n';
         std::cout << "est100_query_ms=" << query_ms << '\n';
+        std::cout << "est100_parallel_ratio=" << serial_query_ms / query_ms << '\n';
+        std::cout << "est100_serial_parallel_error=" << serial_parallel_error << '\n';
         std::cout << "est100_causal_routes=" << counts.causal << '\n';
         std::cout << "est100_tensor_routes=" << counts.tensor << '\n';
         std::cout << "est100_register_routes=" << counts.register_state << '\n';
