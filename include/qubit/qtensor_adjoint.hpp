@@ -8,10 +8,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -19,6 +21,7 @@ namespace qubit {
 
 struct ExactAdjointGradientConfig {
     TensorNetworkConfig tensor{};
+    std::size_t worker_count{1U};
 };
 
 struct ExactAdjointGradientStats {
@@ -28,6 +31,7 @@ struct ExactAdjointGradientStats {
     std::size_t differentiated_term_count{0U};
     std::size_t source_derivative_bindings{0U};
     std::size_t parameter_shift_equivalent_evaluations{0U};
+    std::size_t worker_count{1U};
     TensorContractionStats tensor{};
 };
 
@@ -45,24 +49,35 @@ public:
         std::size_t bytes = sizeof(*this) +
                             values_.capacity() * sizeof(QComplex) +
                             gradients_.capacity() * sizeof(QComplex) +
-                            scratch_.forward_steps.capacity() * sizeof(std::vector<QComplex>) +
-                            scratch_.source_adjoints.capacity() * sizeof(std::vector<QComplex>) +
-                            scratch_.step_adjoints.capacity() * sizeof(std::vector<QComplex>) +
-                            scratch_.input_indices.capacity() * sizeof(std::size_t) +
-                            scratch_.input_values.capacity() * sizeof(QComplex) +
-                            scratch_.prefix.capacity() * sizeof(QComplex) +
-                            scratch_.suffix.capacity() * sizeof(QComplex) +
-                            scratch_.terminal_values.capacity() * sizeof(QComplex);
+                            scratch_.capacity() * sizeof(Scratch) +
+                            lane_values_.capacity() * sizeof(std::vector<QComplex>) +
+                            lane_gradients_.capacity() * sizeof(std::vector<QComplex>);
         if (plan_.has_value()) {
             bytes += plan_->estimated_bytes();
         }
-        for (const auto& values : scratch_.forward_steps) {
+        for (const Scratch& scratch : scratch_) {
+            bytes += scratch.forward_steps.capacity() * sizeof(std::vector<QComplex>) +
+                     scratch.source_adjoints.capacity() * sizeof(std::vector<QComplex>) +
+                     scratch.step_adjoints.capacity() * sizeof(std::vector<QComplex>) +
+                     scratch.input_indices.capacity() * sizeof(std::size_t) +
+                     scratch.input_values.capacity() * sizeof(QComplex) +
+                     scratch.prefix.capacity() * sizeof(QComplex) +
+                     scratch.suffix.capacity() * sizeof(QComplex) +
+                     scratch.terminal_values.capacity() * sizeof(QComplex);
+            for (const auto& values : scratch.forward_steps) {
+                bytes += values.capacity() * sizeof(QComplex);
+            }
+            for (const auto& values : scratch.source_adjoints) {
+                bytes += values.capacity() * sizeof(QComplex);
+            }
+            for (const auto& values : scratch.step_adjoints) {
+                bytes += values.capacity() * sizeof(QComplex);
+            }
+        }
+        for (const auto& values : lane_values_) {
             bytes += values.capacity() * sizeof(QComplex);
         }
-        for (const auto& values : scratch_.source_adjoints) {
-            bytes += values.capacity() * sizeof(QComplex);
-        }
-        for (const auto& values : scratch_.step_adjoints) {
+        for (const auto& values : lane_gradients_) {
             bytes += values.capacity() * sizeof(QComplex);
         }
         return bytes;
@@ -84,7 +99,9 @@ private:
     std::optional<TensorExpectationPlan> plan_{};
     std::vector<QComplex> values_{};
     std::vector<QComplex> gradients_{};
-    Scratch scratch_{};
+    std::vector<Scratch> scratch_{};
+    std::vector<std::vector<QComplex>> lane_values_{};
+    std::vector<std::vector<QComplex>> lane_gradients_{};
     std::size_t rebind_count_{0U};
 
     friend class ExactAdjointGradientPlan;
@@ -111,6 +128,9 @@ public:
         if (config_.tensor.max_contraction_entries < 2U ||
             config_.tensor.max_factors == 0U) {
             throw QStateError("Exact adjoint gradient tensor limits are invalid");
+        }
+        if (config_.worker_count > kMaxWorkers) {
+            throw QStateError("Exact adjoint gradient worker_count exceeds the supported limit");
         }
 
         for (std::size_t index = 0U; index < operations_.size(); ++index) {
@@ -182,6 +202,32 @@ public:
                     {occurrence_index, binding.source_index, binding.xor_mask, binding.bra});
             }
         }
+
+        identity_values_.assign(observable_count_, QComplex{});
+        for (std::size_t observable_index = 0U;
+             observable_index < prototype_->observables_.size();
+             ++observable_index) {
+            const auto observable = prototype_->observables_[observable_index];
+            for (std::size_t term_index = observable.term_begin;
+                 term_index < observable.term_end;
+                 ++term_index) {
+                const auto& term = prototype_->terms_[term_index];
+                if (term.identity) {
+                    identity_values_[observable_index] += term.coefficient;
+                } else {
+                    jobs_.push_back({observable_index, term_index});
+                }
+            }
+        }
+
+        std::size_t requested = config_.worker_count;
+        if (requested == 0U) {
+            const unsigned int hardware = std::thread::hardware_concurrency();
+            requested = hardware == 0U ? 1U : static_cast<std::size_t>(hardware);
+            requested = std::min(requested, kMaxWorkers);
+        }
+        const std::size_t job_count = std::max<std::size_t>(1U, jobs_.size());
+        worker_count_ = std::max<std::size_t>(1U, std::min(requested, job_count));
     }
 
     [[nodiscard]] ExactAdjointGradientWorkspace workspace() const {
@@ -190,6 +236,13 @@ public:
         result.plan_ = *prototype_;
         result.values_.resize(observable_count_);
         result.gradients_.resize(observable_count_ * parameter_count_);
+        result.scratch_.resize(worker_count_);
+        result.lane_values_.resize(worker_count_);
+        result.lane_gradients_.resize(worker_count_);
+        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+            result.lane_values_[lane].resize(observable_count_);
+            result.lane_gradients_[lane].resize(observable_count_ * parameter_count_);
+        }
         return result;
     }
 
@@ -219,63 +272,110 @@ public:
         const TensorNetworkCircuit circuit(qubit_count_, bound, config_.tensor);
         rebind(*workspace_value.plan_, circuit);
 
-        std::fill(workspace_value.values_.begin(), workspace_value.values_.end(), QComplex{});
-        std::fill(workspace_value.gradients_.begin(), workspace_value.gradients_.end(), QComplex{});
+        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+            std::fill(
+                workspace_value.lane_values_[lane].begin(),
+                workspace_value.lane_values_[lane].end(),
+                QComplex{});
+            std::fill(
+                workspace_value.lane_gradients_[lane].begin(),
+                workspace_value.lane_gradients_[lane].end(),
+                QComplex{});
+        }
 
-        TensorExpectationPlan& plan = *workspace_value.plan_;
-        for (std::size_t observable_index = 0U;
-             observable_index < plan.observables_.size();
-             ++observable_index) {
-            const auto observable = plan.observables_[observable_index];
-            for (std::size_t term_index = observable.term_begin;
-                 term_index < observable.term_end;
-                 ++term_index) {
-                const auto& term = plan.terms_[term_index];
-                if (term.identity) {
-                    workspace_value.values_[observable_index] += term.coefficient;
-                    continue;
-                }
+        const TensorExpectationPlan& plan = *workspace_value.plan_;
+        std::vector<std::exception_ptr> errors(worker_count_);
+        const auto worker = [&](std::size_t lane) {
+            try {
+                for (std::size_t job_index = lane;
+                     job_index < jobs_.size();
+                     job_index += worker_count_) {
+                    const TermJob job = jobs_[job_index];
+                    const auto& term = plan.terms_[job.term_index];
+                    const QComplex raw_value = forward_and_reverse(
+                        term, workspace_value.scratch_[lane]);
+                    workspace_value.lane_values_[lane][job.observable_index] +=
+                        term.coefficient * raw_value;
 
-                const QComplex raw_value = forward_and_reverse(
-                    term, workspace_value.scratch_);
-                workspace_value.values_[observable_index] +=
-                    term.coefficient * raw_value;
-
-                for (const DerivativeBinding& derivative_binding :
-                     term_derivative_bindings_[term_index]) {
-                    const Occurrence& occurrence =
-                        occurrences_[derivative_binding.occurrence_index];
-                    const std::array<QComplex, 4> derivative = gate_derivative(
-                        bound[occurrence.operation_index]);
-                    const auto& source_adjoint =
-                        workspace_value.scratch_.source_adjoints[
-                            derivative_binding.source_index];
-                    if (source_adjoint.size() != derivative.size()) {
-                        throw QStateError(
-                            "Exact adjoint gradient source derivative rank changed");
-                    }
-
-                    QComplex contribution{};
-                    if (!derivative_binding.bra) {
-                        for (std::size_t index = 0U; index < derivative.size(); ++index) {
-                            contribution += source_adjoint[index] * derivative[index];
+                    for (const DerivativeBinding& derivative_binding :
+                         term_derivative_bindings_[job.term_index]) {
+                        const Occurrence& occurrence =
+                            occurrences_[derivative_binding.occurrence_index];
+                        const std::array<QComplex, 4> derivative = gate_derivative(
+                            bound[occurrence.operation_index]);
+                        const auto& source_adjoint =
+                            workspace_value.scratch_[lane].source_adjoints[
+                                derivative_binding.source_index];
+                        if (source_adjoint.size() != derivative.size()) {
+                            throw QStateError(
+                                "Exact adjoint gradient source derivative rank changed");
                         }
-                    } else {
-                        for (std::size_t index = 0U; index < derivative.size(); ++index) {
-                            const std::size_t target =
-                                index ^ derivative_binding.xor_mask;
-                            if (target >= source_adjoint.size()) {
-                                throw QStateError(
-                                    "Exact adjoint gradient bra derivative permutation is invalid");
+
+                        QComplex contribution{};
+                        if (!derivative_binding.bra) {
+                            for (std::size_t index = 0U;
+                                 index < derivative.size();
+                                 ++index) {
+                                contribution += source_adjoint[index] * derivative[index];
                             }
-                            contribution += source_adjoint[target] *
-                                            derivative[index].conjugate();
+                        } else {
+                            for (std::size_t index = 0U;
+                                 index < derivative.size();
+                                 ++index) {
+                                const std::size_t target =
+                                    index ^ derivative_binding.xor_mask;
+                                if (target >= source_adjoint.size()) {
+                                    throw QStateError(
+                                        "Exact adjoint gradient bra derivative permutation is invalid");
+                                }
+                                contribution += source_adjoint[target] *
+                                                derivative[index].conjugate();
+                            }
                         }
+                        const std::size_t gradient_offset =
+                            job.observable_index * parameter_count_ +
+                            occurrence.parameter_slot;
+                        workspace_value.lane_gradients_[lane][gradient_offset] +=
+                            contribution;
                     }
-                    const std::size_t gradient_offset =
-                        observable_index * parameter_count_ + occurrence.parameter_slot;
-                    workspace_value.gradients_[gradient_offset] += contribution;
                 }
+            } catch (...) {
+                errors[lane] = std::current_exception();
+            }
+        };
+
+        std::vector<std::thread> threads;
+        threads.reserve(worker_count_ > 0U ? worker_count_ - 1U : 0U);
+        for (std::size_t lane = 1U; lane < worker_count_; ++lane) {
+            threads.emplace_back(worker, lane);
+        }
+        worker(0U);
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+        for (const std::exception_ptr& error : errors) {
+            if (error != nullptr) {
+                std::rethrow_exception(error);
+            }
+        }
+
+        workspace_value.values_ = identity_values_;
+        std::fill(
+            workspace_value.gradients_.begin(),
+            workspace_value.gradients_.end(),
+            QComplex{});
+        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+            for (std::size_t observable = 0U;
+                 observable < observable_count_;
+                 ++observable) {
+                workspace_value.values_[observable] +=
+                    workspace_value.lane_values_[lane][observable];
+            }
+            for (std::size_t index = 0U;
+                 index < workspace_value.gradients_.size();
+                 ++index) {
+                workspace_value.gradients_[index] +=
+                    workspace_value.lane_gradients_[lane][index];
             }
         }
 
@@ -317,19 +417,22 @@ public:
         return observable_count_;
     }
 
+    [[nodiscard]] std::size_t worker_count() const noexcept {
+        return worker_count_;
+    }
+
     [[nodiscard]] ExactAdjointGradientStats stats() const noexcept {
         ExactAdjointGradientStats result;
         result.parameter_count = parameter_count_;
         result.parameterized_operation_count = occurrences_.size();
         result.observable_count = observable_count_;
-        for (const auto& term : prototype_->terms_) {
-            result.differentiated_term_count += static_cast<std::size_t>(!term.identity);
-        }
+        result.differentiated_term_count = jobs_.size();
         for (const auto& bindings : term_derivative_bindings_) {
             result.source_derivative_bindings += bindings.size();
         }
         result.parameter_shift_equivalent_evaluations =
             1U + 2U * occurrences_.size();
+        result.worker_count = worker_count_;
         result.tensor = prototype_->stats();
         return result;
     }
@@ -345,7 +448,9 @@ public:
                             factor_bindings_.capacity() * sizeof(std::vector<std::size_t>) +
                             occurrence_bindings_.capacity() * sizeof(std::vector<std::size_t>) +
                             term_derivative_bindings_.capacity() *
-                                sizeof(std::vector<DerivativeBinding>);
+                                sizeof(std::vector<DerivativeBinding>) +
+                            identity_values_.capacity() * sizeof(QComplex) +
+                            jobs_.capacity() * sizeof(TermJob);
         if (prototype_.has_value()) {
             bytes += prototype_->estimated_bytes();
         }
@@ -388,6 +493,13 @@ private:
         bool bra{false};
     };
 
+    struct TermJob {
+        std::size_t observable_index{0U};
+        std::size_t term_index{0U};
+    };
+
+    static constexpr std::size_t kMaxWorkers = 32U;
+
     std::size_t qubit_count_{0U};
     std::vector<ParameterizedOperation> operations_{};
     ExactAdjointGradientConfig config_{};
@@ -406,6 +518,9 @@ private:
     std::vector<std::vector<std::size_t>> factor_bindings_{};
     std::vector<std::vector<std::size_t>> occurrence_bindings_{};
     std::vector<std::vector<DerivativeBinding>> term_derivative_bindings_{};
+    std::vector<QComplex> identity_values_{};
+    std::vector<TermJob> jobs_{};
+    std::size_t worker_count_{1U};
 
     [[nodiscard]] static std::uint64_t next_workspace_token() noexcept {
         static std::atomic<std::uint64_t> next{1U};
@@ -428,8 +543,18 @@ private:
         if (workspace_value.token_ != workspace_token_ ||
             !workspace_value.plan_.has_value() ||
             workspace_value.values_.size() != observable_count_ ||
-            workspace_value.gradients_.size() != observable_count_ * parameter_count_) {
+            workspace_value.gradients_.size() != observable_count_ * parameter_count_ ||
+            workspace_value.scratch_.size() != worker_count_ ||
+            workspace_value.lane_values_.size() != worker_count_ ||
+            workspace_value.lane_gradients_.size() != worker_count_) {
             throw QStateError("Exact adjoint gradient workspace does not match its plan");
+        }
+        for (std::size_t lane = 0U; lane < worker_count_; ++lane) {
+            if (workspace_value.lane_values_[lane].size() != observable_count_ ||
+                workspace_value.lane_gradients_[lane].size() !=
+                    observable_count_ * parameter_count_) {
+                throw QStateError("Exact adjoint gradient workspace lane shape is invalid");
+            }
         }
     }
 
