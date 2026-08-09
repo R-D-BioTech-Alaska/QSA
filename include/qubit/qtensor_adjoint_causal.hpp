@@ -3,10 +3,10 @@
 #include "qubit/qtensor_adjoint.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -17,7 +17,6 @@ namespace qubit {
 
 struct ExactCausalAdjointGradientConfig {
     ExactAdjointGradientConfig adjoint{};
-    std::size_t classification_max_terms{65'536U};
 };
 
 struct ExactCausalAdjointGradientStats {
@@ -28,7 +27,6 @@ struct ExactCausalAdjointGradientStats {
     std::size_t static_term_count{0U};
     std::size_t dynamic_observable_count{0U};
     std::size_t static_contribution_observable_count{0U};
-    std::size_t classification_fallback_term_count{0U};
     ExactAdjointGradientStats dynamic{};
 };
 
@@ -91,11 +89,7 @@ public:
         if (observables.empty()) {
             throw QStateError("Exact causal adjoint gradient requires at least one observable");
         }
-        if (config_.classification_max_terms == 0U) {
-            throw QStateError(
-                "Exact causal adjoint gradient classification_max_terms must be positive");
-        }
-        if (config_.adjoint.worker_count > 32U) {
+        if (config_.adjoint.worker_count > kAdjointWorkerLimit) {
             throw QStateError(
                 "Exact causal adjoint gradient worker_count exceeds the supported limit");
         }
@@ -124,20 +118,15 @@ public:
         static_observables.reserve(observables.size());
 
         for (const PauliObservable& observable : observables) {
-            PauliObservable dynamic(qubit_count_);
-            PauliObservable cached(qubit_count_);
+            PauliObservable dynamic(qubit_count_, observable.config());
+            PauliObservable cached(qubit_count_, observable.config());
             bool observable_dynamic = false;
             bool observable_static = false;
             for (const PauliTerm& term : observable.terms()) {
                 if (term.coefficient.norm2() == 0.0) {
                     continue;
                 }
-                bool fallback = false;
-                const bool dynamic_term = term_depends_on_parameters(term, fallback);
-                if (fallback) {
-                    ++classification_fallback_term_count_;
-                }
-                if (dynamic_term) {
+                if (term_depends_on_parameters(term)) {
                     dynamic.add_term(term.coefficient, term.factors);
                     ++dynamic_term_count_;
                     observable_dynamic = true;
@@ -285,8 +274,6 @@ public:
         result.dynamic_observable_count = dynamic_observable_count_;
         result.static_contribution_observable_count =
             static_contribution_observable_count_;
-        result.classification_fallback_term_count =
-            classification_fallback_term_count_;
         if (dynamic_plan_) {
             result.dynamic = dynamic_plan_->stats();
         } else {
@@ -326,7 +313,6 @@ private:
     std::size_t static_term_count_{0U};
     std::size_t dynamic_observable_count_{0U};
     std::size_t static_contribution_observable_count_{0U};
-    std::size_t classification_fallback_term_count_{0U};
     std::uint64_t workspace_token_{0U};
 
     [[nodiscard]] static std::uint64_t next_workspace_token() noexcept {
@@ -335,10 +321,6 @@ private:
     }
 
     void validate_parameterized_operations() {
-        if (config_.adjoint.worker_count > kAdjointWorkerLimit) {
-            throw QStateError(
-                "Exact causal adjoint gradient worker_count exceeds the supported limit");
-        }
         for (const ParameterizedOperation& templated : operations_) {
             if (templated.parameter_slot < -1 || templated.sample_slot < -1) {
                 throw QStateError(
@@ -396,71 +378,40 @@ private:
         return bound;
     }
 
-    [[nodiscard]] static PauliAxis generator_axis(OperationCode code) {
-        switch (code) {
-            case OperationCode::Rx:
-                return PauliAxis::X;
-            case OperationCode::Ry:
-                return PauliAxis::Y;
-            case OperationCode::Rz:
-                return PauliAxis::Z;
-            default:
+    [[nodiscard]] bool term_depends_on_parameters(const PauliTerm& term) const {
+        std::vector<std::uint8_t> support(qubit_count_, 0U);
+        for (const PauliFactor& factor : term.factors) {
+            if (factor.qubit >= qubit_count_) {
                 throw QStateError(
-                    "Exact causal adjoint gradient parameter generator is unsupported");
-        }
-    }
-
-    [[nodiscard]] static bool commutes_with_generator(
-        const PauliObservable& observable,
-        QubitId qubit,
-        PauliAxis generator) noexcept {
-        for (const PauliTerm& term : observable.terms()) {
-            PauliAxis local = PauliAxis::I;
-            for (const PauliFactor& factor : term.factors) {
-                if (factor.qubit == qubit) {
-                    local = factor.axis;
-                    break;
-                }
-                if (factor.qubit > qubit) {
-                    break;
-                }
+                    "Exact causal adjoint gradient Pauli factor is out of range");
             }
-            if (local != PauliAxis::I && local != generator) {
-                return false;
-            }
+            support[factor.qubit] = 1U;
         }
-        return true;
-    }
-
-    [[nodiscard]] bool term_depends_on_parameters(
-        const PauliTerm& source,
-        bool& fallback) const {
-        fallback = false;
-        PauliObservable probe(
-            qubit_count_,
-            PauliPropagationConfig{config_.classification_max_terms});
-        probe.add_term({1.0, 0.0}, source.factors);
 
         for (auto position = operations_.rbegin();
              position != operations_.rend();
              ++position) {
             const ParameterizedOperation& templated = *position;
-            if (templated.parameter_slot >= 0) {
-                if (!commutes_with_generator(
-                        probe,
-                        templated.operation.first,
-                        generator_axis(templated.operation.code))) {
-                    return true;
-                }
-                continue;
-            }
-            try {
-                const Operation operation = templated.operation;
-                probe.propagate_backward(
-                    std::span<const Operation>(&operation, 1U));
-            } catch (const QStateError&) {
-                fallback = true;
+            const Operation& operation = templated.operation;
+
+            if (templated.parameter_slot >= 0 && support[operation.first] != 0U) {
                 return true;
+            }
+
+            switch (operation.code) {
+                case OperationCode::Cnot:
+                case OperationCode::Cz:
+                    if (support[operation.first] != 0U ||
+                        support[operation.second] != 0U) {
+                        support[operation.first] = 1U;
+                        support[operation.second] = 1U;
+                    }
+                    break;
+                case OperationCode::Swap:
+                    std::swap(support[operation.first], support[operation.second]);
+                    break;
+                default:
+                    break;
             }
         }
         return false;
@@ -491,7 +442,7 @@ private:
             throw QStateError(
                 "Exact causal adjoint gradient workspace does not match its plan");
         }
-        if (dynamic_plan_ != nullptr) {
+        if (dynamic_plan_) {
             if (!workspace_value.dynamic_workspace_.has_value()) {
                 throw QStateError(
                     "Exact causal adjoint gradient workspace is missing dynamic state");
