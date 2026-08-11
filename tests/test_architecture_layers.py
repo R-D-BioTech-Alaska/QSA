@@ -32,6 +32,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qphase_graph.hpp",
     "include/qubit/qpauli.hpp",
     "include/qubit/qtensor.hpp",
+    "include/qubit/qmps.hpp",
 )
 
 BROKER_FILES = (

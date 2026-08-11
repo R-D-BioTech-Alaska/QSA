@@ -39,6 +39,7 @@ add_library(qstate_core STATIC
     src/qpauli.cpp
     src/qpauli_causal.cpp
     src/qtensor.cpp
+    src/qmps.cpp
     src/qbroker.cpp
     src/qestimator.cpp
     src/qtensor_plan.cpp
@@ -218,6 +219,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_tensor_network_tests PRIVATE qstate_core)
     add_test(NAME qstate_tensor_network_tests COMMAND qstate_tensor_network_tests)
 
+    add_executable(qstate_mps_tests tests/test_mps.cpp)
+    target_link_libraries(qstate_mps_tests PRIVATE qstate_core)
+    add_test(NAME qstate_mps_tests COMMAND qstate_mps_tests)
+
     add_executable(qstate_tensor_contraction_plan_tests tests/test_tensor_contraction_plan.cpp)
     target_link_libraries(qstate_tensor_contraction_plan_tests PRIVATE qstate_core)
     add_test(NAME qstate_tensor_contraction_plan_tests COMMAND qstate_tensor_contraction_plan_tests)
@@ -364,6 +369,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_tensor_network_benchmark benchmarks/tensor_network.cpp)
     target_link_libraries(qstate_tensor_network_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_mps_benchmark benchmarks/mps.cpp)
+    target_link_libraries(qstate_mps_benchmark PRIVATE qstate_core)
 
     add_executable(qstate_tensor_contraction_plan_benchmark benchmarks/tensor_contraction_plan.cpp)
     target_link_libraries(qstate_tensor_contraction_plan_benchmark PRIVATE qstate_core)
