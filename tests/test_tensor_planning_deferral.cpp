@@ -91,24 +91,50 @@ int main() {
     ExactExecutionBroker exhausted_broker(exhausted_config);
     const auto exhausted = exhausted_broker.basis_probability_from_zero(2U, eligible, zero);
     require(exhausted.route == ExactExecutionRoute::TensorNetwork,
-            "MPS resource rejection did not resume exact TensorNetwork");
-    require(exhausted.fallback_reason.find("tensor: planning deferred to certified MPS") !=
-                std::string::npos &&
-                exhausted.fallback_reason.find("mps:") != std::string::npos,
-            "MPS resource rejection did not preserve deferral evidence");
+            "MPS resource certificate did not keep TensorNetwork first");
+    require(exhausted.fallback_reason.empty(),
+            "resource-ineligible MPS was attempted before TensorNetwork");
     require_close(exhausted.value, expected,
-                  "resumed TensorNetwork probability differs from QRegister");
+                  "resource-certified TensorNetwork probability differs from QRegister");
 
     ExactPreparedProbabilityPlan exhausted_prepared(2U, eligible, exhausted_config);
     require(exhausted_prepared.prepared_route() == ExactExecutionRoute::TensorNetwork,
-            "prepared MPS resource rejection did not resume TensorNetwork");
+            "prepared MPS resource certificate did not keep TensorNetwork first");
     const auto exhausted_prepared_result = exhausted_prepared.probability(zero);
-    require(exhausted_prepared_result.fallback_reason.find(
-                "tensor: planning deferred to certified MPS") != std::string::npos &&
-                exhausted_prepared_result.fallback_reason.find("mps:") != std::string::npos,
-            "prepared MPS rejection did not preserve deferral evidence");
+    require(exhausted_prepared_result.fallback_reason.empty(),
+            "prepared resource-ineligible MPS was attempted before TensorNetwork");
     require_close(exhausted_prepared_result.value, expected,
-                  "prepared resumed TensorNetwork probability differs from QRegister");
+                  "prepared resource-certified TensorNetwork probability differs from QRegister");
+
+    const std::array<Operation, 5> repeated_cut{{
+        {OperationCode::H, 0U, 0U, 0.0, 0.0},
+        {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+        {OperationCode::Cz, 0U, 1U, 0.0, 0.0},
+        {OperationCode::Cnot, 1U, 0U, 0.0, 0.0},
+        {OperationCode::Ry, 1U, 0U, 0.17, 0.0},
+    }};
+    const double repeated_expected = evolve(2U, repeated_cut).amplitude_bits(zero).norm2();
+    ExactExecutionBrokerConfig repeated_config = deferred_config;
+    repeated_config.mps.max_bond_dimension = 4U;
+    const auto repeated = ExactExecutionBroker(repeated_config).basis_probability_from_zero(
+        2U, repeated_cut, zero);
+    require(repeated.route == ExactExecutionRoute::TensorNetwork,
+            "repeated-cut MPS bond growth was not rejected before TensorNetwork");
+    require(repeated.fallback_reason.empty(),
+            "repeated-cut resource rejection incorrectly reported Tensor deferral");
+    require_close(repeated.value, repeated_expected,
+                  "repeated-cut TensorNetwork probability differs from QRegister");
+
+    ExactExecutionBrokerConfig scalar_config = deferred_config;
+    scalar_config.mps.max_scalars = 7U;
+    const auto scalar_limited = ExactExecutionBroker(scalar_config).basis_probability_from_zero(
+        2U, eligible, zero);
+    require(scalar_limited.route == ExactExecutionRoute::TensorNetwork,
+            "MPS scalar certificate did not keep TensorNetwork first");
+    require(scalar_limited.fallback_reason.empty(),
+            "scalar-ineligible MPS incorrectly reported Tensor deferral");
+    require_close(scalar_limited.value, expected,
+                  "scalar-certified TensorNetwork probability differs from QRegister");
 
     const std::array<Operation, 3> non_mps{{
         {OperationCode::H, 0U, 0U, 0.0, 0.0},
