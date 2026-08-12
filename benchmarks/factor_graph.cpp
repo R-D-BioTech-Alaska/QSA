@@ -136,6 +136,17 @@ int main() {
         qsa_values = plan.evaluate(workspace);
     }, 101);
 
+    ExactFactorConfig unique_config = config;
+    unique_config.reuse_workspace_slots = false;
+    ExactFactorGraph unique_graph(unique_config);
+    populate_chain(unique_graph, tables);
+    ExactFactorPlan unique_plan = unique_graph.compile(retained);
+    auto unique_workspace = unique_plan.workspace();
+    std::vector<QComplex> unique_values;
+    const double unique_query_ms = median_ms([&] {
+        unique_values = unique_plan.evaluate(unique_workspace);
+    }, 101);
+
     ExactFactorConfig generic_config = config;
     generic_config.max_compiled_index_entries = 0U;
     ExactFactorGraph generic_graph(generic_config);
@@ -152,6 +163,8 @@ int main() {
         control = chain_control(tables);
     }, 101);
     const double initial_error = max_error(qsa_values, control);
+    const double unique_error = max_error(unique_values, control);
+    const double reuse_unique_error = max_error(qsa_values, unique_values);
     const double generic_error = max_error(generic_values, control);
     const double compiled_generic_error = max_error(qsa_values, generic_values);
 
@@ -218,7 +231,8 @@ int main() {
     const double one_shot_total_ms =
         std::chrono::duration<double, std::milli>(one_shot_stop - one_shot_start).count();
 
-    if (initial_error > 2e-9 || generic_error > 2e-9 ||
+    if (initial_error > 2e-9 || unique_error > 2e-9 ||
+        reuse_unique_error > 2e-9 || generic_error > 2e-9 ||
         compiled_generic_error > 2e-9 || one_shot_error > 2e-9 ||
         targeted_error > 2e-9 || full_rebind_error > 2e-9 ||
         one_shot_point_error > 2e-9) {
@@ -232,6 +246,8 @@ int main() {
     std::cout << "factor_route=" << qubit::exact_factor_route_name(plan.route()) << '\n';
     std::cout << "factor_compile_ms=" << compile_ms << '\n';
     std::cout << "factor_prepared_query_ms=" << prepared_query_ms << '\n';
+    std::cout << "factor_unique_workspace_query_ms=" << unique_query_ms << '\n';
+    std::cout << "factor_reuse_over_unique_workspace_speed=" << unique_query_ms / prepared_query_ms << '\n';
     std::cout << "factor_generic_query_ms=" << generic_query_ms << '\n';
     std::cout << "factor_compiled_over_generic_speed=" << generic_query_ms / prepared_query_ms << '\n';
     std::cout << "factor_one_shot_ms=" << one_shot_ms << '\n';
@@ -243,12 +259,22 @@ int main() {
     std::cout << "factor_peak_entries=" << plan.stats().peak_factor_entries << '\n';
     std::cout << "factor_compiled_index_entries=" << plan.stats().compiled_index_entries << '\n';
     std::cout << "factor_generic_compiled_index_entries=" << generic_plan.stats().compiled_index_entries << '\n';
+    std::cout << "factor_workspace_slots=" << plan.stats().workspace_slots << '\n';
+    std::cout << "factor_unique_workspace_slots=" << unique_plan.stats().workspace_slots << '\n';
+    std::cout << "factor_elimination_steps=" << plan.step_count() << '\n';
     std::cout << "factor_plan_bytes=" << plan.estimated_bytes() << '\n';
+    std::cout << "factor_unique_plan_bytes=" << unique_plan.estimated_bytes() << '\n';
     std::cout << "factor_generic_plan_bytes=" << generic_plan.estimated_bytes() << '\n';
     std::cout << "factor_compiled_index_memory_bytes="
               << plan.estimated_bytes() - generic_plan.estimated_bytes() << '\n';
     std::cout << "factor_workspace_bytes=" << workspace.estimated_bytes() << '\n';
+    std::cout << "factor_unique_workspace_bytes=" << unique_workspace.estimated_bytes() << '\n';
+    std::cout << "factor_workspace_memory_reduction="
+              << static_cast<double>(unique_workspace.estimated_bytes()) /
+                     static_cast<double>(workspace.estimated_bytes()) << '\n';
     std::cout << "factor_initial_error=" << initial_error << '\n';
+    std::cout << "factor_unique_workspace_error=" << unique_error << '\n';
+    std::cout << "factor_reuse_unique_error=" << reuse_unique_error << '\n';
     std::cout << "factor_generic_error=" << generic_error << '\n';
     std::cout << "factor_compiled_generic_error=" << compiled_generic_error << '\n';
     std::cout << "factor_rebind_points=" << points << '\n';
