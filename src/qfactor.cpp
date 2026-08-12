@@ -81,7 +81,8 @@ struct PlannerCandidateGreater {
     return first.max_factor_entries == second.max_factor_entries &&
            first.max_factors == second.max_factors &&
            first.max_variables == second.max_variables &&
-           first.max_compiled_index_entries == second.max_compiled_index_entries;
+           first.max_compiled_index_entries == second.max_compiled_index_entries &&
+           first.reuse_workspace_slots == second.reuse_workspace_slots;
 }
 
 }  // namespace
@@ -660,6 +661,68 @@ ExactFactorPlan::ExactFactorPlan(
     }
     stats_.peak_factor_entries =
         std::max(stats_.peak_factor_entries, stats_.output_entries);
+
+    std::vector<std::size_t> last_use(steps_.size());
+    for (std::size_t step = 0U; step < steps_.size(); ++step) {
+        last_use[step] = step;
+    }
+    for (std::size_t consumer = 0U; consumer < steps_.size(); ++consumer) {
+        for (const InputMap& input : steps_[consumer].inputs) {
+            if (input.node < sources_.size()) {
+                continue;
+            }
+            const std::size_t producer = input.node - sources_.size();
+            if (producer >= consumer || producer >= steps_.size()) {
+                throw QStateError("Exact factor workspace dependency is not topological");
+            }
+            last_use[producer] = std::max(last_use[producer], consumer);
+        }
+    }
+    for (const TerminalMap& terminal : terminals_) {
+        if (terminal.node < sources_.size()) {
+            continue;
+        }
+        const std::size_t producer = terminal.node - sources_.size();
+        if (producer >= steps_.size()) {
+            throw QStateError("Exact factor terminal references an invalid dynamic node");
+        }
+        last_use[producer] = steps_.size();
+    }
+
+    if (!config_.reuse_workspace_slots) {
+        workspace_slot_sizes_.resize(steps_.size());
+        for (std::size_t step = 0U; step < steps_.size(); ++step) {
+            steps_[step].workspace_slot = step;
+            workspace_slot_sizes_[step] = steps_[step].output_entries;
+        }
+    } else {
+        std::vector<std::vector<std::size_t>> release_before(steps_.size() + 1U);
+        for (std::size_t producer = 0U; producer < steps_.size(); ++producer) {
+            if (last_use[producer] < steps_.size()) {
+                release_before[last_use[producer] + 1U].push_back(producer);
+            }
+        }
+        std::vector<std::size_t> free_slots;
+        for (std::size_t step = 0U; step < steps_.size(); ++step) {
+            for (const std::size_t producer : release_before[step]) {
+                free_slots.push_back(steps_[producer].workspace_slot);
+            }
+
+            std::size_t slot = 0U;
+            if (free_slots.empty()) {
+                slot = workspace_slot_sizes_.size();
+                workspace_slot_sizes_.push_back(0U);
+            } else {
+                const auto smallest = std::min_element(free_slots.begin(), free_slots.end());
+                slot = *smallest;
+                free_slots.erase(smallest);
+            }
+            steps_[step].workspace_slot = slot;
+            workspace_slot_sizes_[slot] =
+                std::max(workspace_slot_sizes_[slot], steps_[step].output_entries);
+        }
+    }
+    stats_.workspace_slots = workspace_slot_sizes_.size();
 }
 
 QComplex ExactFactorPlan::source_value(
@@ -692,19 +755,24 @@ QComplex ExactFactorPlan::node_value(
     if (node < sources_.size()) {
         return source_value(sources_[node], index);
     }
-    const std::size_t output = node - sources_.size();
-    if (output >= workspace_value.outputs_.size() ||
-        index >= workspace_value.outputs_[output].size()) {
+    const std::size_t producer = node - sources_.size();
+    if (producer >= steps_.size()) {
+        throw QStateError("Exact factor plan references an invalid dynamic node");
+    }
+    const Step& step = steps_[producer];
+    if (step.workspace_slot >= workspace_value.outputs_.size() ||
+        index >= step.output_entries ||
+        index >= workspace_value.outputs_[step.workspace_slot].size()) {
         throw QStateError("Exact factor plan references an invalid workspace node");
     }
-    return workspace_value.outputs_[output][index];
+    return workspace_value.outputs_[step.workspace_slot][index];
 }
 
 ExactFactorWorkspace ExactFactorPlan::workspace() const {
     ExactFactorWorkspace result;
-    result.outputs_.resize(steps_.size());
-    for (std::size_t index = 0U; index < steps_.size(); ++index) {
-        result.outputs_[index].resize(steps_[index].output_entries);
+    result.outputs_.resize(workspace_slot_sizes_.size());
+    for (std::size_t slot = 0U; slot < workspace_slot_sizes_.size(); ++slot) {
+        result.outputs_[slot].resize(workspace_slot_sizes_[slot]);
     }
     result.coordinates_.resize(stats_.peak_union_variables);
     result.retained_coordinates_.resize(retained_variables_.size());
@@ -713,13 +781,13 @@ ExactFactorWorkspace ExactFactorPlan::workspace() const {
 
 void ExactFactorPlan::validate_workspace(
     const ExactFactorWorkspace& workspace_value) const {
-    if (workspace_value.outputs_.size() != steps_.size() ||
+    if (workspace_value.outputs_.size() != workspace_slot_sizes_.size() ||
         workspace_value.coordinates_.size() != stats_.peak_union_variables ||
         workspace_value.retained_coordinates_.size() != retained_variables_.size()) {
         throw QStateError("Exact factor workspace does not match its plan");
     }
-    for (std::size_t index = 0U; index < steps_.size(); ++index) {
-        if (workspace_value.outputs_[index].size() != steps_[index].output_entries) {
+    for (std::size_t slot = 0U; slot < workspace_slot_sizes_.size(); ++slot) {
+        if (workspace_value.outputs_[slot].size() != workspace_slot_sizes_[slot]) {
             throw QStateError("Exact factor workspace output shape does not match its plan");
         }
     }
@@ -735,11 +803,11 @@ void ExactFactorPlan::evaluate(
 
     for (std::size_t step_index = 0U; step_index < steps_.size(); ++step_index) {
         const Step& step = steps_[step_index];
-        std::vector<QComplex>& step_output = workspace_value.outputs_[step_index];
+        std::vector<QComplex>& step_output = workspace_value.outputs_[step.workspace_slot];
         if (!step.compiled_input_indices.empty()) {
             const std::size_t input_count = step.inputs.size();
             for (std::size_t output_index = 0U;
-                 output_index < step_output.size();
+                 output_index < step.output_entries;
                  ++output_index) {
                 QComplex sum{};
                 const std::size_t output_base =
@@ -765,7 +833,7 @@ void ExactFactorPlan::evaluate(
             continue;
         }
 
-        for (std::size_t output_index = 0U; output_index < step_output.size(); ++output_index) {
+        for (std::size_t output_index = 0U; output_index < step.output_entries; ++output_index) {
             std::size_t remaining = output_index;
             for (std::size_t position = 0U; position < step.union_variables.size(); ++position) {
                 if (position == step.selected_position) {
@@ -929,7 +997,8 @@ std::size_t ExactFactorPlan::estimated_bytes() const noexcept {
                         factor_logical_entries_.capacity() * sizeof(std::size_t) +
                         sources_.capacity() * sizeof(SourceFactor) +
                         steps_.capacity() * sizeof(Step) +
-                        terminals_.capacity() * sizeof(TerminalMap);
+                        terminals_.capacity() * sizeof(TerminalMap) +
+                        workspace_slot_sizes_.capacity() * sizeof(std::size_t);
     for (const auto& variables : factor_topology_) {
         bytes += variables.capacity() * sizeof(FactorVariableId);
     }
