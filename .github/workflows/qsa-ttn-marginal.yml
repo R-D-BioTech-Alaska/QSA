@@ -1,0 +1,93 @@
+name: QSA TTN Marginal Certificate
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qttn.hpp"
+      - "include/qubit/qttn_marginal.hpp"
+      - "include/qubit/qplan.hpp"
+      - "src/qstate.cpp"
+      - "tests/test_tree_tensor_marginal_plan.cpp"
+      - ".github/workflows/qsa-ttn-marginal.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  marginal-certificate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create focused build
+        shell: bash
+        run: |
+          mkdir -p ttn-marginal-driver
+          cat > ttn-marginal-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSATreeTensorMarginalCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_ENABLE_IPO OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa)
+          enable_testing()
+          add_executable(ttn_marginal_tests ../tests/test_tree_tensor_marginal_plan.cpp)
+          target_link_libraries(ttn_marginal_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(ttn_marginal_tests PRIVATE /W4)
+          else()
+              target_compile_options(ttn_marginal_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME ttn_marginal_tests COMMAND ttn_marginal_tests)
+          EOF
+      - name: Configure
+        run: cmake -S ttn-marginal-driver -B ttn-marginal-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build ttn-marginal-build --target ttn_marginal_tests --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir ttn-marginal-build -C Release --output-on-failure
+
+  marginal-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create sanitizer build
+        run: |
+          mkdir -p ttn-marginal-driver
+          cat > ttn-marginal-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSATreeTensorMarginalSanitizer LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_ENABLE_IPO OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa)
+          enable_testing()
+          add_executable(ttn_marginal_tests ../tests/test_tree_tensor_marginal_plan.cpp)
+          target_link_libraries(ttn_marginal_tests PRIVATE qstate_core)
+          target_compile_options(ttn_marginal_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          add_test(NAME ttn_marginal_tests COMMAND ttn_marginal_tests)
+          EOF
+      - name: Configure ASan and UBSan
+        run: >-
+          cmake -S ttn-marginal-driver -B ttn-marginal-sanitize
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build ttn-marginal-sanitize --target ttn_marginal_tests --parallel 2
+      - name: Run
+        run: ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ctest --test-dir ttn-marginal-sanitize --output-on-failure
