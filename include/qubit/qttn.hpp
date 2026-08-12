@@ -80,7 +80,7 @@ public:
             config_.validation_tolerance <= 0.0) {
             throw QStateError("Tree tensor validation tolerance must be positive and finite");
         }
-        if (qubit_count_ > (std::numeric_limits<std::size_t>::max() + 1U) / 2U) {
+        if (qubit_count_ > std::numeric_limits<std::size_t>::max() / 2U + 1U) {
             throw QStateError("Tree tensor topology size overflowed");
         }
 
@@ -436,6 +436,13 @@ public:
                 }
                 return false;
             }
+            if (stats_.qubit_count != qubit_count_ || stats_.node_count != nodes_.size() ||
+                stats_.scalar_count > config_.max_scalars) {
+                if (reason != nullptr) {
+                    *reason = "Tree tensor statistics are invalid";
+                }
+                return false;
+            }
             std::size_t scalar_count = 0U;
             std::size_t max_bond = 1U;
             for (std::size_t index = 0U; index < nodes_.size(); ++index) {
@@ -448,6 +455,7 @@ public:
                     return false;
                 }
                 max_bond = std::max(max_bond, node.parent_dimension);
+                std::size_t local = 0U;
                 if (node.leaf) {
                     if (node.zero.size() != node.parent_dimension ||
                         node.one.size() != node.parent_dimension ||
@@ -457,7 +465,14 @@ public:
                         }
                         return false;
                     }
-                    scalar_count += node.zero.size() + node.one.size();
+                    if (node.zero.size() >
+                        std::numeric_limits<std::size_t>::max() - node.one.size()) {
+                        if (reason != nullptr) {
+                            *reason = "Tree tensor leaf scalar count overflowed";
+                        }
+                        return false;
+                    }
+                    local = node.zero.size() + node.one.size();
                     for (const QComplex& value : node.zero) {
                         if (!finite(value)) {
                             if (reason != nullptr) {
@@ -474,34 +489,41 @@ public:
                             return false;
                         }
                     }
-                    continue;
-                }
-                if (node.left >= index || node.right >= index ||
-                    nodes_[node.left].parent != index || nodes_[node.right].parent != index) {
-                    if (reason != nullptr) {
-                        *reason = "Tree tensor internal topology is invalid";
-                    }
-                    return false;
-                }
-                const std::size_t expected = checked_tensor_size(
-                    nodes_[node.left].parent_dimension,
-                    nodes_[node.right].parent_dimension,
-                    node.parent_dimension);
-                if (node.values.size() != expected) {
-                    if (reason != nullptr) {
-                        *reason = "Tree tensor internal shape is invalid";
-                    }
-                    return false;
-                }
-                scalar_count += node.values.size();
-                for (const QComplex& value : node.values) {
-                    if (!finite(value)) {
+                } else {
+                    if (node.left >= index || node.right >= index ||
+                        nodes_[node.left].parent != index || nodes_[node.right].parent != index) {
                         if (reason != nullptr) {
-                            *reason = "Tree tensor contains non-finite values";
+                            *reason = "Tree tensor internal topology is invalid";
                         }
                         return false;
                     }
+                    const std::size_t expected = checked_tensor_size(
+                        nodes_[node.left].parent_dimension,
+                        nodes_[node.right].parent_dimension,
+                        node.parent_dimension);
+                    if (node.values.size() != expected) {
+                        if (reason != nullptr) {
+                            *reason = "Tree tensor internal shape is invalid";
+                        }
+                        return false;
+                    }
+                    local = node.values.size();
+                    for (const QComplex& value : node.values) {
+                        if (!finite(value)) {
+                            if (reason != nullptr) {
+                                *reason = "Tree tensor contains non-finite values";
+                            }
+                            return false;
+                        }
+                    }
                 }
+                if (scalar_count > std::numeric_limits<std::size_t>::max() - local) {
+                    if (reason != nullptr) {
+                        *reason = "Tree tensor scalar count overflowed";
+                    }
+                    return false;
+                }
+                scalar_count += local;
             }
             if (scalar_count != stats_.scalar_count || max_bond != stats_.max_bond_dimension) {
                 if (reason != nullptr) {
@@ -682,6 +704,34 @@ private:
         }
     }
 
+    [[nodiscard]] std::size_t controlled_new_local(
+        std::size_t node_index,
+        std::span<const std::size_t> path_edges) const {
+        const Node& node = nodes_[node_index];
+        const bool parent_path = contains(path_edges, node_index);
+        if (node.leaf) {
+            if (!parent_path) {
+                throw QStateError("Tree tensor controlled endpoint is not on its path");
+            }
+            return checked_product(node.parent_dimension * 2U, 2U);
+        }
+        const bool left_path = contains(path_edges, node.left);
+        const bool right_path = contains(path_edges, node.right);
+        const std::size_t incident =
+            static_cast<std::size_t>(parent_path) +
+            static_cast<std::size_t>(left_path) +
+            static_cast<std::size_t>(right_path);
+        if (incident != 2U) {
+            throw QStateError("Tree tensor controlled path topology is invalid");
+        }
+        const std::size_t left_dimension = nodes_[node.left].parent_dimension;
+        const std::size_t right_dimension = nodes_[node.right].parent_dimension;
+        return checked_tensor_size(
+            left_path ? left_dimension * 2U : left_dimension,
+            right_path ? right_dimension * 2U : right_dimension,
+            parent_path ? node.parent_dimension * 2U : node.parent_dimension);
+    }
+
     void apply_controlled(
         QubitId control,
         QubitId target,
@@ -727,6 +777,22 @@ private:
             }
             next_max_bond = std::max(next_max_bond, old_dimension * 2U);
         }
+        for (const std::size_t node_index : affected) {
+            const Node& node = nodes_[node_index];
+            const std::size_t old_local = node.leaf
+                ? checked_product(node.parent_dimension, 2U)
+                : node.values.size();
+            const std::size_t new_local = controlled_new_local(node_index, path_edges);
+            if (new_local < old_local) {
+                throw QStateError("Tree tensor controlled scalar count is invalid");
+            }
+            const std::size_t delta = new_local - old_local;
+            if (delta > config_.max_scalars ||
+                next_scalar_count > config_.max_scalars - delta) {
+                throw QStateError("Tree tensor controlled gate exceeds scalar cap");
+            }
+            next_scalar_count += delta;
+        }
 
         std::vector<PendingNode> pending;
         pending.reserve(affected.size());
@@ -737,8 +803,6 @@ private:
             update.parent_dimension = contains(path_edges, node_index)
                 ? node.parent_dimension * 2U
                 : node.parent_dimension;
-            std::size_t old_local = 0U;
-            std::size_t new_local = 0U;
             if (node.leaf) {
                 if (node_index != control_node && node_index != target_node) {
                     throw QStateError("Tree tensor controlled path contains an unexpected leaf");
@@ -766,26 +830,17 @@ private:
                             operators[branch](1U, 1U) * node.one[bond];
                     }
                 }
-                old_local = node.zero.size() + node.one.size();
-                new_local = update.zero.size() + update.one.size();
             } else {
                 const bool parent_path = contains(path_edges, node_index);
                 const bool left_path = contains(path_edges, node.left);
                 const bool right_path = contains(path_edges, node.right);
-                const std::size_t incident =
-                    static_cast<std::size_t>(parent_path) +
-                    static_cast<std::size_t>(left_path) +
-                    static_cast<std::size_t>(right_path);
-                if (incident != 2U) {
-                    throw QStateError("Tree tensor controlled path topology is invalid");
-                }
                 const std::size_t old_left = nodes_[node.left].parent_dimension;
                 const std::size_t old_right = nodes_[node.right].parent_dimension;
                 const std::size_t new_left = left_path ? old_left * 2U : old_left;
                 const std::size_t new_right = right_path ? old_right * 2U : old_right;
-                const std::size_t new_size = checked_tensor_size(
-                    new_left, new_right, update.parent_dimension);
-                update.values.assign(new_size, QComplex{});
+                update.values.assign(
+                    checked_tensor_size(new_left, new_right, update.parent_dimension),
+                    QComplex{});
                 for (std::size_t left = 0U; left < old_left; ++left) {
                     for (std::size_t right = 0U; right < old_right; ++right) {
                         for (std::size_t parent = 0U;
@@ -815,18 +870,6 @@ private:
                         }
                     }
                 }
-                old_local = node.values.size();
-                new_local = update.values.size();
-            }
-
-            if (new_local < old_local ||
-                next_scalar_count >
-                    std::numeric_limits<std::size_t>::max() - (new_local - old_local)) {
-                throw QStateError("Tree tensor controlled scalar count overflowed");
-            }
-            next_scalar_count += new_local - old_local;
-            if (next_scalar_count > config_.max_scalars) {
-                throw QStateError("Tree tensor controlled gate exceeds scalar cap");
             }
             pending.push_back(std::move(update));
         }
@@ -854,8 +897,21 @@ private:
     }
 
     void refresh_workspace(TreeTensorWorkspace& workspace_value) const {
-        if (workspace_value.generation_ == stats_.generation &&
-            workspace_value.vectors_.size() == nodes_.size()) {
+        bool compatible =
+            workspace_value.generation_ == stats_.generation &&
+            workspace_value.vectors_.size() == nodes_.size() &&
+            workspace_value.environments_.size() == nodes_.size() &&
+            workspace_value.assignment_.size() == qubit_count_;
+        if (compatible) {
+            for (std::size_t index = 0U; index < nodes_.size(); ++index) {
+                if (workspace_value.vectors_[index].size() !=
+                    nodes_[index].parent_dimension) {
+                    compatible = false;
+                    break;
+                }
+            }
+        }
+        if (compatible) {
             return;
         }
         workspace_value.vectors_.resize(nodes_.size());
@@ -870,12 +926,20 @@ private:
     }
 
     void ensure_environments(TreeTensorWorkspace& workspace_value) const {
+        std::size_t total_entries = 0U;
+        for (const Node& node : nodes_) {
+            const std::size_t entries = checked_product(
+                node.parent_dimension,
+                node.parent_dimension);
+            if (entries > config_.max_scalars ||
+                total_entries > config_.max_scalars - entries) {
+                throw QStateError("Tree tensor marginal workspace exceeds scalar cap");
+            }
+            total_entries += entries;
+        }
         for (std::size_t index = 0U; index < nodes_.size(); ++index) {
             const std::size_t dimension = nodes_[index].parent_dimension;
             const std::size_t entries = checked_product(dimension, dimension);
-            if (entries > config_.max_scalars) {
-                throw QStateError("Tree tensor marginal workspace exceeds scalar cap");
-            }
             if (workspace_value.environments_[index].size() != entries) {
                 workspace_value.environments_[index].assign(entries, QComplex{});
             }
