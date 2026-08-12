@@ -41,6 +41,7 @@ jobs:
           qstate_estimator_benchmark
           qstate_parameterized_estimator_benchmark
           qstate_tensor_adjoint_causal_benchmark
+          qstate_mps_benchmark
       - name: Build structural runtime checks
         run: |
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_kron_operator.cpp -o build-runtime/qstate_kron_operator_test
@@ -78,6 +79,10 @@ jobs:
         run: |
           set -o pipefail
           python benchmarks/numeric_numpy.py --qsa-output qsa-numeric.txt | tee qsa-vs-numpy.txt
+      - name: Run persistent MPS benchmark
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_mps_benchmark | tee mps.txt
       - name: Run compiled tensor benchmark
         run: |
           set -o pipefail
@@ -154,6 +159,7 @@ jobs:
           path: |
             qsa-numeric.txt
             qsa-vs-numpy.txt
+            mps.txt
             tensor-plan.txt
             tensor-expectation.txt
             tensor-rebind.txt
