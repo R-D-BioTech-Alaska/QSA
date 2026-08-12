@@ -1,0 +1,109 @@
+name: QSA Exact QTT Regularized Poisson
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qqtt.hpp"
+      - "include/qubit/qqtt_poisson.hpp"
+      - "tests/test_exact_qtt_poisson.cpp"
+      - "benchmarks/qtt_poisson.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-qtt-poisson.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qtt-poisson-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact QTT Poisson test
+        shell: bash
+        run: |
+          mkdir -p qtt-poisson-driver
+          cat > qtt-poisson-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAQTTPoissonCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(qtt_poisson_tests ../tests/test_exact_qtt_poisson.cpp)
+          target_include_directories(qtt_poisson_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(qtt_poisson_tests PRIVATE /W4)
+          else()
+              target_compile_options(qtt_poisson_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME qtt_poisson_tests COMMAND qtt_poisson_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S qtt-poisson-driver -B qtt-poisson-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build qtt-poisson-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir qtt-poisson-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  qtt-poisson-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_exact_qtt_poisson.cpp -o qtt-poisson-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./qtt-poisson-sanitize
+
+  qtt-poisson-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/qtt_poisson.cpp -o qtt-poisson-benchmark
+      - name: Run exact regularized Poisson carrier
+        run: |
+          set -o pipefail
+          ./qtt-poisson-benchmark | tee qtt-poisson-evidence.txt
+      - name: Enforce exact bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("qtt-poisson-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          def number(name):
+              return float(values[name])
+          assert int(values["qtt_poisson_bits"]) == 4096
+          assert int(values["qtt_poisson_logical_domain_exponent"]) == 4096
+          assert int(values["qtt_poisson_source_terms"]) == 8
+          assert int(values["qtt_poisson_qtt_rank"]) == 8
+          assert int(values["qtt_poisson_qtt_descriptor_scalars"]) < 600000
+          assert number("qtt_poisson_inverse_norm_bound") > 0.0
+          assert number("qtt_poisson_condition_bound") >= 1.0
+          assert number("qtt_poisson_residual_max") <= 1e-11
+          assert number("qtt_poisson_selected_error") <= 1e-9
+          assert number("qtt_poisson_solve_ms") < 10000.0
+          assert number("qtt_poisson_compile_ms") < 10000.0
+          assert number("qtt_poisson_query_ms") < 10000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum qtt-poisson-evidence.txt | tee qtt-poisson-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-qtt-poisson-evidence
+          path: |
+            qtt-poisson-evidence.txt
+            qtt-poisson-evidence.sha256

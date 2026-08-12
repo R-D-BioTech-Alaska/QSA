@@ -43,6 +43,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qpersistent_tropical_qtt.hpp",
     "include/qubit/qqtt_operator.hpp",
     "include/qubit/qqtt_field.hpp",
+    "include/qubit/qqtt_poisson.hpp",
     "src/qfactor.cpp",
 )
 
