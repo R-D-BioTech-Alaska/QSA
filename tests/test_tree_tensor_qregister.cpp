@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -23,10 +24,6 @@ void require(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
-}
-
-void require_close(QComplex actual, QComplex expected, const std::string& message) {
-    require(qubit::almost_equal(actual, expected, 5e-10), message);
 }
 
 void require_close(double actual, double expected, const std::string& message) {
@@ -57,12 +54,27 @@ void compare_all(const TreeTensorState& tree, const QRegister& dense) {
     require(tree.qubit_count() < std::numeric_limits<std::size_t>::digits,
             "QRegister differential exceeds size_t width");
     const std::size_t entries = std::size_t{1U} << tree.qubit_count();
+    constexpr double tolerance = 5e-10;
+    QComplex phase{1.0, 0.0};
+    bool have_phase = false;
     for (std::size_t index = 0U; index < entries; ++index) {
-        require_close(
-            tree.amplitude(static_cast<BasisIndex>(index)),
-            dense.amplitude(static_cast<BasisIndex>(index)),
-            "TTN amplitude differs from QRegister");
+        const QComplex actual = tree.amplitude(static_cast<BasisIndex>(index));
+        const QComplex expected = dense.amplitude(static_cast<BasisIndex>(index));
+        if (!have_phase && actual.norm2() > tolerance * tolerance &&
+            expected.norm2() > tolerance * tolerance) {
+            phase = QComplex::from_polar(
+                1.0,
+                std::atan2(actual.im, actual.re) - std::atan2(expected.im, expected.re));
+            have_phase = true;
+        }
+        if (actual.norm2() <= tolerance * tolerance &&
+            expected.norm2() <= tolerance * tolerance) {
+            continue;
+        }
+        require(have_phase && qubit::almost_equal(actual, phase * expected, tolerance),
+                "TTN state differs from QRegister beyond global phase");
     }
+    require(have_phase, "TTN/QRegister state contains no comparable amplitude");
     require_close(tree.norm2(), 1.0, "TTN norm differs from unity");
 }
 
