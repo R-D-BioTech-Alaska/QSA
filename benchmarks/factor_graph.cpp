@@ -137,28 +137,53 @@ int main() {
 
     constexpr std::size_t points = 16U;
     const std::size_t rebound_factor = factors / 2U;
-    double rebind_error = 0.0;
-    const auto rebind_start = Clock::now();
-    for (std::size_t point = 1U; point <= points; ++point) {
-        tables[rebound_factor] = nonlinear_table(rebound_factor, point);
-        graph.set_dense_factor(factor_ids[rebound_factor], tables[rebound_factor]);
-        plan.rebind(graph);
-        qsa_values = plan.evaluate(workspace);
-        control = chain_control(tables);
-        rebind_error = std::max(rebind_error, max_error(qsa_values, control));
-    }
-    const auto rebind_stop = Clock::now();
-    const double rebind_total_ms =
-        std::chrono::duration<double, std::milli>(rebind_stop - rebind_start).count();
 
+    ExactFactorPlan targeted_plan = graph.compile(retained);
+    auto targeted_workspace = targeted_plan.workspace();
+    auto targeted_tables = tables;
+    double targeted_error = 0.0;
+    const auto targeted_start = Clock::now();
+    for (std::size_t point = 1U; point <= points; ++point) {
+        targeted_tables[rebound_factor] = nonlinear_table(rebound_factor, point);
+        targeted_plan.rebind_dense_factor(
+            factor_ids[rebound_factor], targeted_tables[rebound_factor]);
+        qsa_values = targeted_plan.evaluate(targeted_workspace);
+        control = chain_control(targeted_tables);
+        targeted_error = std::max(targeted_error, max_error(qsa_values, control));
+    }
+    const auto targeted_stop = Clock::now();
+    const double targeted_total_ms =
+        std::chrono::duration<double, std::milli>(targeted_stop - targeted_start).count();
+
+    ExactFactorGraph full_graph = graph;
+    ExactFactorPlan full_plan = full_graph.compile(retained);
+    auto full_workspace = full_plan.workspace();
+    auto full_tables = tables;
+    double full_rebind_error = 0.0;
+    const auto full_start = Clock::now();
+    for (std::size_t point = 1U; point <= points; ++point) {
+        full_tables[rebound_factor] = nonlinear_table(rebound_factor, point);
+        full_graph.set_dense_factor(factor_ids[rebound_factor], full_tables[rebound_factor]);
+        full_plan.rebind(full_graph);
+        qsa_values = full_plan.evaluate(full_workspace);
+        control = chain_control(full_tables);
+        full_rebind_error = std::max(full_rebind_error, max_error(qsa_values, control));
+    }
+    const auto full_stop = Clock::now();
+    const double full_rebind_total_ms =
+        std::chrono::duration<double, std::milli>(full_stop - full_start).count();
+
+    ExactFactorGraph one_shot_graph = graph;
+    auto recompile_tables = tables;
     double one_shot_point_error = 0.0;
     const auto one_shot_start = Clock::now();
-    for (std::size_t point = points + 1U; point <= 2U * points; ++point) {
-        tables[rebound_factor] = nonlinear_table(rebound_factor, point);
-        graph.set_dense_factor(factor_ids[rebound_factor], tables[rebound_factor]);
-        ExactFactorPlan one_shot = graph.compile(retained);
+    for (std::size_t point = 1U; point <= points; ++point) {
+        recompile_tables[rebound_factor] = nonlinear_table(rebound_factor, point);
+        one_shot_graph.set_dense_factor(
+            factor_ids[rebound_factor], recompile_tables[rebound_factor]);
+        ExactFactorPlan one_shot = one_shot_graph.compile(retained);
         one_shot_values = one_shot.evaluate();
-        control = chain_control(tables);
+        control = chain_control(recompile_tables);
         one_shot_point_error =
             std::max(one_shot_point_error, max_error(one_shot_values, control));
     }
@@ -167,7 +192,8 @@ int main() {
         std::chrono::duration<double, std::milli>(one_shot_stop - one_shot_start).count();
 
     if (initial_error > 2e-9 || one_shot_error > 2e-9 ||
-        rebind_error > 2e-9 || one_shot_point_error > 2e-9) {
+        targeted_error > 2e-9 || full_rebind_error > 2e-9 ||
+        one_shot_point_error > 2e-9) {
         std::cerr << "exact factor benchmark control mismatch\n";
         return 1;
     }
@@ -188,11 +214,17 @@ int main() {
     std::cout << "factor_workspace_bytes=" << workspace.estimated_bytes() << '\n';
     std::cout << "factor_initial_error=" << initial_error << '\n';
     std::cout << "factor_rebind_points=" << points << '\n';
-    std::cout << "factor_rebind_total_ms=" << rebind_total_ms << '\n';
+    std::cout << "factor_targeted_rebind_total_ms=" << targeted_total_ms << '\n';
+    std::cout << "factor_full_rebind_total_ms=" << full_rebind_total_ms << '\n';
+    std::cout << "factor_targeted_over_full_rebind_speed=" << full_rebind_total_ms / targeted_total_ms << '\n';
+    std::cout << "factor_rebind_total_ms=" << full_rebind_total_ms << '\n';
     std::cout << "factor_recompile_total_ms=" << one_shot_total_ms << '\n';
-    std::cout << "factor_rebind_over_recompile_speed=" << one_shot_total_ms / rebind_total_ms << '\n';
-    std::cout << "factor_rebind_error=" << rebind_error << '\n';
+    std::cout << "factor_targeted_over_recompile_speed=" << one_shot_total_ms / targeted_total_ms << '\n';
+    std::cout << "factor_rebind_over_recompile_speed=" << one_shot_total_ms / full_rebind_total_ms << '\n';
+    std::cout << "factor_targeted_rebind_error=" << targeted_error << '\n';
+    std::cout << "factor_rebind_error=" << full_rebind_error << '\n';
     std::cout << "factor_recompile_error=" << one_shot_point_error << '\n';
-    std::cout << "factor_rebind_count=" << plan.rebind_count() << '\n';
+    std::cout << "factor_targeted_rebind_count=" << targeted_plan.rebind_count() << '\n';
+    std::cout << "factor_rebind_count=" << full_plan.rebind_count() << '\n';
     return 0;
 }
