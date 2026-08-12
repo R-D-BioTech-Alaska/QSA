@@ -205,6 +205,48 @@ private:
         return model;
     }
 
+    [[nodiscard]] static bool single_matrix(
+        const Operation& operation,
+        QMatrix2& matrix) {
+        switch (operation.code) {
+            case OperationCode::X:
+                matrix = gates::x();
+                return true;
+            case OperationCode::Y:
+                matrix = gates::y();
+                return true;
+            case OperationCode::Z:
+                matrix = gates::z();
+                return true;
+            case OperationCode::H:
+                matrix = gates::h();
+                return true;
+            case OperationCode::S:
+                matrix = gates::s();
+                return true;
+            case OperationCode::Sdg:
+                matrix = gates::sdg();
+                return true;
+            case OperationCode::T:
+                matrix = gates::t();
+                return true;
+            case OperationCode::Tdg:
+                matrix = gates::tdg();
+                return true;
+            case OperationCode::Rx:
+                matrix = gates::rx(operation.parameter);
+                return true;
+            case OperationCode::Ry:
+                matrix = gates::ry(operation.parameter);
+                return true;
+            case OperationCode::Rz:
+                matrix = gates::rz(operation.parameter);
+                return true;
+            default:
+                return false;
+        }
+    }
+
     static void validate_single(
         QubitId qubit,
         const QMatrix2& matrix,
@@ -415,26 +457,32 @@ private:
         const TreeTensorConfig& config) {
         Model model = initial_model(qubit_count, config);
         for (const Operation& operation : operations) {
-            if (operation.kind == OperationKind::Trajectory) {
-                throw QStateError("Tree tensor marginal does not support trajectory operations");
-            }
-            if (operation.kind == OperationKind::Single) {
+            QMatrix2 matrix{};
+            if (single_matrix(operation, matrix)) {
                 validate_single(
                     operation.first,
-                    operation.single,
+                    matrix,
                     qubit_count,
                     config.validation_tolerance);
                 ++model.stats.generation;
                 continue;
             }
-            if (operation.kind != OperationKind::Two) {
-                throw QStateError("Tree tensor marginal operation kind is invalid");
+            switch (operation.code) {
+                case OperationCode::Cnot:
+                case OperationCode::Cz:
+                    apply_controlled_model(model, operation.first, operation.second, config);
+                    break;
+                case OperationCode::Swap:
+                    throw QStateError(
+                        "Tree tensor marginal currently supports only CNOT/CZ two-qubit operations");
+                case OperationCode::BitFlipTrajectory:
+                case OperationCode::PhaseFlipTrajectory:
+                case OperationCode::DepolarizingTrajectory:
+                case OperationCode::AmplitudeDampingTrajectory:
+                    throw QStateError("Tree tensor marginal does not support trajectory operations");
+                default:
+                    throw QStateError("Tree tensor marginal operation code is invalid");
             }
-            if (operation.code != OperationCode::Cnot &&
-                operation.code != OperationCode::Cz) {
-                throw QStateError("Tree tensor marginal currently supports only CNOT/CZ two-qubit operations");
-            }
-            apply_controlled_model(model, operation.first, operation.second, config);
         }
 
         TreeTensorMarginalCertificate result;
