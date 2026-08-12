@@ -291,9 +291,11 @@ int main() {
         const std::array<std::uint8_t, 3> selected_bits{{1U, 0U, 1U}};
         ExactExecutionBroker broker;
 
+        ExactExecutionBrokerConfig full_config;
+        full_config.tensor_planning_defer_variables = 0U;
         std::optional<ExactPreparedProbabilityPlan> full;
         const double full_setup_ms = median_ms([&] {
-            full.emplace(low_bond_qubits, operations);
+            full.emplace(low_bond_qubits, operations, full_config);
         }, 3);
         if (full->prepared_route() != ExactExecutionRoute::TensorNetwork) {
             std::cerr << "full-basis route-conflict certificate changed\n";
@@ -333,6 +335,7 @@ int main() {
         std::cout << "capability_marginal_qubits=" << low_bond_qubits << '\n';
         std::cout << "capability_marginal_operations=" << operations.size() << '\n';
         std::cout << "capability_full_basis_route=TensorNetwork\n";
+        std::cout << "capability_full_basis_deferral_disabled=1\n";
         std::cout << "capability_marginal_route=PersistentMPS\n";
         std::cout << "capability_full_basis_setup_ms=" << full_setup_ms << '\n';
         std::cout << "capability_full_basis_plan_bytes=" << full->estimated_bytes() << '\n';
