@@ -21,6 +21,7 @@ enum class ExactExecutionRoute : std::uint8_t {
     TensorNetwork = 2,
     PersistentMPS = 3,
     PhaseGraph = 4,
+    UniformMagnitude = 5,
 };
 
 struct ExactExecutionBrokerConfig {
