@@ -305,8 +305,9 @@ private:
             return value;
         }
         if (exponent > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-            value.re = std::copysign(
-                std::numeric_limits<double>::infinity(), value.re);
+            value.re = value.re == 0.0
+                ? 0.0
+                : std::copysign(std::numeric_limits<double>::infinity(), value.re);
             value.im = value.im == 0.0
                 ? 0.0
                 : std::copysign(std::numeric_limits<double>::infinity(), value.im);
@@ -324,9 +325,11 @@ private:
         if (first.size() > config_.max_row_terms || second.size() > config_.max_row_terms) {
             throw QStateError("Exact affine row exceeds configured term cap");
         }
-        result.reserve(std::min(
-            config_.max_row_terms,
-            first.size() + second.size()));
+        const std::size_t reserve_terms =
+            first.size() > std::numeric_limits<std::size_t>::max() - second.size()
+            ? config_.max_row_terms
+            : std::min(config_.max_row_terms, first.size() + second.size());
+        result.reserve(reserve_terms);
         std::size_t left = 0U;
         std::size_t right = 0U;
         while (left < first.size() || right < second.size()) {
@@ -370,7 +373,8 @@ private:
             const FactorVariableId pivot = row.variables.front();
             const std::size_t basis_index = pivot_to_basis_[pivot];
             if (basis_index == missing) {
-                if (stats_.basis_terms > config_.max_basis_terms - row.variables.size()) {
+                if (row.variables.size() > config_.max_basis_terms ||
+                    stats_.basis_terms > config_.max_basis_terms - row.variables.size()) {
                     throw QStateError("Exact affine basis exceeds configured term cap");
                 }
                 const std::size_t index = basis_.size();
