@@ -41,6 +41,7 @@ add_library(qstate_core STATIC
     src/qtensor.cpp
     src/qmps.cpp
     src/qbroker.cpp
+    src/qfactor.cpp
     src/qestimator.cpp
     src/qtensor_plan.cpp
     src/qtensor_expectation.cpp
@@ -239,6 +240,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_marginal_probability_tests PRIVATE qstate_core)
     add_test(NAME qstate_marginal_probability_tests COMMAND qstate_marginal_probability_tests)
 
+    add_executable(qstate_factor_graph_tests tests/test_factor_graph.cpp)
+    target_link_libraries(qstate_factor_graph_tests PRIVATE qstate_core)
+    add_test(NAME qstate_factor_graph_tests COMMAND qstate_factor_graph_tests)
+
     add_executable(qstate_estimator_tests tests/test_estimator.cpp)
     target_link_libraries(qstate_estimator_tests PRIVATE qstate_core)
     add_test(NAME qstate_estimator_tests COMMAND qstate_estimator_tests)
@@ -379,6 +384,9 @@ if(QSTATE_BUILD_BENCHMARKS)
 
     add_executable(qstate_tensor_contraction_plan_benchmark benchmarks/tensor_contraction_plan.cpp)
     target_link_libraries(qstate_tensor_contraction_plan_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_factor_graph_benchmark benchmarks/factor_graph.cpp)
+    target_link_libraries(qstate_factor_graph_benchmark PRIVATE qstate_core)
 
     add_executable(qstate_estimator_benchmark benchmarks/estimator.cpp)
     target_link_libraries(qstate_estimator_benchmark PRIVATE qstate_core)
