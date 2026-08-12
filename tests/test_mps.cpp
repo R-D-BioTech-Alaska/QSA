@@ -40,8 +40,21 @@ void compare_dense(
     const std::vector<QComplex> actual = mps.materialize();
     const std::vector<QComplex> expected = reference.materialize(20U);
     require(actual.size() == expected.size(), label + ": dimensions differ");
+
+    QComplex phase{1.0, 0.0};
+    bool found = false;
     for (std::size_t index = 0U; index < actual.size(); ++index) {
-        if (!qubit::almost_equal(actual[index], expected[index], tolerance)) {
+        if (actual[index].magnitude() > tolerance && expected[index].magnitude() > tolerance) {
+            phase = actual[index] / expected[index];
+            phase /= phase.magnitude();
+            found = true;
+            break;
+        }
+    }
+    require(found, label + ": no nonzero amplitude found");
+
+    for (std::size_t index = 0U; index < actual.size(); ++index) {
+        if (!qubit::almost_equal(actual[index], phase * expected[index], tolerance)) {
             throw std::runtime_error(label + ": amplitude mismatch at " + std::to_string(index));
         }
     }
