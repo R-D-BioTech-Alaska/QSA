@@ -15,21 +15,18 @@ def tt_svd(vector: np.ndarray, levels: int, tolerance: float) -> tuple[list[np.n
     ranks = [1]
     unfolding = tensor
     left_rank = 1
-    for level in range(levels - 1):
+    for _ in range(levels - 1):
         unfolding = unfolding.reshape(left_rank * 2, -1)
         u, singular, vh = np.linalg.svd(unfolding, full_matrices=False)
-        if singular.size == 0:
-            rank = 1
-        else:
-            squared = singular * singular
-            tail = np.cumsum(squared[::-1])[::-1]
-            threshold = tolerance * tolerance * max(float(np.sum(squared)), 1.0)
-            rank = singular.size
-            for candidate in range(1, singular.size + 1):
-                residual = float(tail[candidate]) if candidate < singular.size else 0.0
-                if residual <= threshold:
-                    rank = candidate
-                    break
+        squared = singular * singular
+        tail = np.cumsum(squared[::-1])[::-1]
+        threshold = tolerance * tolerance * max(float(np.sum(squared)), 1.0)
+        rank = singular.size
+        for candidate in range(1, singular.size + 1):
+            residual = float(tail[candidate]) if candidate < singular.size else 0.0
+            if residual <= threshold:
+                rank = candidate
+                break
         u = u[:, :rank]
         singular = singular[:rank]
         vh = vh[:rank, :]
@@ -149,7 +146,7 @@ def run() -> dict[str, object]:
     cases = [run_case(levels, tolerance, rank_budget) for levels in (8, 10, 12, 14, 16)]
     return {
         "schema": "qsa.frontier.schrodinger-poisson-qtt.v1",
-        "purpose": "Eligibility assay for structured Schrödinger-Poisson fields on dyadic grids before a native QTT solver is attempted.",
+        "purpose": "Eligibility assay for structured Schrodinger-Poisson fields on dyadic grids before a native QTT solver is attempted.",
         "qtt_tolerance": tolerance,
         "rank_budget": rank_budget,
         "cases": cases,
