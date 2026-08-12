@@ -118,9 +118,17 @@ public:
         collect_cores(*root_, cores);
         TropicalQTTConfig state_config;
         state_config.max_rank = std::max(state_config.max_rank, maximum_rank_);
+        const std::size_t rank_square = checked_size_product(
+            maximum_rank_, maximum_rank_, "Persistent Tropical QTT state rank-square overflowed");
+        const std::size_t core_entries = checked_size_product(
+            rank_square, 2U, "Persistent Tropical QTT state core-entry cap overflowed");
+        state_config.max_core_entries = std::max(state_config.max_core_entries, core_entries);
         state_config.max_total_entries = std::max(
             state_config.max_total_entries,
-            checked_size_product(stats_.transfer_entries, 2U, "Persistent Tropical QTT state cap overflowed"));
+            checked_size_product(
+                stats_.transfer_entries,
+                2U,
+                "Persistent Tropical QTT state total-entry cap overflowed"));
         return ExactTropicalQTT::from_certified_cores(std::move(cores), state_config);
     }
 
@@ -143,18 +151,18 @@ public:
             throw QStateError("Persistent Tropical QTT update removed all globally supported sectors");
         }
 
+        const std::int64_t old_energy = minimum_energy();
+        const std::int64_t new_energy = root->transfer.values.front().cost;
         PersistentTropicalQTT next(
             std::move(root), logical_bits_, maximum_rank_, stats_, config_);
-        return {
-            std::move(next),
-            PersistentTropicalQTTUpdate{
-                index,
-                minimum_energy(),
-                next.minimum_energy(),
-                budget.nodes,
-                budget.entries,
-            },
+        PersistentTropicalQTTUpdate receipt{
+            index,
+            old_energy,
+            new_energy,
+            budget.nodes,
+            budget.entries,
         };
+        return {std::move(next), receipt};
     }
 
 private:
@@ -276,9 +284,28 @@ private:
         }
     }
 
-    [[nodiscard]] static MinPlusMatrix core_transfer(const TropicalQTTCore& core) {
+    [[nodiscard]] static std::size_t core_transfer_entries(const TropicalQTTCore& core) {
         validate_core_storage(core);
-        const std::size_t count = core.left_rank * core.right_rank;
+        return checked_size_product(
+            core.left_rank,
+            core.right_rank,
+            "Persistent Tropical QTT core transfer size overflowed");
+    }
+
+    [[nodiscard]] static std::size_t composed_transfer_entries(
+        const MinPlusMatrix& left,
+        const MinPlusMatrix& right) {
+        if (left.columns != right.rows) {
+            throw QStateError("Persistent Tropical QTT transfer dimensions do not align");
+        }
+        return checked_size_product(
+            left.rows,
+            right.columns,
+            "Persistent Tropical QTT composed transfer size overflowed");
+    }
+
+    [[nodiscard]] static MinPlusMatrix core_transfer(const TropicalQTTCore& core) {
+        const std::size_t count = core_transfer_entries(core);
         MinPlusMatrix matrix{core.left_rank, core.right_rank, std::vector<TropicalQTTEntry>(count)};
         for (std::size_t index = 0U; index < count; ++index) {
             const TropicalQTTEntry& zero = core.zero[index];
@@ -297,13 +324,7 @@ private:
     [[nodiscard]] static MinPlusMatrix compose(
         const MinPlusMatrix& left,
         const MinPlusMatrix& right) {
-        if (left.columns != right.rows) {
-            throw QStateError("Persistent Tropical QTT transfer dimensions do not align");
-        }
-        const std::size_t count = checked_size_product(
-            left.rows,
-            right.columns,
-            "Persistent Tropical QTT composed transfer size overflowed");
+        const std::size_t count = composed_transfer_entries(left, right);
         MinPlusMatrix output{left.rows, right.columns, std::vector<TropicalQTTEntry>(count)};
         for (std::size_t row = 0U; row < left.rows; ++row) {
             for (std::size_t column = 0U; column < right.columns; ++column) {
@@ -334,12 +355,13 @@ private:
         std::size_t end,
         BuildBudget& budget) {
         if (end - start == 1U) {
-            MinPlusMatrix transfer = core_transfer(cores[start]);
+            const std::size_t entry_count = core_transfer_entries(cores[start]);
             reserve_entry_budget(
-                transfer.values.size(),
+                entry_count,
                 budget.cap,
                 budget.entries,
                 "Persistent Tropical QTT build exceeds transfer-entry cap");
+            MinPlusMatrix transfer = core_transfer(cores[start]);
             budget.nodes = checked_size_sum(
                 budget.nodes, 1U, "Persistent Tropical QTT build node count overflowed");
             return std::make_shared<Node>(Node{
@@ -349,12 +371,13 @@ private:
         const std::size_t middle = start + (end - start) / 2U;
         std::shared_ptr<const Node> left = build_range(cores, start, middle, budget);
         std::shared_ptr<const Node> right = build_range(cores, middle, end, budget);
-        MinPlusMatrix transfer = compose(left->transfer, right->transfer);
+        const std::size_t entry_count = composed_transfer_entries(left->transfer, right->transfer);
         reserve_entry_budget(
-            transfer.values.size(),
+            entry_count,
             budget.cap,
             budget.entries,
             "Persistent Tropical QTT build exceeds transfer-entry cap");
+        MinPlusMatrix transfer = compose(left->transfer, right->transfer);
         budget.nodes = checked_size_sum(
             budget.nodes, 1U, "Persistent Tropical QTT build node count overflowed");
         return std::make_shared<Node>(Node{
@@ -376,12 +399,13 @@ private:
         TropicalQTTCore core,
         UpdateBudget& budget) {
         if (node->leaf) {
-            MinPlusMatrix transfer = core_transfer(core);
+            const std::size_t entry_count = core_transfer_entries(core);
             reserve_entry_budget(
-                transfer.values.size(),
+                entry_count,
                 budget.cap,
                 budget.entries,
                 "Persistent Tropical QTT update exceeds transfer-entry cap");
+            MinPlusMatrix transfer = core_transfer(core);
             budget.nodes = checked_size_sum(
                 budget.nodes, 1U, "Persistent Tropical QTT update node count overflowed");
             return std::make_shared<Node>(Node{
@@ -396,12 +420,13 @@ private:
         } else {
             right = update_node(right, index, std::move(core), budget);
         }
-        MinPlusMatrix transfer = compose(left->transfer, right->transfer);
+        const std::size_t entry_count = composed_transfer_entries(left->transfer, right->transfer);
         reserve_entry_budget(
-            transfer.values.size(),
+            entry_count,
             budget.cap,
             budget.entries,
             "Persistent Tropical QTT update exceeds transfer-entry cap");
+        MinPlusMatrix transfer = compose(left->transfer, right->transfer);
         budget.nodes = checked_size_sum(
             budget.nodes, 1U, "Persistent Tropical QTT update node count overflowed");
         return std::make_shared<Node>(Node{
