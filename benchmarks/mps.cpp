@@ -1,3 +1,4 @@
+#include "qubit/qbroker.hpp"
 #include "qubit/qmps.hpp"
 
 #include <algorithm>
@@ -13,11 +14,16 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using qubit::ExactExecutionBroker;
+using qubit::ExactExecutionRoute;
 using qubit::MPSPauliPlan;
 using qubit::MatrixProductState;
+using qubit::Operation;
+using qubit::OperationCode;
 using qubit::PauliAxis;
 using qubit::PauliFactor;
 using qubit::PauliObservable;
+using qubit::PauliPropagationConfig;
 using qubit::QComplex;
 using qubit::QRegister;
 using qubit::QubitId;
@@ -117,6 +123,61 @@ int main() {
             plan_value = plan->expectation(observable);
         }, 11, 1000);
 
+        std::vector<Operation> broker_operations;
+        broker_operations.reserve(2U * qubits);
+        for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+            broker_operations.push_back({
+                OperationCode::H,
+                static_cast<QubitId>(qubit),
+                0U,
+                0.0,
+                0.0,
+            });
+        }
+        for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+            broker_operations.push_back({
+                OperationCode::Cz,
+                static_cast<QubitId>(qubit),
+                static_cast<QubitId>(qubit + 1U),
+                0.0,
+                0.0,
+            });
+        }
+        const QubitId broker_center = static_cast<QubitId>(qubits / 2U);
+        broker_operations.push_back({OperationCode::Rz, broker_center, 0U, 0.37, 0.0});
+
+        PauliPropagationConfig broker_pauli_config;
+        broker_pauli_config.max_terms = 1U;
+        PauliObservable broker_observable(qubits, broker_pauli_config);
+        const std::vector<PauliFactor> broker_factors{{broker_center, PauliAxis::X}};
+        broker_observable.add_term({1.0, 0.0}, broker_factors);
+
+        ExactExecutionBroker broker;
+        qubit::ExactExpectationResult broker_result;
+        const double broker_ms = median_ms([&] {
+            broker_result = broker.expectation_from_zero(
+                qubits,
+                broker_operations,
+                broker_observable);
+        });
+
+        QRegister broker_reference(qubits);
+        QComplex broker_reference_value{};
+        const double broker_qregister_ms = median_ms([&] {
+            QRegister next(qubits);
+            qubit::OperationPlan operation_plan(broker_operations);
+            operation_plan.execute(next);
+            broker_reference_value = broker_observable.expectation(next);
+            broker_reference = std::move(next);
+        });
+        MatrixProductState broker_mps = evolved_cluster(qubits);
+        broker_mps.apply_unitary(broker_center, qubit::gates::rz(0.37));
+
+        if (broker_result.route != ExactExecutionRoute::PersistentMPS) {
+            std::cerr << "broker did not select persistent MPS after causal collapse\n";
+            return 2;
+        }
+
         std::cout << "mps18_qubits=" << qubits << '\n';
         std::cout << "mps18_qregister_setup_ms=" << qregister_setup_ms << '\n';
         std::cout << "mps18_setup_ms=" << mps_setup_ms << '\n';
@@ -144,6 +205,17 @@ int main() {
         std::cout << "mps18_end_to_end_ratio="
                   << (qregister_setup_ms + qregister_query_ms) / (mps_setup_ms + mps_query_ms)
                   << '\n';
+        std::cout << "mps18_broker_route="
+                  << qubit::exact_execution_route_name(broker_result.route) << '\n';
+        std::cout << "mps18_broker_ms=" << broker_ms << '\n';
+        std::cout << "mps18_broker_qregister_ms=" << broker_qregister_ms << '\n';
+        std::cout << "mps18_broker_speed_ratio=" << broker_qregister_ms / broker_ms << '\n';
+        std::cout << "mps18_broker_value_error="
+                  << (broker_result.value - broker_reference_value).magnitude() << '\n';
+        std::cout << "mps18_broker_qregister_bytes=" << broker_reference.estimated_bytes() << '\n';
+        std::cout << "mps18_broker_mps_bytes=" << broker_mps.estimated_bytes() << '\n';
+        std::cout << "mps18_broker_mps_scalars=" << broker_mps.scalar_count() << '\n';
+        std::cout << "mps18_broker_mps_max_bond=" << broker_mps.max_bond_dimension() << '\n';
     }
 
     {
