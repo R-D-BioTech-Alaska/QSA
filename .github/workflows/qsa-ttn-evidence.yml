@@ -1,0 +1,40 @@
+name: QSA Tree Tensor Evidence
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qttn.hpp"
+      - "benchmarks/tree_tensor.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-ttn-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ttn-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build benchmark
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/tree_tensor.cpp -o tree-tensor-benchmark
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run matched controls
+        run: |
+          set -o pipefail
+          ./tree-tensor-benchmark | tee tree-tensor-evidence.txt
+      - name: Hash evidence
+        run: sha256sum tree-tensor-evidence.txt | tee tree-tensor-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-tree-tensor-evidence
+          path: |
+            tree-tensor-evidence.txt
+            tree-tensor-evidence.sha256
