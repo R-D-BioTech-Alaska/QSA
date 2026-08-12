@@ -6,6 +6,7 @@ on:
       - "include/qubit/qbroker.hpp"
       - "src/qbroker.cpp"
       - "tests/test_execution_broker.cpp"
+      - "tests/test_prepared_probability.cpp"
       - "tests/test_architecture_layers.py"
       - "CMakeLists.txt"
       - ".github/workflows/qsa-execution-broker.yml"
@@ -25,8 +26,12 @@ jobs:
         run: >-
           cmake --build build --config Release --parallel 2
           --target qstate_execution_broker_tests qstate_tensor_network_tests qstate_pauli_propagation_tests
+      - name: Build prepared probability gate
+        run: c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_prepared_probability.cpp build/libqstate_core.a -pthread -o build/qstate_prepared_probability_test
       - name: Run broker gates
         run: ./build/qstate_execution_broker_tests
+      - name: Run prepared probability gate
+        run: ./build/qstate_prepared_probability_test
       - name: Run tensor exactness gates
         run: ./build/qstate_tensor_network_tests
       - name: Run Pauli exactness gates
