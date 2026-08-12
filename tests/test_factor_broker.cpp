@@ -13,8 +13,10 @@ namespace {
 
 using qubit::ExactFactorBrokerPlan;
 using qubit::ExactFactorBrokerRoute;
+using qubit::ExactFactorChainPlan;
 using qubit::ExactFactorConfig;
 using qubit::ExactFactorGraph;
+using qubit::ExactFactorPlan;
 using qubit::FactorId;
 using qubit::FactorSparseEntry;
 using qubit::FactorVariableId;
@@ -127,6 +129,20 @@ std::vector<FactorId> build_chain(
     return ids;
 }
 
+std::array<QComplex, 2> brute_force_pair_chain(
+    const std::array<QComplex, 4>& first,
+    const std::array<QComplex, 4>& second) {
+    std::array<QComplex, 2> result{};
+    for (std::size_t c = 0U; c < 2U; ++c) {
+        for (std::size_t b = 0U; b < 2U; ++b) {
+            for (std::size_t a = 0U; a < 2U; ++a) {
+                result[c] += first[a + 2U * b] * second[b + 2U * c];
+            }
+        }
+    }
+    return result;
+}
+
 }  // namespace
 
 int main() {
@@ -147,8 +163,12 @@ int main() {
     require(broker.chain_rejection().empty(),
             "eligible ChainTransfer retained a rejection reason");
     auto broker_workspace = broker.workspace();
-    compare(broker.evaluate(broker_workspace), graph.marginal(retained),
-            "broker ChainTransfer marginal");
+    const std::vector<QComplex> initial_broker = broker.evaluate(broker_workspace);
+    const ExactFactorChainPlan direct_chain(graph, retained);
+    const ExactFactorPlan direct_generic(graph, retained);
+    compare(initial_broker, direct_chain.evaluate(), "broker direct ChainTransfer marginal");
+    compare(initial_broker, direct_generic.evaluate(), "broker direct generic marginal");
+    compare(initial_broker, graph.marginal(retained), "broker graph marginal");
     require_close(broker.partition(broker_workspace), graph.partition(),
                   "broker ChainTransfer partition");
     const std::vector<QComplex> normalized = broker.normalized_marginal(broker_workspace);
@@ -157,6 +177,34 @@ int main() {
         normalized_sum += value;
     }
     require_close(normalized_sum, QComplex{1.0}, "broker ChainTransfer normalization");
+
+    ExactFactorGraph brute_graph;
+    const FactorVariableId ba = brute_graph.add_variable(2U);
+    const FactorVariableId bb = brute_graph.add_variable(2U);
+    const FactorVariableId bc = brute_graph.add_variable(2U);
+    const std::array<FactorVariableId, 2> brute_first_scope{{ba, bb}};
+    const std::array<FactorVariableId, 2> brute_second_scope{{bb, bc}};
+    const std::array<QComplex, 4> brute_first{{
+        QComplex{0.9, 0.1}, QComplex{0.3, -0.2},
+        QComplex{0.5, 0.0}, QComplex{1.1, 0.1},
+    }};
+    const std::array<QComplex, 4> brute_second{{
+        QComplex{0.7, -0.1}, QComplex{1.2, 0.0},
+        QComplex{0.4, 0.2}, QComplex{0.8, -0.1},
+    }};
+    static_cast<void>(brute_graph.add_dense_factor(brute_first_scope, brute_first));
+    static_cast<void>(brute_graph.add_dense_factor(brute_second_scope, brute_second));
+    const std::array<FactorVariableId, 1> brute_retained{{bc}};
+    const std::array<QComplex, 2> brute_expected =
+        brute_force_pair_chain(brute_first, brute_second);
+    ExactFactorBrokerPlan brute_broker(brute_graph, brute_retained);
+    require(brute_broker.route() == ExactFactorBrokerRoute::ChainTransfer,
+            "brute-force chain did not select ChainTransfer");
+    compare(brute_broker.evaluate(), brute_expected, "broker independent brute-force marginal");
+    compare(ExactFactorChainPlan(brute_graph, brute_retained).evaluate(), brute_expected,
+            "direct ChainTransfer independent brute-force marginal");
+    compare(ExactFactorPlan(brute_graph, brute_retained).evaluate(), brute_expected,
+            "direct generic independent brute-force marginal");
 
     ExactFactorBrokerPlan partition_broker(graph);
     require(partition_broker.route() == ExactFactorBrokerRoute::ChainTransfer,
@@ -176,6 +224,8 @@ int main() {
     replacement[0] = QComplex{1.7, 0.1};
     replacement[7] = QComplex{0.9, -0.1};
     graph.set_dense_factor(factor_ids[1], replacement);
+    compare(broker.evaluate(broker_workspace), initial_broker,
+            "broker snapshot changed before targeted rebind");
     broker.rebind_dense_factor(factor_ids[1], replacement);
     compare(broker.evaluate(broker_workspace), graph.marginal(retained),
             "broker dense targeted rebind");
@@ -197,6 +247,9 @@ int main() {
             "broker selected ChainTransfer for a non-final marginal");
     require(!nonfinal_broker.chain_rejection().empty(),
             "broker fallback omitted its ChainTransfer rejection reason");
+    const ExactFactorPlan nonfinal_generic(graph, nonfinal);
+    compare(nonfinal_broker.evaluate(), nonfinal_generic.evaluate(),
+            "broker non-final direct generic fallback");
     compare(nonfinal_broker.evaluate(), graph.marginal(nonfinal),
             "broker non-final marginal fallback");
 
@@ -217,8 +270,43 @@ int main() {
             "broker selected ChainTransfer for a non-chain topology");
     require(!nonchain_broker.chain_rejection().empty(),
             "non-chain fallback omitted its rejection reason");
-    compare(nonchain_broker.evaluate(), nonchain.marginal(keep_c),
-            "broker non-chain fallback");
+    compare(nonchain_broker.evaluate(), ExactFactorPlan(nonchain, keep_c).evaluate(),
+            "broker non-chain direct generic fallback");
+
+    ExactFactorGraph permuted;
+    const FactorVariableId p0 = permuted.add_variable(2U);
+    const FactorVariableId p1 = permuted.add_variable(2U);
+    const FactorVariableId p2 = permuted.add_variable(2U);
+    const std::array<FactorVariableId, 2> pfirst{{p0, p1}};
+    const std::array<FactorVariableId, 2> psecond{{p2, p1}};
+    static_cast<void>(permuted.add_dense_factor(pfirst, pair));
+    static_cast<void>(permuted.add_dense_factor(psecond, pair));
+    const std::array<FactorVariableId, 1> keep_p2{{p2}};
+    ExactFactorBrokerPlan permuted_broker(permuted, keep_p2);
+    require(permuted_broker.route() == ExactFactorBrokerRoute::VariableElimination,
+            "broker selected ChainTransfer for a permuted chain scope");
+    require(!permuted_broker.chain_rejection().empty(),
+            "permuted-scope fallback omitted its rejection reason");
+    compare(permuted_broker.evaluate(), ExactFactorPlan(permuted, keep_p2).evaluate(),
+            "broker permuted-scope direct generic fallback");
+
+    ExactFactorGraph disconnected;
+    const FactorVariableId d0 = disconnected.add_variable(2U);
+    const FactorVariableId d1 = disconnected.add_variable(2U);
+    const FactorVariableId d2 = disconnected.add_variable(2U);
+    const FactorVariableId d3 = disconnected.add_variable(2U);
+    const std::array<FactorVariableId, 2> dfirst{{d0, d1}};
+    const std::array<FactorVariableId, 2> dsecond{{d2, d3}};
+    static_cast<void>(disconnected.add_dense_factor(dfirst, pair));
+    static_cast<void>(disconnected.add_dense_factor(dsecond, pair));
+    const std::array<FactorVariableId, 1> keep_d3{{d3}};
+    ExactFactorBrokerPlan disconnected_broker(disconnected, keep_d3);
+    require(disconnected_broker.route() == ExactFactorBrokerRoute::VariableElimination,
+            "broker selected ChainTransfer for a disconnected graph");
+    require(!disconnected_broker.chain_rejection().empty(),
+            "disconnected fallback omitted its rejection reason");
+    compare(disconnected_broker.evaluate(), ExactFactorPlan(disconnected, keep_d3).evaluate(),
+            "broker disconnected direct generic fallback");
 
     ExactFactorGraph unary;
     const FactorVariableId u = unary.add_variable(3U);
@@ -235,10 +323,20 @@ int main() {
     require_close(unary_partition.partition(), unary.partition(),
                   "broker unary partition fallback");
 
-    auto wrong_workspace = nonfinal_broker.workspace();
+    auto wrong_route_workspace = nonfinal_broker.workspace();
     require_reject([&] {
-        static_cast<void>(broker.evaluate(wrong_workspace));
+        static_cast<void>(broker.evaluate(wrong_route_workspace));
     }, "broker accepted a workspace from another route");
+
+    ExactFactorGraph ternary_chain;
+    const std::array<std::size_t, 3> ternary_dimensions{{3U, 3U, 3U}};
+    static_cast<void>(build_chain(ternary_chain, ternary_dimensions, 2U, rng, false));
+    const std::vector<FactorVariableId> ternary_retained = final_separator(2U, 2U);
+    ExactFactorBrokerPlan ternary_broker(ternary_chain, ternary_retained);
+    auto binary_workspace = brute_broker.workspace();
+    require_reject([&] {
+        static_cast<void>(ternary_broker.evaluate(binary_workspace));
+    }, "broker accepted incompatible ChainTransfer workspace geometry");
 
     ExactFactorGraph zero;
     const FactorVariableId z0 = zero.add_variable(2U);
@@ -269,8 +367,11 @@ int main() {
         ExactFactorBrokerPlan random_broker(random_graph, random_retained);
         require(random_broker.route() == ExactFactorBrokerRoute::ChainTransfer,
                 "random certified chain did not select ChainTransfer");
-        compare(random_broker.evaluate(), random_graph.marginal(random_retained),
-                "random broker ChainTransfer marginal");
+        const std::vector<QComplex> random_values = random_broker.evaluate();
+        compare(random_values, ExactFactorChainPlan(random_graph, random_retained).evaluate(),
+                "random broker direct ChainTransfer marginal");
+        compare(random_values, ExactFactorPlan(random_graph, random_retained).evaluate(),
+                "random broker direct generic marginal");
     }
 
     return 0;
