@@ -38,6 +38,29 @@ void validate_basis_width(std::size_t qubit_count, std::span<const std::uint8_t>
     }
 }
 
+void validate_marginal_query(
+    std::size_t qubit_count,
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) {
+    validated_qubit_count(qubit_count);
+    if (qubits.size() != bits.size()) {
+        throw QStateError("Marginal query qubit and bit counts do not match");
+    }
+    for (std::size_t index = 0U; index < qubits.size(); ++index) {
+        if (static_cast<std::size_t>(qubits[index]) >= qubit_count) {
+            throw QStateError("Marginal query qubit is out of range");
+        }
+        if (bits[index] > 1U) {
+            throw QStateError("Marginal query bits must be zero or one");
+        }
+        for (std::size_t previous = 0U; previous < index; ++previous) {
+            if (qubits[previous] == qubits[index]) {
+                throw QStateError("Marginal query contains duplicate qubits");
+            }
+        }
+    }
+}
+
 void validate_observable(std::size_t qubit_count, const PauliObservable& observable) {
     if (observable.qubit_count() != qubit_count) {
         throw QStateError("Execution broker Pauli observable width does not match input");
@@ -384,6 +407,147 @@ void execute_mps(MatrixProductState& state, std::span<const Operation> operation
     return std::ldexp(1.0, -static_cast<int>(qubit_count));
 }
 
+[[nodiscard]] bool stabilizer_operations(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    std::vector<StabilizerOperation>* compiled,
+    const char** reason) {
+    const auto fail = [&](const char* message) {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return false;
+    };
+    if (compiled != nullptr) {
+        compiled->clear();
+        compiled->reserve(operations.size());
+    }
+
+    for (const Operation& operation : operations) {
+        StabilizerOperationCode code = StabilizerOperationCode::H;
+        switch (operation.code) {
+            case OperationCode::X:
+                code = StabilizerOperationCode::X;
+                break;
+            case OperationCode::Y:
+                code = StabilizerOperationCode::Y;
+                break;
+            case OperationCode::Z:
+                code = StabilizerOperationCode::Z;
+                break;
+            case OperationCode::H:
+                code = StabilizerOperationCode::H;
+                break;
+            case OperationCode::S:
+                code = StabilizerOperationCode::S;
+                break;
+            case OperationCode::Sdg:
+                code = StabilizerOperationCode::Sdg;
+                break;
+            case OperationCode::Cnot:
+                code = StabilizerOperationCode::Cnot;
+                break;
+            case OperationCode::Cz:
+                code = StabilizerOperationCode::Cz;
+                break;
+            case OperationCode::Swap:
+                code = StabilizerOperationCode::Swap;
+                break;
+            case OperationCode::T:
+            case OperationCode::Tdg:
+            case OperationCode::Rx:
+            case OperationCode::Ry:
+            case OperationCode::Rz:
+                return fail("Stabilizer route supports Clifford operations only");
+            case OperationCode::BitFlipTrajectory:
+            case OperationCode::PhaseFlipTrajectory:
+            case OperationCode::DepolarizingTrajectory:
+            case OperationCode::AmplitudeDampingTrajectory:
+                return fail("Stabilizer route supports unitary Clifford operations only");
+            default:
+                return fail("Stabilizer route received an unknown opcode");
+        }
+
+        switch (operation.code) {
+            case OperationCode::Cnot:
+            case OperationCode::Cz:
+            case OperationCode::Swap:
+                if (operation.first >= qubit_count || operation.second >= qubit_count) {
+                    return fail("Stabilizer route two-qubit target is out of range");
+                }
+                if (operation.first == operation.second) {
+                    return fail("Stabilizer route two-qubit operation requires distinct qubits");
+                }
+                break;
+            default:
+                if (operation.first >= qubit_count) {
+                    return fail("Stabilizer route single-qubit target is out of range");
+                }
+                break;
+        }
+
+        if (compiled != nullptr) {
+            compiled->push_back({code, operation.first, operation.second});
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] StabilizerState execute_stabilizer_from_zero(
+    std::size_t qubit_count,
+    std::span<const StabilizerOperation> operations) {
+    StabilizerState state(qubit_count);
+    state.apply_batch(operations);
+    return state;
+}
+
+[[nodiscard]] double stabilizer_basis_probability(
+    StabilizerState state,
+    std::span<const std::uint8_t> bits) {
+    double probability = 1.0;
+    for (std::size_t qubit = 0U; qubit < bits.size(); ++qubit) {
+        const QubitId id = static_cast<QubitId>(qubit);
+        const double probability_one = state.probability_one(id);
+        const double factor = bits[qubit] != 0U ? probability_one : 1.0 - probability_one;
+        if (factor == 0.0) {
+            return 0.0;
+        }
+        probability *= factor;
+        const int outcome = state.measure_z(id, bits[qubit] != 0U ? 0.0 : 0.75);
+        if (outcome != static_cast<int>(bits[qubit])) {
+            throw QStateError("Stabilizer basis conditioning produced the wrong outcome");
+        }
+        if (probability == 0.0) {
+            return 0.0;
+        }
+    }
+    return probability;
+}
+
+[[nodiscard]] double stabilizer_marginal_probability(
+    StabilizerState state,
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) {
+    double probability = 1.0;
+    for (std::size_t index = 0U; index < qubits.size(); ++index) {
+        const double probability_one = state.probability_one(qubits[index]);
+        const double factor = bits[index] != 0U ? probability_one : 1.0 - probability_one;
+        if (factor == 0.0) {
+            return 0.0;
+        }
+        probability *= factor;
+        const int outcome = state.measure_z(
+            qubits[index], bits[index] != 0U ? 0.0 : 0.75);
+        if (outcome != static_cast<int>(bits[index])) {
+            throw QStateError("Stabilizer marginal conditioning produced the wrong outcome");
+        }
+        if (probability == 0.0) {
+            return 0.0;
+        }
+    }
+    return probability;
+}
+
 [[nodiscard]] bool phase_graph_structure_eligible(
     std::size_t qubit_count,
     std::span<const Operation> operations,
@@ -537,6 +701,8 @@ const char* exact_execution_route_name(ExactExecutionRoute route) noexcept {
             return "UniformMagnitude";
         case ExactExecutionRoute::BasisPermutation:
             return "BasisPermutation";
+        case ExactExecutionRoute::Stabilizer:
+            return "Stabilizer";
     }
     return "unknown";
 }
@@ -651,6 +817,25 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         return result;
     }
 
+    const char* stabilizer_reason = nullptr;
+    std::vector<StabilizerOperation> stabilizer_plan;
+    std::string stabilizer_failure;
+    if (stabilizer_operations(
+            qubit_count, operations, &stabilizer_plan, &stabilizer_reason)) {
+        try {
+            StabilizerState state = execute_stabilizer_from_zero(qubit_count, stabilizer_plan);
+            result.value = stabilizer_basis_probability(std::move(state), basis_bits);
+            result.route = ExactExecutionRoute::Stabilizer;
+            return result;
+        } catch (const QStateError& error) {
+            stabilizer_failure = failure_message(error);
+        }
+    } else {
+        stabilizer_failure = stabilizer_reason != nullptr
+            ? stabilizer_reason
+            : "structural preflight failed";
+    }
+
     try {
         TensorNetworkCircuit tensor(qubit_count, operations, config_.tensor);
         result.value = tensor.amplitude(basis_bits, &result.tensor_stats).norm2();
@@ -665,6 +850,10 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         result.fallback_reason += uniform_reason != nullptr
             ? uniform_reason
             : "uniform-magnitude certificate failed";
+        result.fallback_reason += "; stabilizer: ";
+        result.fallback_reason += stabilizer_failure.empty()
+            ? "stabilizer execution failed"
+            : stabilizer_failure;
         result.fallback_reason += "; tensor: ";
         result.fallback_reason += failure_message(error);
     }
@@ -731,6 +920,15 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         bits[qubit] = static_cast<std::uint8_t>((basis >> qubit) & BasisIndex{1});
     }
     return basis_probability_from_zero(qubit_count, operations, bits);
+}
+
+ExactProbabilityResult ExactExecutionBroker::marginal_probability_from_zero(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) const {
+    ExactPreparedProbabilityPlan prepared(qubit_count, operations, config_);
+    return prepared.marginal_probability(qubits, bits);
 }
 
 ExactPreparedExpectationPlan::ExactPreparedExpectationPlan(
@@ -860,6 +1058,25 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
         return;
     }
 
+    const char* stabilizer_reason = nullptr;
+    std::vector<StabilizerOperation> stabilizer_plan;
+    std::string stabilizer_failure;
+    if (stabilizer_operations(
+            qubit_count_, operations, &stabilizer_plan, &stabilizer_reason)) {
+        try {
+            stabilizer_state_.emplace(
+                execute_stabilizer_from_zero(qubit_count_, stabilizer_plan));
+            route_ = ExactExecutionRoute::Stabilizer;
+            return;
+        } catch (const QStateError& error) {
+            stabilizer_failure = failure_message(error);
+        }
+    } else {
+        stabilizer_failure = stabilizer_reason != nullptr
+            ? stabilizer_reason
+            : "structural preflight failed";
+    }
+
     try {
         TensorNetworkCircuit tensor(qubit_count_, operations, config_.tensor);
         tensor_plan_.emplace(tensor.compile());
@@ -874,6 +1091,10 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
         fallback_reason_ += uniform_reason != nullptr
             ? uniform_reason
             : "uniform-magnitude certificate failed";
+        fallback_reason_ += "; stabilizer: ";
+        fallback_reason_ += stabilizer_failure.empty()
+            ? "stabilizer execution failed"
+            : stabilizer_failure;
         fallback_reason_ += "; tensor: ";
         fallback_reason_ += failure_message(error);
     }
@@ -944,6 +1165,12 @@ ExactProbabilityResult ExactPreparedProbabilityPlan::probability(
         case ExactExecutionRoute::UniformMagnitude:
             result.value = uniform_probability_;
             return result;
+        case ExactExecutionRoute::Stabilizer:
+            if (!stabilizer_state_.has_value()) {
+                throw QStateError("Prepared Stabilizer probability plan is missing its state");
+            }
+            result.value = stabilizer_basis_probability(*stabilizer_state_, basis_bits);
+            return result;
         case ExactExecutionRoute::TensorNetwork:
             if (!tensor_plan_.has_value()) {
                 throw QStateError("Prepared tensor probability plan is missing its contraction plan");
@@ -990,9 +1217,54 @@ ExactProbabilityResult ExactPreparedProbabilityPlan::probability(BasisIndex basi
     return probability(bits);
 }
 
+ExactProbabilityResult ExactPreparedProbabilityPlan::marginal_probability(
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) const {
+    validate_marginal_query(qubit_count_, qubits, bits);
+
+    ExactProbabilityResult result;
+    result.route = route_;
+    result.fallback_reason = fallback_reason_;
+    switch (route_) {
+        case ExactExecutionRoute::BasisPermutation:
+            if (basis_permutation_bits_.size() != qubit_count_) {
+                throw QStateError("Prepared BasisPermutation plan is missing its terminal state");
+            }
+            for (std::size_t index = 0U; index < qubits.size(); ++index) {
+                if (basis_permutation_bits_[qubits[index]] != bits[index]) {
+                    result.value = 0.0;
+                    return result;
+                }
+            }
+            result.value = 1.0;
+            return result;
+        case ExactExecutionRoute::UniformMagnitude:
+            result.value = uniform_probability(bits.size());
+            return result;
+        case ExactExecutionRoute::Stabilizer:
+            if (!stabilizer_state_.has_value()) {
+                throw QStateError("Prepared Stabilizer probability plan is missing its state");
+            }
+            result.value = stabilizer_marginal_probability(*stabilizer_state_, qubits, bits);
+            return result;
+        case ExactExecutionRoute::TensorNetwork:
+        case ExactExecutionRoute::PersistentMPS:
+        case ExactExecutionRoute::PhaseGraph:
+        case ExactExecutionRoute::Register:
+            throw QStateError(
+                "Prepared marginal probability currently requires a BasisPermutation, UniformMagnitude, or Stabilizer route");
+        case ExactExecutionRoute::CausalPauli:
+            throw QStateError("Prepared probability plan cannot use CausalPauli");
+    }
+    throw QStateError("Prepared probability plan has an unknown route");
+}
+
 std::size_t ExactPreparedProbabilityPlan::estimated_bytes() const noexcept {
     std::size_t total = sizeof(*this);
     total += basis_permutation_bits_.capacity() * sizeof(std::uint8_t);
+    if (stabilizer_state_.has_value()) {
+        total += dynamic_bytes(stabilizer_state_->estimated_bytes(), sizeof(StabilizerState));
+    }
     if (tensor_plan_.has_value()) {
         total += dynamic_bytes(tensor_plan_->estimated_bytes(), sizeof(TensorContractionPlan));
     }
