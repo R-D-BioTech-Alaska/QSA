@@ -298,8 +298,8 @@ int main() {
             ExactPreparedProbabilityPlan::for_marginals(3U, operations);
         require(full.prepared_route() == ExactExecutionRoute::TensorNetwork,
                 "full-basis nonadjacent circuit did not preserve TensorNetwork priority");
-        require(marginal.prepared_route() == ExactExecutionRoute::Register,
-                "marginal-aware nonadjacent circuit did not reach exact QRegister fallback");
+        require(marginal.prepared_route() == ExactExecutionRoute::TreeTensor,
+                "marginal-aware nonadjacent circuit did not select exact TreeTensor route");
 
         const std::array<QubitId, 2> query_qubits{{0U, 2U}};
         const std::array<std::uint8_t, 2> query_bits{{1U, 1U}};
@@ -308,19 +308,20 @@ int main() {
         const auto one_shot = broker.marginal_probability_from_zero(
             3U, operations, query_qubits, query_bits);
         const auto prepared = marginal.marginal_probability(query_qubits, query_bits);
-        require(one_shot.route == ExactExecutionRoute::Register &&
-                    prepared.route == ExactExecutionRoute::Register,
-                "generic marginal fallback did not report QRegister route");
+        require(one_shot.route == ExactExecutionRoute::TreeTensor &&
+                    prepared.route == ExactExecutionRoute::TreeTensor,
+                "nonadjacent marginal route did not report TreeTensor");
         require_close(one_shot.value, expected,
-                      "one-shot QRegister marginal fallback differs from dense reference");
+                      "one-shot TreeTensor marginal differs from dense reference");
         require_close(prepared.value, expected,
-                      "prepared QRegister marginal fallback differs from dense reference");
+                      "prepared TreeTensor marginal differs from dense reference");
         require(prepared.fallback_reason.find(
                     "tensor: route does not support marginal probability") != std::string::npos &&
                     prepared.fallback_reason.find("mps:") != std::string::npos &&
                     prepared.fallback_reason.find(
-                        "phase_graph: route does not support marginal probability") != std::string::npos,
-                "QRegister marginal fallback did not retain capability/rejection reasons");
+                        "phase_graph: route does not support marginal probability") != std::string::npos &&
+                    prepared.fallback_reason.find("ttn:") == std::string::npos,
+                "TreeTensor marginal route did not preserve upstream capability/rejection reasons");
     }
 
     {
