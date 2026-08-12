@@ -35,6 +35,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qtensor.hpp",
     "include/qubit/qmps.hpp",
     "include/qubit/qfactor.hpp",
+    "include/qubit/qfactor_chain.hpp",
     "src/qfactor.cpp",
 )
 
