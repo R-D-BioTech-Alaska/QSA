@@ -344,6 +344,34 @@ QComplex TensorContractionPlan::amplitude(
     return result;
 }
 
+QComplex TensorContractionPlan::amplitude(
+    BasisIndex basis,
+    TensorContractionStats* stats) const {
+    TensorContractionWorkspace local = workspace();
+    return amplitude(basis, local, stats);
+}
+
+QComplex TensorContractionPlan::amplitude(
+    BasisIndex basis,
+    TensorContractionWorkspace& workspace_value,
+    TensorContractionStats* stats) const {
+    if (qubit_count_ > std::numeric_limits<BasisIndex>::digits) {
+        throw QStateError("Tensor contraction plan BasisIndex query is limited to 64 qubits");
+    }
+    if (qubit_count_ < std::numeric_limits<BasisIndex>::digits &&
+        basis >= (BasisIndex{1} << qubit_count_)) {
+        throw QStateError("Tensor contraction plan basis index is out of range");
+    }
+    std::array<std::uint8_t, std::numeric_limits<BasisIndex>::digits> bits{};
+    for (std::size_t qubit = 0; qubit < qubit_count_; ++qubit) {
+        bits[qubit] = static_cast<std::uint8_t>((basis >> qubit) & BasisIndex{1});
+    }
+    return amplitude(
+        std::span<const std::uint8_t>(bits.data(), qubit_count_),
+        workspace_value,
+        stats);
+}
+
 std::size_t TensorContractionPlan::estimated_bytes() const noexcept {
     std::size_t bytes = sizeof(*this) +
                         sources_.capacity() * sizeof(SourceFactor) +
