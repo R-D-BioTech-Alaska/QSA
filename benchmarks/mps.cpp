@@ -17,6 +17,7 @@ using Clock = std::chrono::steady_clock;
 using qubit::ExactExecutionBroker;
 using qubit::ExactExecutionRoute;
 using qubit::ExactPreparedExpectationPlan;
+using qubit::ExactPreparedProbabilityPlan;
 using qubit::MPSPauliPlan;
 using qubit::MatrixProductState;
 using qubit::Operation;
@@ -237,6 +238,18 @@ int main() {
             probability_reference_value = next.amplitude_bits(probability_bits).norm2();
         });
 
+        std::optional<ExactPreparedProbabilityPlan> probability_prepared;
+        const double probability_prepared_setup_ms = median_ms([&] {
+            probability_prepared.emplace(
+                qubits,
+                probability_operations,
+                probability_config);
+        });
+        qubit::ExactProbabilityResult probability_prepared_result;
+        const double probability_prepared_query_ms = median_ms([&] {
+            probability_prepared_result = probability_prepared->probability(probability_bits);
+        }, 11, 100);
+
         if (broker_result.route != ExactExecutionRoute::PersistentMPS) {
             std::cerr << "broker did not select persistent MPS after causal collapse\n";
             return 2;
@@ -249,6 +262,12 @@ int main() {
         if (probability_result.route != ExactExecutionRoute::PersistentMPS) {
             std::cerr << "probability broker did not select persistent MPS after tensor collapse\n";
             return 4;
+        }
+        if (probability_prepared->prepared_route() != ExactExecutionRoute::PersistentMPS ||
+            probability_prepared_result.route != probability_result.route ||
+            std::abs(probability_prepared_result.value - probability_result.value) > 2e-11) {
+            std::cerr << "prepared probability broker did not retain persistent MPS semantics\n";
+            return 5;
         }
 
         std::cout << "mps18_qubits=" << qubits << '\n';
@@ -305,6 +324,19 @@ int main() {
                   << probability_qregister_ms / probability_ms << '\n';
         std::cout << "mps18_probability_value_error="
                   << std::abs(probability_result.value - probability_reference_value) << '\n';
+        std::cout << "mps18_probability_prepared_setup_ms=" << probability_prepared_setup_ms << '\n';
+        std::cout << "mps18_probability_prepared_query_ms=" << probability_prepared_query_ms << '\n';
+        std::cout << "mps18_probability_prepared_over_one_shot_speed="
+                  << probability_ms / probability_prepared_query_ms << '\n';
+        std::cout << "mps18_probability_prepared_break_even_queries="
+                  << break_even_queries(
+                         probability_prepared_setup_ms,
+                         probability_ms,
+                         probability_prepared_query_ms) << '\n';
+        std::cout << "mps18_probability_prepared_bytes="
+                  << probability_prepared->estimated_bytes() << '\n';
+        std::cout << "mps18_probability_prepared_value_error="
+                  << std::abs(probability_prepared_result.value - probability_reference_value) << '\n';
     }
 
     {
@@ -363,7 +395,7 @@ int main() {
             prepared_result.route != ExactExecutionRoute::PersistentMPS ||
             prepared->prepared_fallback_route() != ExactExecutionRoute::PersistentMPS) {
             std::cerr << "large prepared broker did not retain persistent MPS route\n";
-            return 5;
+            return 6;
         }
 
         std::cout << "mps_large_qubits=" << qubits << '\n';
