@@ -7,6 +7,7 @@
 #include "qubit/qstabilizer.hpp"
 #include "qubit/qstate.hpp"
 #include "qubit/qtensor.hpp"
+#include "qubit/qttn_marginal.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,7 @@ enum class ExactExecutionRoute : std::uint8_t {
     UniformMagnitude = 5,
     BasisPermutation = 6,
     Stabilizer = 7,
+    TreeTensor = 8,
 };
 
 struct ExactExecutionBrokerConfig {
@@ -33,6 +35,7 @@ struct ExactExecutionBrokerConfig {
     std::size_t tensor_planning_defer_variables{65'536U};
     MPSConfig mps{};
     PhaseGraphConfig phase_graph{};
+    TreeTensorConfig tree_tensor{};
     QStateConfig register_state{};
 };
 
@@ -156,6 +159,7 @@ private:
     std::optional<MatrixProductState> mps_state_{};
     std::optional<MPSPauliPlan> mps_plan_{};
     std::optional<PhaseGraphState> phase_graph_state_{};
+    std::optional<TreeTensorMarginalPlan> tree_tensor_plan_{};
     std::optional<QRegister> register_state_{};
     std::string fallback_reason_{};
 };
