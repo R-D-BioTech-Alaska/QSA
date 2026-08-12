@@ -86,6 +86,50 @@ namespace {
     return matrix;
 }
 
+[[nodiscard]] std::pair<std::size_t, std::size_t> marginal_span(
+    std::size_t qubit_count,
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) {
+    if (qubits.size() != bits.size()) {
+        throw QStateError("MPS marginal qubit and bit counts do not match");
+    }
+    if (qubits.empty()) {
+        return {qubit_count, qubit_count};
+    }
+
+    std::size_t first = qubit_count;
+    std::size_t last = 0U;
+    for (std::size_t index = 0U; index < qubits.size(); ++index) {
+        const std::size_t qubit = static_cast<std::size_t>(qubits[index]);
+        if (qubit >= qubit_count) {
+            throw QStateError("MPS marginal qubit is out of range");
+        }
+        if (bits[index] > 1U) {
+            throw QStateError("MPS marginal bits must be zero or one");
+        }
+        for (std::size_t previous = 0U; previous < index; ++previous) {
+            if (qubits[previous] == qubits[index]) {
+                throw QStateError("MPS marginal contains duplicate qubits");
+            }
+        }
+        first = std::min(first, qubit);
+        last = std::max(last, qubit);
+    }
+    return {first, last};
+}
+
+[[nodiscard]] double checked_probability(
+    QComplex value,
+    double tolerance,
+    const char* message) {
+    const double bound = std::max(1e-12, tolerance);
+    if (!finite(value) || std::abs(value.im) > bound ||
+        value.re < -bound || value.re > 1.0 + bound) {
+        throw QStateError(message);
+    }
+    return std::clamp(value.re, 0.0, 1.0);
+}
+
 void transfer_left(
     const MPSSiteTensor& site,
     const QMatrix2& operation,
@@ -485,6 +529,44 @@ QComplex MatrixProductState::amplitude(std::span<const std::uint8_t> bits) const
     return left.front();
 }
 
+double MatrixProductState::marginal_probability(
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) const {
+    const auto [first, last] = marginal_span(sites_.size(), qubits, bits);
+    if (qubits.empty()) {
+        return checked_probability(
+            product_expectation(std::span<const PauliAxis>{}),
+            config_.normalization_tolerance,
+            "MPS empty marginal probability is invalid");
+    }
+
+    std::vector<std::int8_t> assignment(last - first + 1U, -1);
+    for (std::size_t index = 0U; index < qubits.size(); ++index) {
+        assignment[static_cast<std::size_t>(qubits[index]) - first] =
+            static_cast<std::int8_t>(bits[index]);
+    }
+
+    std::vector<QComplex> environment(1U, {1.0, 0.0});
+    std::vector<QComplex> next;
+    for (std::size_t qubit = 0U; qubit < sites_.size(); ++qubit) {
+        QMatrix2 operation = gates::identity();
+        if (qubit >= first && qubit <= last) {
+            const std::int8_t bit = assignment[qubit - first];
+            if (bit == 0) {
+                operation = projector_zero();
+            } else if (bit == 1) {
+                operation = projector_one();
+            }
+        }
+        transfer_left(sites_[qubit], operation, environment, next);
+        environment.swap(next);
+    }
+    return checked_probability(
+        environment.front(),
+        config_.normalization_tolerance,
+        "MPS marginal probability is invalid");
+}
+
 QComplex MatrixProductState::product_expectation(std::span<const PauliAxis> axes) const {
     if (!axes.empty() && axes.size() != sites_.size()) {
         throw QStateError("MPS Pauli width does not match state width");
@@ -707,6 +789,43 @@ std::size_t MPSPauliPlan::estimated_bytes() const noexcept {
         bytes += environment.capacity() * sizeof(QComplex);
     }
     return bytes;
+}
+
+double MPSPauliPlan::marginal_probability(
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) const {
+    const auto [first, last] = marginal_span(state_.qubit_count(), qubits, bits);
+    if (qubits.empty()) {
+        return checked_probability(
+            left_identity_.back().front(),
+            state_.config().normalization_tolerance,
+            "MPS cached empty marginal probability is invalid");
+    }
+
+    std::vector<std::int8_t> assignment(last - first + 1U, -1);
+    for (std::size_t index = 0U; index < qubits.size(); ++index) {
+        assignment[static_cast<std::size_t>(qubits[index]) - first] =
+            static_cast<std::int8_t>(bits[index]);
+    }
+
+    std::vector<QComplex> environment = left_identity_[first];
+    std::vector<QComplex> next;
+    const std::vector<MPSSiteTensor>& sites = state_.sites();
+    for (std::size_t qubit = first; qubit <= last; ++qubit) {
+        const std::int8_t bit = assignment[qubit - first];
+        QMatrix2 operation = gates::identity();
+        if (bit == 0) {
+            operation = projector_zero();
+        } else if (bit == 1) {
+            operation = projector_one();
+        }
+        transfer_left(sites[qubit], operation, environment, next);
+        environment.swap(next);
+    }
+    return checked_probability(
+        contract_cut(environment, right_identity_[last + 1U]),
+        state_.config().normalization_tolerance,
+        "MPS cached marginal probability is invalid");
 }
 
 QComplex MPSPauliPlan::term_expectation(std::span<const PauliFactor> factors) const {
