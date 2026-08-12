@@ -70,7 +70,7 @@ struct Result {
 [[nodiscard]] Result measure(std::size_t qubits) {
     const std::vector<Operation> operations = chain_operations(qubits);
     TensorNetworkConfig config;
-    config.max_contraction_entries = 8U;
+    config.max_contraction_entries = 16U;
     config.max_factors = 1'000'000U;
 
     std::optional<TensorNetworkCircuit> circuit;
@@ -96,6 +96,13 @@ struct Result {
     return result;
 }
 
+[[nodiscard]] bool certified(std::size_t qubits, const Result& result) noexcept {
+    return result.operations == 2U * qubits + 1U &&
+           result.factors == 3U * qubits + 1U &&
+           result.steps == 4U * qubits &&
+           result.peak_entries == 16U;
+}
+
 void print(std::size_t qubits, const Result& result) {
     std::cout << "tensor_planner_qubits=" << qubits << '\n';
     std::cout << "tensor_planner_operations=" << result.operations << '\n';
@@ -114,6 +121,12 @@ int main() {
     const Result small = measure(1'000U);
     const Result medium = measure(5'000U);
     const Result large = measure(30'000U);
+    if (!certified(1'000U, small) ||
+        !certified(5'000U, medium) ||
+        !certified(30'000U, large)) {
+        std::cerr << "tensor planner scaling certificate changed\n";
+        return 1;
+    }
     print(1'000U, small);
     print(5'000U, medium);
     print(30'000U, large);
