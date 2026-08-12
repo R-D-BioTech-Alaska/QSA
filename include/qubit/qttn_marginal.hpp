@@ -194,7 +194,7 @@ private:
         model.root = build_topology(model, 0U, qubit_count, 0U);
         model.stats.qubit_count = qubit_count;
         model.stats.node_count = model.nodes.size();
-        if (qubit_count > (std::numeric_limits<std::size_t>::max() + 1U) / 3U) {
+        if (qubit_count > std::numeric_limits<std::size_t>::max() / 3U) {
             throw QStateError("Tree tensor marginal initial scalar count overflowed");
         }
         model.stats.scalar_count = 3U * qubit_count - 1U;
