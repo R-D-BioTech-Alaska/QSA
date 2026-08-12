@@ -34,7 +34,7 @@ struct ExactFactorConfig {
     std::size_t max_factors{1'000'000U};
     std::size_t max_variables{1'000'000U};
     std::size_t max_compiled_index_entries{1U << 20U};
-    bool reuse_workspace_slots{true};
+    bool reuse_workspace_slots{false};
 };
 
 struct ExactFactorStats {
