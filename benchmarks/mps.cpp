@@ -426,7 +426,7 @@ int main() {
         }, 11, 1000);
 
         qubit::ExactExecutionBrokerConfig marginal_config;
-        marginal_config.tensor.max_contraction_entries = 8U;
+        marginal_config.tensor.max_contraction_entries = 2U;
         ExactExecutionBroker marginal_broker(marginal_config);
         qubit::ExactProbabilityResult marginal_one_shot_result;
         const double marginal_one_shot_ms = median_ms([&] {
