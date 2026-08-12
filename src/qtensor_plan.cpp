@@ -77,6 +77,7 @@ TensorContractionPlan::TensorContractionPlan(const TensorNetworkCircuit& circuit
     }
 
     sources_.reserve(source_factor_count_);
+    steps_.reserve(circuit.next_variable_);
     std::vector<std::vector<VariableId>> scopes;
     scopes.reserve(source_factor_count_ + qubit_count_ + circuit.next_variable_);
     for (const TensorNetworkCircuit::Factor& factor : circuit.factors_) {
@@ -101,6 +102,26 @@ TensorContractionPlan::TensorContractionPlan(const TensorNetworkCircuit& circuit
         }
     }
 
+    std::vector<std::uint64_t> candidate_marks(circuit.next_variable_, 0U);
+    std::uint64_t candidate_epoch = 0U;
+    const auto candidate_union_size = [&](std::span<const std::size_t> bucket) {
+        ++candidate_epoch;
+        if (candidate_epoch == 0U) {
+            std::fill(candidate_marks.begin(), candidate_marks.end(), 0U);
+            candidate_epoch = 1U;
+        }
+        std::size_t count = 0U;
+        for (const std::size_t node : bucket) {
+            for (const VariableId variable : scopes[node]) {
+                if (candidate_marks[variable] != candidate_epoch) {
+                    candidate_marks[variable] = candidate_epoch;
+                    ++count;
+                }
+            }
+        }
+        return count;
+    };
+
     std::vector<std::uint64_t> revisions(circuit.next_variable_, 0U);
     std::priority_queue<
         PlannerCandidate,
@@ -111,9 +132,8 @@ TensorContractionPlan::TensorContractionPlan(const TensorNetworkCircuit& circuit
         if (incidence[variable].empty()) {
             return;
         }
-        const std::vector<VariableId> variables = bucket_union(incidence[variable], scopes);
         candidates.push({
-            compiled_binary_entries(variables.size()),
+            compiled_binary_entries(candidate_union_size(incidence[variable])),
             variable,
             revisions[variable],
         });

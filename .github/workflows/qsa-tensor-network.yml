@@ -30,6 +30,22 @@ jobs:
           qstate_tensor_contraction_plan_tests
           qstate_tensor_network_benchmark
           qstate_tensor_contraction_plan_benchmark
+      - name: Build planner scaling evidence
+        run: >-
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic
+          -Iinclude benchmarks/tensor_planner_scaling.cpp build/libqstate_core.a -pthread
+          -o build/qstate_tensor_planner_scaling_benchmark
+      - name: Build parent planner control
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=2 origin "${{ github.event.pull_request.head.sha }}"
+          git worktree add ../qsa-parent "${{ github.event.pull_request.head.sha }}^"
+          cmake -S ../qsa-parent -B ../qsa-parent-build -DCMAKE_BUILD_TYPE=Release -DQSTATE_BUILD_EXAMPLES=OFF -DQSTATE_BUILD_BENCHMARKS=OFF
+          cmake --build ../qsa-parent-build --config Release --parallel 2 --target qstate_core
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic \
+            -I../qsa-parent/include ../qsa-parent/benchmarks/tensor_planner_scaling.cpp \
+            ../qsa-parent-build/libqstate_core.a -pthread \
+            -o ../qsa-parent-build/qstate_tensor_planner_scaling_benchmark
       - name: Run exactness and collapse gates
         run: |
           ./build/qstate_tensor_network_tests
@@ -38,10 +54,45 @@ jobs:
         run: |
           ./build/qstate_tensor_network_benchmark | tee tensor_network_evidence.txt
           ./build/qstate_tensor_contraction_plan_benchmark | tee tensor_plan_evidence.txt
+          ./build/qstate_tensor_planner_scaling_benchmark | tee tensor_planner_current.txt
+      - name: Run matched parent planner control
+        if: github.event_name == 'pull_request'
+        run: |
+          ../qsa-parent-build/qstate_tensor_planner_scaling_benchmark | tee tensor_planner_parent.txt
+          python - <<'PY' | tee tensor_planner_comparison.txt
+          from pathlib import Path
+
+          def load(path):
+              result = {}
+              current = None
+              for raw in Path(path).read_text().splitlines():
+                  key, value = raw.split("=", 1)
+                  if key == "tensor_planner_qubits":
+                      current = int(value)
+                      result[current] = {}
+                  elif current is not None:
+                      result[current][key] = float(value)
+              return result
+
+          parent = load("tensor_planner_parent.txt")
+          current = load("tensor_planner_current.txt")
+          for qubits in (1000, 5000, 30000):
+              before = parent[qubits]["tensor_planner_compile_ms"]
+              after = current[qubits]["tensor_planner_compile_ms"]
+              print(f"tensor_planner_same_run_qubits={qubits}")
+              print(f"tensor_planner_parent_compile_ms={before:.12g}")
+              print(f"tensor_planner_current_compile_ms={after:.12g}")
+              print(f"tensor_planner_compile_speedup={before / after:.12g}")
+          PY
       - name: Hash evidence
         run: |
           sha256sum tensor_network_evidence.txt | tee tensor_network_evidence.sha256
           sha256sum tensor_plan_evidence.txt | tee tensor_plan_evidence.sha256
+          sha256sum tensor_planner_current.txt | tee tensor_planner_current.sha256
+          if [ -f tensor_planner_parent.txt ]; then
+            sha256sum tensor_planner_parent.txt | tee tensor_planner_parent.sha256
+            sha256sum tensor_planner_comparison.txt | tee tensor_planner_comparison.sha256
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: qsa-tensor-network-evidence
@@ -50,3 +101,10 @@ jobs:
             tensor_network_evidence.sha256
             tensor_plan_evidence.txt
             tensor_plan_evidence.sha256
+            tensor_planner_current.txt
+            tensor_planner_current.sha256
+            tensor_planner_parent.txt
+            tensor_planner_parent.sha256
+            tensor_planner_comparison.txt
+            tensor_planner_comparison.sha256
+          if-no-files-found: ignore
