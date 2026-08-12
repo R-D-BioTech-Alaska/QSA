@@ -1,0 +1,94 @@
+name: QSA Marginal TTN Execution Broker
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qbroker.hpp"
+      - "include/qubit/qttn.hpp"
+      - "include/qubit/qttn_marginal.hpp"
+      - "src/qbroker.cpp"
+      - "src/qstate.cpp"
+      - "tests/test_execution_broker_ttn.cpp"
+      - ".github/workflows/qsa-execution-broker-ttn.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  marginal-ttn-broker:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create focused build
+        shell: bash
+        run: |
+          mkdir -p ttn-broker-driver
+          cat > ttn-broker-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSATreeTensorBrokerCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_ENABLE_IPO OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa)
+          enable_testing()
+          add_executable(ttn_broker_tests ../tests/test_execution_broker_ttn.cpp)
+          target_link_libraries(ttn_broker_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(ttn_broker_tests PRIVATE /W4)
+          else()
+              target_compile_options(ttn_broker_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME ttn_broker_tests COMMAND ttn_broker_tests)
+          EOF
+      - name: Configure
+        run: cmake -S ttn-broker-driver -B ttn-broker-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build ttn-broker-build --target ttn_broker_tests --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir ttn-broker-build -C Release --output-on-failure
+
+  marginal-ttn-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create sanitizer build
+        run: |
+          mkdir -p ttn-broker-driver
+          cat > ttn-broker-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSATreeTensorBrokerSanitizer LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_ENABLE_IPO OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa)
+          enable_testing()
+          add_executable(ttn_broker_tests ../tests/test_execution_broker_ttn.cpp)
+          target_link_libraries(ttn_broker_tests PRIVATE qstate_core)
+          target_compile_options(ttn_broker_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          add_test(NAME ttn_broker_tests COMMAND ttn_broker_tests)
+          EOF
+      - name: Configure ASan and UBSan
+        run: >-
+          cmake -S ttn-broker-driver -B ttn-broker-sanitize
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build ttn-broker-sanitize --target ttn_broker_tests --parallel 2
+      - name: Run
+        run: ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ctest --test-dir ttn-broker-sanitize --output-on-failure
