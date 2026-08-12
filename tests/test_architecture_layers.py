@@ -38,6 +38,10 @@ STRUCTURAL_FILES = (
     "include/qubit/qfactor.hpp",
     "include/qubit/qfactor_chain.hpp",
     "include/qubit/qfactor_broker.hpp",
+    "include/qubit/qqtt.hpp",
+    "include/qubit/qtropical_qtt.hpp",
+    "include/qubit/qpersistent_tropical_qtt.hpp",
+    "include/qubit/qqtt_operator.hpp",
     "src/qfactor.cpp",
 )
 
