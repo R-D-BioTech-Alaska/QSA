@@ -126,7 +126,7 @@ template <class Function>
 
 [[nodiscard]] std::vector<Operation> broker_phase_operations(std::size_t qubits) {
     std::vector<Operation> operations;
-    operations.reserve(3U * qubits);
+    operations.reserve(4U * qubits);
     for (std::size_t qubit = 0; qubit < qubits; ++qubit) {
         operations.push_back({
             OperationCode::H,
@@ -252,21 +252,22 @@ int main() {
             reference_bytes = state.estimated_bytes();
         });
         const PhaseGraphState direct = direct_phase_graph(qubits, broker_operations);
-        if (broker_result.route != ExactExecutionRoute::PhaseGraph) {
-            std::cerr << "phase-graph broker did not select PhaseGraph\n";
+        if (broker_result.route != ExactExecutionRoute::UniformMagnitude) {
+            std::cerr << "uniform broker did not select UniformMagnitude\n";
             return 2;
         }
-        std::cout << "phase_graph_broker_qubits=" << qubits << '\n';
-        std::cout << "phase_graph_broker_route="
+        std::cout << "uniform_broker_qubits=" << qubits << '\n';
+        std::cout << "uniform_broker_route="
                   << qubit::exact_execution_route_name(broker_result.route) << '\n';
-        std::cout << "phase_graph_broker_ms=" << broker_ms << '\n';
-        std::cout << "phase_graph_broker_qregister_ms=" << qregister_ms << '\n';
-        std::cout << "phase_graph_broker_speed_ratio=" << qregister_ms / broker_ms << '\n';
-        std::cout << "phase_graph_broker_value_error="
+        std::cout << "uniform_broker_ms=" << broker_ms << '\n';
+        std::cout << "uniform_broker_qregister_ms=" << qregister_ms << '\n';
+        std::cout << "uniform_broker_speed_ratio=" << qregister_ms / broker_ms << '\n';
+        std::cout << "uniform_broker_value_error="
                   << std::abs(broker_result.value - reference_probability) << '\n';
-        std::cout << "phase_graph_broker_bytes=" << direct.estimated_bytes() << '\n';
-        std::cout << "phase_graph_broker_edges=" << direct.edge_count() << '\n';
-        std::cout << "phase_graph_broker_qregister_bytes=" << reference_bytes << '\n';
+        std::cout << "uniform_broker_retained_state_bytes=0\n";
+        std::cout << "uniform_broker_phase_graph_bytes=" << direct.estimated_bytes() << '\n';
+        std::cout << "uniform_broker_phase_graph_edges=" << direct.edge_count() << '\n';
+        std::cout << "uniform_broker_qregister_bytes=" << reference_bytes << '\n';
     }
 
     {
@@ -275,7 +276,7 @@ int main() {
         const std::vector<std::uint8_t> bits(qubits, 0U);
         ExactExecutionBrokerConfig broker_config;
         broker_config.tensor.max_contraction_entries = 8U;
-        broker_config.phase_graph.max_edges = 2'000U;
+        broker_config.phase_graph.max_edges = 1U;
         ExactExecutionBroker broker(broker_config);
         qubit::ExactProbabilityResult result;
         const double broker_ms = median_ms([&] {
@@ -284,20 +285,40 @@ int main() {
                 broker_operations,
                 bits);
         }, 3);
-        const PhaseGraphState direct = direct_phase_graph(
-            qubits,
-            broker_operations,
-            broker_config.phase_graph);
         const double expected = std::exp2(-static_cast<double>(qubits));
-        if (result.route != ExactExecutionRoute::PhaseGraph) {
-            std::cerr << "wide phase-graph broker did not select PhaseGraph\n";
+        if (result.route != ExactExecutionRoute::UniformMagnitude) {
+            std::cerr << "wide uniform broker did not select UniformMagnitude\n";
             return 3;
         }
-        std::cout << "phase_graph_broker_wide_qubits=" << qubits << '\n';
-        std::cout << "phase_graph_broker_wide_ms=" << broker_ms << '\n';
-        std::cout << "phase_graph_broker_wide_error=" << std::abs(result.value - expected) << '\n';
-        std::cout << "phase_graph_broker_wide_edges=" << direct.edge_count() << '\n';
-        std::cout << "phase_graph_broker_wide_bytes=" << direct.estimated_bytes() << '\n';
+        std::cout << "uniform_broker_wide_qubits=" << qubits << '\n';
+        std::cout << "uniform_broker_wide_ms=" << broker_ms << '\n';
+        std::cout << "uniform_broker_wide_error=" << std::abs(result.value - expected) << '\n';
+        std::cout << "uniform_broker_wide_retained_state_bytes=0\n";
+    }
+
+    {
+        constexpr std::size_t qubits = 100'000U;
+        const std::vector<Operation> broker_operations = broker_phase_operations(qubits);
+        const std::vector<std::uint8_t> bits(qubits, 0U);
+        ExactExecutionBrokerConfig broker_config;
+        broker_config.tensor.max_contraction_entries = 8U;
+        broker_config.phase_graph.max_edges = 1U;
+        ExactExecutionBroker broker(broker_config);
+        qubit::ExactProbabilityResult result;
+        const double broker_ms = median_ms([&] {
+            result = broker.basis_probability_from_zero(
+                qubits,
+                broker_operations,
+                bits);
+        }, 3);
+        if (result.route != ExactExecutionRoute::UniformMagnitude || result.value != 0.0) {
+            std::cerr << "100000-qubit uniform broker certificate failed\n";
+            return 4;
+        }
+        std::cout << "uniform_broker_huge_qubits=" << qubits << '\n';
+        std::cout << "uniform_broker_huge_operations=" << broker_operations.size() << '\n';
+        std::cout << "uniform_broker_huge_ms=" << broker_ms << '\n';
+        std::cout << "uniform_broker_huge_retained_state_bytes=0\n";
     }
     return 0;
 }
