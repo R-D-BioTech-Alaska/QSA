@@ -14,6 +14,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using qubit::ExactFactorBrokerPlan;
 using qubit::ExactFactorBrokerRoute;
+using qubit::ExactFactorChainPlan;
 using qubit::ExactFactorConfig;
 using qubit::ExactFactorGraph;
 using qubit::ExactFactorPlan;
@@ -120,6 +121,13 @@ int main() {
         generic_values = generic.evaluate(generic_workspace);
     }, 101);
 
+    ExactFactorChainPlan direct_chain(graph, retained);
+    auto direct_chain_workspace = direct_chain.workspace();
+    std::vector<QComplex> direct_chain_values;
+    const double direct_chain_query_ms = median_ms([&] {
+        direct_chain_values = direct_chain.evaluate(direct_chain_workspace);
+    }, 101);
+
     ExactFactorBrokerPlan broker(graph, retained);
     if (broker.route() != ExactFactorBrokerRoute::ChainTransfer ||
         !broker.chain_rejection().empty()) {
@@ -137,6 +145,12 @@ int main() {
             throw std::runtime_error("broker compile lost ChainTransfer eligibility");
         }
     }, 11);
+    const double direct_chain_compile_ms = median_ms([&] {
+        ExactFactorChainPlan candidate(graph, retained);
+        if (candidate.stats().factor_count != factors) {
+            throw std::runtime_error("direct ChainTransfer compile lost source factors");
+        }
+    }, 11);
 
     std::array<QComplex, 4> control{};
     const double specialized_ms = median_ms([&] {
@@ -145,7 +159,9 @@ int main() {
 
     const double broker_control_error = max_error(broker_values, control);
     const double broker_generic_error = max_error(broker_values, generic_values);
-    if (broker_control_error > 2e-9 || broker_generic_error > 2e-9) {
+    const double broker_direct_chain_error = max_error(broker_values, direct_chain_values);
+    if (broker_control_error > 2e-9 || broker_generic_error > 2e-9 ||
+        broker_direct_chain_error > 2e-9) {
         std::cerr << "exact factor broker benchmark mismatch\n";
         return 1;
     }
@@ -207,18 +223,42 @@ int main() {
     static_cast<void>(fallback_graph.add_dense_factor(first, fallback_values));
     static_cast<void>(fallback_graph.add_dense_factor(second, fallback_values));
     const std::array<FactorVariableId, 1> fallback_retained{{c}};
+
     ExactFactorBrokerPlan fallback(fallback_graph, fallback_retained);
     if (fallback.route() != ExactFactorBrokerRoute::VariableElimination ||
         fallback.chain_rejection().empty()) {
         std::cerr << "exact factor broker did not fail closed to variable elimination\n";
         return 1;
     }
+    ExactFactorPlan fallback_generic(fallback_graph, fallback_retained);
+    auto fallback_workspace = fallback.workspace();
+    auto fallback_generic_workspace = fallback_generic.workspace();
+    std::vector<QComplex> fallback_values_broker;
+    std::vector<QComplex> fallback_values_generic;
+    const double fallback_query_ms = median_ms([&] {
+        fallback_values_broker = fallback.evaluate(fallback_workspace);
+    }, 101);
+    const double fallback_generic_query_ms = median_ms([&] {
+        fallback_values_generic = fallback_generic.evaluate(fallback_generic_workspace);
+    }, 101);
     const double fallback_error = max_error(
-        fallback.evaluate(), fallback_graph.marginal(fallback_retained));
+        fallback_values_broker, fallback_values_generic);
     if (fallback_error > 2e-9) {
         std::cerr << "exact factor broker fallback mismatch\n";
         return 1;
     }
+    const double fallback_compile_ms = median_ms([&] {
+        ExactFactorBrokerPlan candidate(fallback_graph, fallback_retained);
+        if (candidate.route() != ExactFactorBrokerRoute::VariableElimination) {
+            throw std::runtime_error("fallback broker compile selected wrong route");
+        }
+    }, 101);
+    const double fallback_generic_compile_ms = median_ms([&] {
+        ExactFactorPlan candidate(fallback_graph, fallback_retained);
+        if (candidate.output_entries() != 2U) {
+            throw std::runtime_error("direct fallback compile produced wrong output size");
+        }
+    }, 101);
 
     std::cout << "broker_variables=" << variables << '\n';
     std::cout << "broker_factors=" << factors << '\n';
@@ -226,13 +266,18 @@ int main() {
     std::cout << "broker_route=" << broker.route_name() << '\n';
     std::cout << "broker_chain_rejection_empty=" << broker.chain_rejection().empty() << '\n';
     std::cout << "broker_compile_ms=" << broker_compile_ms << '\n';
+    std::cout << "broker_direct_chain_compile_ms=" << direct_chain_compile_ms << '\n';
+    std::cout << "broker_compile_over_direct_chain=" << broker_compile_ms / direct_chain_compile_ms << '\n';
     std::cout << "broker_query_ms=" << broker_query_ms << '\n';
+    std::cout << "broker_direct_chain_query_ms=" << direct_chain_query_ms << '\n';
+    std::cout << "broker_query_over_direct_chain=" << broker_query_ms / direct_chain_query_ms << '\n';
     std::cout << "broker_generic_query_ms=" << generic_query_ms << '\n';
     std::cout << "broker_over_generic_speed=" << generic_query_ms / broker_query_ms << '\n';
     std::cout << "broker_specialized_control_ms=" << specialized_ms << '\n';
     std::cout << "broker_specialized_over_broker_ratio=" << specialized_ms / broker_query_ms << '\n';
     std::cout << "broker_control_error=" << broker_control_error << '\n';
     std::cout << "broker_generic_error=" << broker_generic_error << '\n';
+    std::cout << "broker_direct_chain_error=" << broker_direct_chain_error << '\n';
     std::cout << "broker_plan_bytes=" << broker.estimated_bytes() << '\n';
     std::cout << "broker_workspace_bytes=" << broker_workspace.estimated_bytes() << '\n';
     std::cout << "broker_generic_plan_bytes=" << generic.estimated_bytes() << '\n';
@@ -245,6 +290,12 @@ int main() {
     std::cout << "broker_generic_update_error=" << generic_update_error << '\n';
     std::cout << "broker_fallback_route=" << fallback.route_name() << '\n';
     std::cout << "broker_fallback_reason_visible=" << !fallback.chain_rejection().empty() << '\n';
+    std::cout << "broker_fallback_query_ms=" << fallback_query_ms << '\n';
+    std::cout << "broker_fallback_generic_query_ms=" << fallback_generic_query_ms << '\n';
+    std::cout << "broker_fallback_query_over_generic=" << fallback_query_ms / fallback_generic_query_ms << '\n';
+    std::cout << "broker_fallback_compile_ms=" << fallback_compile_ms << '\n';
+    std::cout << "broker_fallback_generic_compile_ms=" << fallback_generic_compile_ms << '\n';
+    std::cout << "broker_fallback_compile_over_generic=" << fallback_compile_ms / fallback_generic_compile_ms << '\n';
     std::cout << "broker_fallback_error=" << fallback_error << '\n';
     return 0;
 }
