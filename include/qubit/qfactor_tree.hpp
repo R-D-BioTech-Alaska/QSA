@@ -32,17 +32,13 @@ public:
     ExactFactorTreeWorkspace() = default;
 
     [[nodiscard]] std::size_t estimated_bytes() const noexcept {
-        std::size_t bytes = sizeof(*this) +
-                            messages_.capacity() * sizeof(std::vector<QComplex>) +
-                            root_.capacity() * sizeof(QComplex);
-        for (const auto& message : messages_) {
-            bytes += message.capacity() * sizeof(QComplex);
-        }
-        return bytes;
+        return sizeof(*this) +
+               messages_.capacity() * sizeof(QComplex) +
+               root_.capacity() * sizeof(QComplex);
     }
 
 private:
-    std::vector<std::vector<QComplex>> messages_{};
+    std::vector<QComplex> messages_{};
     std::vector<QComplex> root_{};
 
     friend class ExactFactorTreePlan;
@@ -161,15 +157,14 @@ public:
             }
         }
 
-        message_slot_.assign(node_count, no_parent);
-        message_entries_.reserve(postorder_.size());
-        for (std::size_t slot = 0U; slot < postorder_.size(); ++slot) {
-            const std::size_t node = postorder_[slot];
+        message_offset_.assign(node_count, no_parent);
+        message_size_.assign(node_count, 0U);
+        for (const std::size_t node : postorder_) {
             const std::size_t entries = node < variable_count
                 ? dimensions_[node]
                 : dimensions_[parent_[node]];
-            message_slot_[node] = slot;
-            message_entries_.push_back(entries);
+            message_offset_[node] = stats_.message_entries;
+            message_size_[node] = entries;
             stats_.max_message_entries = std::max(stats_.max_message_entries, entries);
             if (stats_.message_entries >
                 std::numeric_limits<std::size_t>::max() - entries) {
@@ -190,10 +185,7 @@ public:
 
     [[nodiscard]] ExactFactorTreeWorkspace workspace() const {
         ExactFactorTreeWorkspace result;
-        result.messages_.resize(message_entries_.size());
-        for (std::size_t slot = 0U; slot < message_entries_.size(); ++slot) {
-            result.messages_[slot].resize(message_entries_[slot]);
-        }
+        result.messages_.resize(stats_.message_entries);
         result.root_.resize(dimensions_[root_variable_]);
         return result;
     }
@@ -218,18 +210,26 @@ public:
         }
         validate_workspace(workspace_value);
         const std::size_t variable_count = dimensions_.size();
+        const auto message = [&](std::size_t node) {
+            return std::span<QComplex>(
+                workspace_value.messages_.data() + message_offset_[node],
+                message_size_[node]);
+        };
+        const auto const_message = [&](std::size_t node) {
+            return std::span<const QComplex>(
+                workspace_value.messages_.data() + message_offset_[node],
+                message_size_[node]);
+        };
 
         for (const std::size_t node : postorder_) {
-            const std::size_t slot = message_slot_[node];
-            std::vector<QComplex>& target = workspace_value.messages_[slot];
+            std::span<QComplex> target = message(node);
             if (node < variable_count) {
                 std::fill(target.begin(), target.end(), QComplex{1.0, 0.0});
                 for (const std::size_t neighbor : adjacency_[node]) {
                     if (neighbor == parent_[node]) {
                         continue;
                     }
-                    const std::size_t child_slot = message_slot_[neighbor];
-                    const std::vector<QComplex>& child = workspace_value.messages_[child_slot];
+                    const std::span<const QComplex> child = const_message(neighbor);
                     for (std::size_t value = 0U; value < target.size(); ++value) {
                         target[value] *= child[value];
                     }
@@ -256,8 +256,8 @@ public:
                         parent_value = coordinate;
                         continue;
                     }
-                    const std::size_t child_slot = message_slot_[variable];
-                    value *= workspace_value.messages_[child_slot][coordinate];
+                    value *= workspace_value.messages_[
+                        message_offset_[variable] + coordinate];
                     if (value.re == 0.0 && value.im == 0.0) {
                         return;
                     }
@@ -281,8 +281,7 @@ public:
             workspace_value.root_.end(),
             QComplex{1.0, 0.0});
         for (const std::size_t neighbor : adjacency_[root_variable_]) {
-            const std::size_t child_slot = message_slot_[neighbor];
-            const std::vector<QComplex>& child = workspace_value.messages_[child_slot];
+            const std::span<const QComplex> child = const_message(neighbor);
             for (std::size_t value = 0U; value < workspace_value.root_.size(); ++value) {
                 workspace_value.root_[value] *= child[value];
             }
@@ -418,8 +417,8 @@ public:
                             adjacency_.capacity() * sizeof(std::vector<std::size_t>) +
                             parent_.capacity() * sizeof(std::size_t) +
                             postorder_.capacity() * sizeof(std::size_t) +
-                            message_slot_.capacity() * sizeof(std::size_t) +
-                            message_entries_.capacity() * sizeof(std::size_t);
+                            message_offset_.capacity() * sizeof(std::size_t) +
+                            message_size_.capacity() * sizeof(std::size_t);
         for (const SourceFactor& factor : sources_) {
             bytes += factor.variables.capacity() * sizeof(FactorVariableId) +
                      factor.strides.capacity() * sizeof(std::size_t) +
@@ -449,8 +448,8 @@ private:
     std::vector<std::vector<std::size_t>> adjacency_{};
     std::vector<std::size_t> parent_{};
     std::vector<std::size_t> postorder_{};
-    std::vector<std::size_t> message_slot_{};
-    std::vector<std::size_t> message_entries_{};
+    std::vector<std::size_t> message_offset_{};
+    std::vector<std::size_t> message_size_{};
     ExactFactorTreeStats stats_{};
     FactorVariableId root_variable_{0U};
     std::size_t rebind_count_{0U};
@@ -468,14 +467,9 @@ private:
     }
 
     void validate_workspace(const ExactFactorTreeWorkspace& workspace_value) const {
-        if (workspace_value.messages_.size() != message_entries_.size() ||
+        if (workspace_value.messages_.size() != stats_.message_entries ||
             workspace_value.root_.size() != dimensions_[root_variable_]) {
             throw QStateError("Exact factor tree workspace does not match its plan");
-        }
-        for (std::size_t slot = 0U; slot < message_entries_.size(); ++slot) {
-            if (workspace_value.messages_[slot].size() != message_entries_[slot]) {
-                throw QStateError("Exact factor tree workspace message shape does not match its plan");
-            }
         }
     }
 };
