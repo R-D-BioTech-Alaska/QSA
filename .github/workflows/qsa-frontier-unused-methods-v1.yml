@@ -1,0 +1,107 @@
+name: QSA Frontier Unused Methods v1
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/frontier_gaussian_bosonic_v1.py"
+      - "benchmarks/frontier_coherent_router_v1.py"
+      - ".github/workflows/qsa-frontier-unused-methods-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-frontier-unused-methods-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONFAULTHANDLER: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONHASHSEED: "0"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+
+jobs:
+  frontier-assays:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out frontier branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bounded dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.2.6
+
+      - name: Compile frontier assays
+        run: |
+          python -m py_compile \
+            benchmarks/frontier_gaussian_bosonic_v1.py \
+            benchmarks/frontier_coherent_router_v1.py
+
+      - name: Run Gaussian bosonic assay
+        run: |
+          python benchmarks/frontier_gaussian_bosonic_v1.py \
+            --output frontier-gaussian-bosonic-v1.json \
+            | tee frontier-gaussian-bosonic-v1.txt
+
+      - name: Run coherent routing assay
+        run: |
+          python benchmarks/frontier_coherent_router_v1.py \
+            --output frontier-coherent-router-v1.json \
+            | tee frontier-coherent-router-v1.txt
+
+      - name: Summarize evidence
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          gaussian = json.loads(Path("frontier-gaussian-bosonic-v1.json").read_text(encoding="utf-8"))
+          router = json.loads(Path("frontier-coherent-router-v1.json").read_text(encoding="utf-8"))
+
+          print("gaussian_passed=", gaussian["passed"])
+          print("gaussian_analytic_checks=", gaussian["analytic_checks"])
+          print("gaussian_largest_scaling=", gaussian["gaussian_scaling"][-1])
+          print("fixed_particle_largest_scaling=", gaussian["fixed_particle_fock_scaling"][-1])
+          print("router_passed=", router["passed"])
+          print("router_paired_phase=", router["paired_phase_assay"])
+          print("router_phase_code=", router["orthogonal_phase_code_assay"])
+          print("router_largest_scaling=", router["scaling"][-1])
+
+          if not gaussian["passed"] or not router["passed"]:
+              raise SystemExit(1)
+          PY
+
+      - name: Hash frontier evidence
+        run: |
+          sha256sum \
+            frontier-gaussian-bosonic-v1.json \
+            frontier-coherent-router-v1.json \
+            benchmarks/frontier_gaussian_bosonic_v1.py \
+            benchmarks/frontier_coherent_router_v1.py \
+            .github/workflows/qsa-frontier-unused-methods-v1.yml \
+            > qsa-frontier-unused-methods-v1.sha256
+
+      - name: Upload frontier evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: qsa-frontier-unused-methods-v1-${{ github.run_id }}
+          path: |
+            frontier-gaussian-bosonic-v1.json
+            frontier-gaussian-bosonic-v1.txt
+            frontier-coherent-router-v1.json
+            frontier-coherent-router-v1.txt
+            qsa-frontier-unused-methods-v1.sha256
+          if-no-files-found: error
+          retention-days: 90
