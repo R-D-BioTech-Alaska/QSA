@@ -2,6 +2,8 @@
 
 #include "qubit/qstate.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -132,6 +134,74 @@ public:
         ExactFactorWorkspace& workspace) const;
 
     void rebind(const ExactFactorGraph& graph);
+
+    void rebind_dense_factor(FactorId factor, std::span<const QComplex> values) {
+        const std::size_t index = static_cast<std::size_t>(factor);
+        if (index >= graph_factor_count_) {
+            throw QStateError("Exact factor targeted rebind factor is out of range");
+        }
+        SourceFactor& source = sources_[index];
+        if (values.size() != source.logical_entries) {
+            throw QStateError("Exact factor targeted dense rebind size changed");
+        }
+        std::vector<QComplex> replacement(values.begin(), values.end());
+        if (!std::all_of(
+                replacement.begin(), replacement.end(),
+                [](const QComplex& value) {
+                    return std::isfinite(value.re) && std::isfinite(value.im);
+                })) {
+            throw QStateError("Exact factor targeted dense rebind contains non-finite values");
+        }
+
+        const FactorStorageMode previous = source.storage;
+        source.storage = FactorStorageMode::Dense;
+        source.dense = std::move(replacement);
+        source.sparse = {};
+        if (previous == FactorStorageMode::Sparse) {
+            --stats_.source_sparse_factors;
+            ++stats_.source_dense_factors;
+        }
+        ++rebind_count_;
+    }
+
+    void rebind_sparse_factor(
+        FactorId factor,
+        std::span<const FactorSparseEntry> entries) {
+        const std::size_t index = static_cast<std::size_t>(factor);
+        if (index >= graph_factor_count_) {
+            throw QStateError("Exact factor targeted rebind factor is out of range");
+        }
+        SourceFactor& source = sources_[index];
+        std::vector<FactorSparseEntry> replacement(entries.begin(), entries.end());
+        for (const FactorSparseEntry& entry : replacement) {
+            if (entry.index >= source.logical_entries) {
+                throw QStateError("Exact factor targeted sparse rebind index is out of range");
+            }
+            if (!std::isfinite(entry.value.re) || !std::isfinite(entry.value.im)) {
+                throw QStateError("Exact factor targeted sparse rebind contains non-finite values");
+            }
+        }
+        std::sort(
+            replacement.begin(), replacement.end(),
+            [](const FactorSparseEntry& lhs, const FactorSparseEntry& rhs) {
+                return lhs.index < rhs.index;
+            });
+        for (std::size_t entry = 1U; entry < replacement.size(); ++entry) {
+            if (replacement[entry - 1U].index == replacement[entry].index) {
+                throw QStateError("Exact factor targeted sparse rebind repeats an index");
+            }
+        }
+
+        const FactorStorageMode previous = source.storage;
+        source.storage = FactorStorageMode::Sparse;
+        source.sparse = std::move(replacement);
+        source.dense = {};
+        if (previous == FactorStorageMode::Dense) {
+            --stats_.source_dense_factors;
+            ++stats_.source_sparse_factors;
+        }
+        ++rebind_count_;
+    }
 
     [[nodiscard]] ExactFactorRoute route() const noexcept {
         return ExactFactorRoute::VariableElimination;
