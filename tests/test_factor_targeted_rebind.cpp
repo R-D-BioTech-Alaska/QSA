@@ -10,6 +10,7 @@
 
 namespace {
 
+using qubit::ExactFactorConfig;
 using qubit::ExactFactorGraph;
 using qubit::FactorId;
 using qubit::FactorSparseEntry;
@@ -49,6 +50,36 @@ int main() {
     const std::array<FactorVariableId, 1> retained{{b}};
     auto plan = graph.compile(retained);
     auto workspace = plan.workspace();
+    require(plan.stats().compiled_index_entries == 6U,
+            "bounded factor map did not compile the eligible step");
+
+    ExactFactorConfig generic_config;
+    generic_config.max_compiled_index_entries = 0U;
+    ExactFactorGraph generic_graph(generic_config);
+    const FactorVariableId ga = generic_graph.add_variable(2U);
+    const FactorVariableId gb = generic_graph.add_variable(3U);
+    const std::array<FactorVariableId, 2> generic_scope{{ga, gb}};
+    static_cast<void>(generic_graph.add_dense_factor(generic_scope, initial));
+    const std::array<FactorVariableId, 1> generic_retained{{gb}};
+    auto generic_plan = generic_graph.compile(generic_retained);
+    require(generic_plan.stats().compiled_index_entries == 0U,
+            "zero map cap did not preserve the generic evaluator");
+    require_close(plan.evaluate(workspace), generic_plan.evaluate(),
+                  "compiled and generic factor evaluators disagree");
+
+    ExactFactorConfig bounded_config;
+    bounded_config.max_compiled_index_entries = 5U;
+    ExactFactorGraph bounded_graph(bounded_config);
+    const FactorVariableId ba = bounded_graph.add_variable(2U);
+    const FactorVariableId bb = bounded_graph.add_variable(3U);
+    const std::array<FactorVariableId, 2> bounded_scope{{ba, bb}};
+    static_cast<void>(bounded_graph.add_dense_factor(bounded_scope, initial));
+    const std::array<FactorVariableId, 1> bounded_retained{{bb}};
+    auto bounded_plan = bounded_graph.compile(bounded_retained);
+    require(bounded_plan.stats().compiled_index_entries == 0U,
+            "factor map exceeded its hard plan cap");
+    require_close(bounded_plan.evaluate(), generic_plan.evaluate(),
+                  "hard map cap changed exact evaluation");
 
     const std::array<FactorSparseEntry, 3> sparse{{
         FactorSparseEntry{0U, QComplex{2.0}},
