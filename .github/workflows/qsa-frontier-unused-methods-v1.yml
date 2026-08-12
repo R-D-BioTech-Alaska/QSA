@@ -5,6 +5,10 @@ on:
     paths:
       - "benchmarks/frontier_gaussian_bosonic_v1.py"
       - "benchmarks/frontier_coherent_router_v1.py"
+      - "benchmarks/frontier_schrodinger_poisson_qtt_v1.py"
+      - "include/qubit/qgaussian.hpp"
+      - "src/qgaussian.cpp"
+      - "tests/test_gaussian_frontier.cpp"
       - ".github/workflows/qsa-frontier-unused-methods-v1.yml"
   workflow_dispatch:
 
@@ -47,7 +51,17 @@ jobs:
         run: |
           python -m py_compile \
             benchmarks/frontier_gaussian_bosonic_v1.py \
-            benchmarks/frontier_coherent_router_v1.py
+            benchmarks/frontier_coherent_router_v1.py \
+            benchmarks/frontier_schrodinger_poisson_qtt_v1.py
+
+      - name: Build native Gaussian candidate
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic \
+            -Iinclude \
+            src/qgaussian.cpp \
+            tests/test_gaussian_frontier.cpp \
+            -o qgaussian-frontier-test
+          ./qgaussian-frontier-test
 
       - name: Run Gaussian bosonic assay
         run: |
@@ -61,6 +75,12 @@ jobs:
             --output frontier-coherent-router-v1.json \
             | tee frontier-coherent-router-v1.txt
 
+      - name: Run QTT Schrodinger-Poisson assay
+        run: |
+          python benchmarks/frontier_schrodinger_poisson_qtt_v1.py \
+            --output frontier-schrodinger-poisson-qtt-v1.json \
+            | tee frontier-schrodinger-poisson-qtt-v1.txt
+
       - name: Summarize evidence
         run: |
           python - <<'PY'
@@ -69,6 +89,7 @@ jobs:
 
           gaussian = json.loads(Path("frontier-gaussian-bosonic-v1.json").read_text(encoding="utf-8"))
           router = json.loads(Path("frontier-coherent-router-v1.json").read_text(encoding="utf-8"))
+          field = json.loads(Path("frontier-schrodinger-poisson-qtt-v1.json").read_text(encoding="utf-8"))
 
           print("gaussian_passed=", gaussian["passed"])
           print("gaussian_analytic_checks=", gaussian["analytic_checks"])
@@ -78,8 +99,10 @@ jobs:
           print("router_paired_phase=", router["paired_phase_assay"])
           print("router_phase_code=", router["orthogonal_phase_code_assay"])
           print("router_largest_scaling=", router["scaling"][-1])
+          print("schrodinger_poisson_passed=", field["passed"])
+          print("schrodinger_poisson_largest=", field["cases"][-1])
 
-          if not gaussian["passed"] or not router["passed"]:
+          if not gaussian["passed"] or not router["passed"] or not field["passed"]:
               raise SystemExit(1)
           PY
 
@@ -88,8 +111,13 @@ jobs:
           sha256sum \
             frontier-gaussian-bosonic-v1.json \
             frontier-coherent-router-v1.json \
+            frontier-schrodinger-poisson-qtt-v1.json \
             benchmarks/frontier_gaussian_bosonic_v1.py \
             benchmarks/frontier_coherent_router_v1.py \
+            benchmarks/frontier_schrodinger_poisson_qtt_v1.py \
+            include/qubit/qgaussian.hpp \
+            src/qgaussian.cpp \
+            tests/test_gaussian_frontier.cpp \
             .github/workflows/qsa-frontier-unused-methods-v1.yml \
             > qsa-frontier-unused-methods-v1.sha256
 
@@ -102,6 +130,8 @@ jobs:
             frontier-gaussian-bosonic-v1.txt
             frontier-coherent-router-v1.json
             frontier-coherent-router-v1.txt
+            frontier-schrodinger-poisson-qtt-v1.json
+            frontier-schrodinger-poisson-qtt-v1.txt
             qsa-frontier-unused-methods-v1.sha256
           if-no-files-found: error
           retention-days: 90
