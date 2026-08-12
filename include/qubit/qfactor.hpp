@@ -54,6 +54,7 @@ struct ExactFactorStats {
 class ExactFactorPlan;
 class ExactFactorWorkspace;
 class ExactFactorChainPlan;
+class ExactFactorTreePlan;
 
 class ExactFactorGraph {
 public:
@@ -107,6 +108,7 @@ private:
 
     friend class ExactFactorPlan;
     friend class ExactFactorChainPlan;
+    friend class ExactFactorTreePlan;
 };
 
 class ExactFactorWorkspace {
