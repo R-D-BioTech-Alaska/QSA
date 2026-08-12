@@ -33,6 +33,7 @@ struct ExactFactorConfig {
     std::size_t max_factor_entries{1U << 20U};
     std::size_t max_factors{1'000'000U};
     std::size_t max_variables{1'000'000U};
+    std::size_t max_compiled_index_entries{1U << 20U};
 };
 
 struct ExactFactorStats {
@@ -45,6 +46,7 @@ struct ExactFactorStats {
     std::size_t peak_union_variables{0U};
     std::size_t peak_factor_entries{0U};
     std::size_t output_entries{0U};
+    std::size_t compiled_index_entries{0U};
 };
 
 class ExactFactorPlan;
@@ -237,6 +239,7 @@ private:
         std::vector<FactorVariableId> union_variables{};
         std::vector<FactorVariableId> output_variables{};
         std::vector<InputMap> inputs{};
+        std::vector<std::size_t> compiled_input_indices{};
         std::size_t selected_position{0U};
         std::size_t selected_dimension{0U};
         std::size_t output_entries{0U};
