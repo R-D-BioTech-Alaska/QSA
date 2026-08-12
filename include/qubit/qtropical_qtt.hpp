@@ -115,15 +115,19 @@ public:
                 std::vector<TropicalQTTEntry>& matrix = bit == 0U ? core.zero : core.one;
                 for (std::size_t left = 0U; left < left_rank; ++left) {
                     for (std::size_t right = 0U; right < right_rank; ++right) {
-                        const std::int64_t difference =
-                            static_cast<std::int64_t>(left) - static_cast<std::int64_t>(right);
-                        const std::int64_t square = difference * difference;
-                        const std::int64_t base = checked_cost_product(
+                        const std::size_t distance = left > right ? left - right : right - left;
+                        const std::int64_t distance_cost = checked_size_to_cost(distance);
+                        const std::int64_t square = checked_nonnegative_cost_product(
+                            distance_cost, distance_cost);
+                        const std::int64_t base = checked_nonnegative_cost_product(
                             checked_size_to_cost(position + 3U),
                             static_cast<std::int64_t>(bit) + 1);
+                        const std::int64_t left_mod = static_cast<std::int64_t>(
+                            ((left % 29U) + 1U) % 29U);
+                        const std::int64_t right_mod = static_cast<std::int64_t>(
+                            ((right % 29U) + 1U) % 29U);
                         const std::int64_t mix = positive_mod(
-                            seed_mod * static_cast<std::int64_t>(left + 1U) +
-                                7 * static_cast<std::int64_t>(right + 1U) +
+                            seed_mod * left_mod + 7 * right_mod +
                                 11 * static_cast<std::int64_t>(bit) +
                                 static_cast<std::int64_t>(position % 29U),
                             29);
@@ -352,23 +356,16 @@ private:
         return left + right;
     }
 
-    [[nodiscard]] static std::int64_t checked_cost_product(
+    [[nodiscard]] static std::int64_t checked_nonnegative_cost_product(
         std::int64_t left,
         std::int64_t right) {
-        if (left == 0 || right == 0) {
-            return 0;
+        if (left < 0 || right < 0) {
+            throw QStateError("Tropical QTT nonnegative cost product received a negative term");
         }
-        if (left == -1 && right == std::numeric_limits<std::int64_t>::min()) {
+        if (left != 0 && right > std::numeric_limits<std::int64_t>::max() / left) {
             throw QStateError("Tropical QTT integer cost overflowed");
         }
-        if (right == -1 && left == std::numeric_limits<std::int64_t>::min()) {
-            throw QStateError("Tropical QTT integer cost overflowed");
-        }
-        const std::int64_t result = left * right;
-        if (result / right != left) {
-            throw QStateError("Tropical QTT integer cost overflowed");
-        }
-        return result;
+        return left * right;
     }
 
     [[nodiscard]] static std::int64_t checked_size_to_cost(std::size_t value) {
