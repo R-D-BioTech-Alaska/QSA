@@ -56,6 +56,9 @@ public:
     void apply_cz(std::size_t first, std::size_t second);
 
     [[nodiscard]] QComplex amplitude(std::span<const std::uint8_t> bits) const;
+    [[nodiscard]] double marginal_probability(
+        std::span<const QubitId> qubits,
+        std::span<const std::uint8_t> bits) const;
     [[nodiscard]] QComplex pauli_expectation(std::span<const PauliAxis> axes) const;
     [[nodiscard]] QComplex expectation(const PauliObservable& observable) const;
     [[nodiscard]] double norm2() const;
@@ -86,6 +89,9 @@ public:
         return environment_scalar_count_;
     }
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
+    [[nodiscard]] double marginal_probability(
+        std::span<const QubitId> qubits,
+        std::span<const std::uint8_t> bits) const;
     [[nodiscard]] QComplex term_expectation(std::span<const PauliFactor> factors) const;
     [[nodiscard]] QComplex expectation(const PauliObservable& observable) const;
 
