@@ -140,7 +140,14 @@ double QRegister::marginal_probability(
         return 1.0;
     }
 
-    std::vector<std::int8_t> requested(qubit_count_, -1);
+    struct Constraint {
+        std::size_t component{0U};
+        QubitId qubit{0U};
+        std::uint8_t bit{0U};
+    };
+
+    std::vector<Constraint> constraints;
+    constraints.reserve(qubits.size());
     for (std::size_t index = 0U; index < qubits.size(); ++index) {
         const QubitId qubit = qubits[index];
         if (static_cast<std::size_t>(qubit) >= qubit_count_) {
@@ -149,45 +156,59 @@ double QRegister::marginal_probability(
         if (bits[index] > 1U) {
             throw QStateError("Marginal query bits must be zero or one");
         }
-        if (requested[qubit] >= 0) {
-            throw QStateError("Marginal query contains duplicate qubits");
-        }
-        requested[qubit] = static_cast<std::int8_t>(bits[index]);
+        constraints.push_back({component_index(qubit), qubit, bits[index]});
     }
 
+    std::sort(constraints.begin(), constraints.end(), [](const Constraint& first, const Constraint& second) {
+        return first.qubit < second.qubit;
+    });
+    for (std::size_t index = 1U; index < constraints.size(); ++index) {
+        if (constraints[index - 1U].qubit == constraints[index].qubit) {
+            throw QStateError("Marginal query contains duplicate qubits");
+        }
+    }
+    std::sort(constraints.begin(), constraints.end(), [](const Constraint& first, const Constraint& second) {
+        if (first.component != second.component) {
+            return first.component < second.component;
+        }
+        return first.qubit < second.qubit;
+    });
+
     long double probability = 1.0L;
-    for (const StateComponent& component : components_) {
+    std::size_t begin = 0U;
+    while (begin < constraints.size()) {
+        const std::size_t component_index_value = constraints[begin].component;
+        std::size_t end = begin + 1U;
+        while (end < constraints.size() &&
+               constraints[end].component == component_index_value) {
+            ++end;
+        }
+
+        const StateComponent& component = components_[component_index_value];
         if (component.is_cell()) {
-            const QubitId qubit = component.qubits.front();
-            const std::int8_t bit = requested[qubit];
-            if (bit < 0) {
-                continue;
-            }
             const double one = std::get<BlochCell>(component.state).probability_one();
-            probability *= static_cast<long double>(bit != 0 ? one : 1.0 - one);
+            probability *= static_cast<long double>(
+                constraints[begin].bit != 0U ? one : 1.0 - one);
+            begin = end;
             continue;
         }
 
         BasisIndex mask = 0U;
         BasisIndex expected = 0U;
-        for (std::size_t position = 0U; position < component.qubits.size(); ++position) {
-            const std::int8_t bit = requested[component.qubits[position]];
-            if (bit < 0) {
-                continue;
-            }
+        for (std::size_t index = begin; index < end; ++index) {
+            const std::size_t position = local_position(component, constraints[index].qubit);
             const BasisIndex local_bit = BasisIndex{1} << position;
             mask |= local_bit;
-            if (bit != 0) {
+            if (constraints[index].bit != 0U) {
                 expected |= local_bit;
             }
-        }
-        if (mask == 0U) {
-            continue;
         }
 
         const AmplitudeStore& store = std::get<AmplitudeStore>(component.state);
         long double local_probability = 0.0L;
-        if (store.mode_ == StorageMode::Sparse) {
+        if (mask == store.dimension_ - 1U) {
+            local_probability = static_cast<long double>(store.at(expected).norm2());
+        } else if (store.mode_ == StorageMode::Sparse) {
             for (const auto& [basis, amplitude] : store.sparse_) {
                 if ((basis & mask) == expected) {
                     local_probability += static_cast<long double>(amplitude.norm2());
@@ -202,6 +223,7 @@ double QRegister::marginal_probability(
             }
         }
         probability *= std::clamp(local_probability, 0.0L, 1.0L);
+        begin = end;
     }
 
     return std::clamp(static_cast<double>(probability), 0.0, 1.0);
