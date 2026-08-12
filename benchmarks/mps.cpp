@@ -173,9 +173,32 @@ int main() {
         MatrixProductState broker_mps = evolved_cluster(qubits);
         broker_mps.apply_unitary(broker_center, qubit::gates::rz(0.37));
 
+        qubit::ExactExecutionBrokerConfig probability_config;
+        probability_config.tensor.max_contraction_entries = 8U;
+        ExactExecutionBroker probability_broker(probability_config);
+        const std::vector<std::uint8_t> probability_bits(qubits, 0U);
+        qubit::ExactProbabilityResult probability_result;
+        const double probability_ms = median_ms([&] {
+            probability_result = probability_broker.basis_probability_from_zero(
+                qubits,
+                broker_operations,
+                probability_bits);
+        });
+        double probability_reference_value = 0.0;
+        const double probability_qregister_ms = median_ms([&] {
+            QRegister next(qubits);
+            qubit::OperationPlan operation_plan(broker_operations);
+            operation_plan.execute(next);
+            probability_reference_value = next.amplitude_bits(probability_bits).norm2();
+        });
+
         if (broker_result.route != ExactExecutionRoute::PersistentMPS) {
             std::cerr << "broker did not select persistent MPS after causal collapse\n";
             return 2;
+        }
+        if (probability_result.route != ExactExecutionRoute::PersistentMPS) {
+            std::cerr << "probability broker did not select persistent MPS after tensor collapse\n";
+            return 3;
         }
 
         std::cout << "mps18_qubits=" << qubits << '\n';
@@ -216,6 +239,14 @@ int main() {
         std::cout << "mps18_broker_mps_bytes=" << broker_mps.estimated_bytes() << '\n';
         std::cout << "mps18_broker_mps_scalars=" << broker_mps.scalar_count() << '\n';
         std::cout << "mps18_broker_mps_max_bond=" << broker_mps.max_bond_dimension() << '\n';
+        std::cout << "mps18_probability_broker_route="
+                  << qubit::exact_execution_route_name(probability_result.route) << '\n';
+        std::cout << "mps18_probability_broker_ms=" << probability_ms << '\n';
+        std::cout << "mps18_probability_qregister_ms=" << probability_qregister_ms << '\n';
+        std::cout << "mps18_probability_broker_speed_ratio="
+                  << probability_qregister_ms / probability_ms << '\n';
+        std::cout << "mps18_probability_value_error="
+                  << std::abs(probability_result.value - probability_reference_value) << '\n';
     }
 
     {

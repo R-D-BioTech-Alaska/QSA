@@ -192,7 +192,18 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         result.route = ExactExecutionRoute::TensorNetwork;
         return result;
     } catch (const QStateError& error) {
-        result.fallback_reason = failure_message(error);
+        result.fallback_reason = "tensor: " + failure_message(error);
+    }
+
+    try {
+        MatrixProductState state = MatrixProductState::zero(qubit_count, config_.mps);
+        execute_mps(state, operations);
+        result.value = state.amplitude(basis_bits).norm2();
+        result.route = ExactExecutionRoute::PersistentMPS;
+        return result;
+    } catch (const QStateError& error) {
+        result.fallback_reason += "; mps: ";
+        result.fallback_reason += failure_message(error);
     }
 
     QRegister state(qubit_count, config_.register_state);

@@ -264,12 +264,12 @@ int main() {
         }};
         const auto result = broker.basis_probability_from_zero(2U, operations, BasisIndex{0});
         const QRegister direct = evolve(QRegister(2U), operations);
-        require(result.route == ExactExecutionRoute::Register,
-                "tensor width collapse did not fall back to QRegister");
-        require(!result.fallback_reason.empty(),
-                "tensor width fallback did not record its reason");
+        require(result.route == ExactExecutionRoute::PersistentMPS,
+                "tensor width collapse did not select persistent MPS");
+        require(result.fallback_reason.find("tensor:") != std::string::npos,
+                "persistent MPS probability route did not retain tensor rejection reason");
         require_close(result.value, direct.amplitude(0U).norm2(),
-                      "tensor width fallback changed the basis probability");
+                      "persistent MPS probability differs from QRegister");
     }
 
     {
@@ -282,10 +282,30 @@ int main() {
         const QRegister direct = evolve(QRegister(1U), operations);
         require(result.route == ExactExecutionRoute::Register,
                 "trajectory probability did not fall back to QRegister");
-        require(!result.fallback_reason.empty(),
-                "trajectory probability fallback did not record its reason");
+        require(result.fallback_reason.find("mps:") != std::string::npos,
+                "trajectory probability fallback did not record MPS rejection");
         require_close(result.value, direct.amplitude(1U).norm2(),
                       "trajectory probability fallback changed the result");
+    }
+
+    {
+        ExactExecutionBrokerConfig config;
+        config.tensor.max_contraction_entries = 2U;
+        config.mps.max_bond_dimension = 1U;
+        ExactExecutionBroker broker(config);
+        const std::array<Operation, 2> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+        }};
+        const auto result = broker.basis_probability_from_zero(2U, operations, BasisIndex{0});
+        const QRegister direct = evolve(QRegister(2U), operations);
+        require(result.route == ExactExecutionRoute::Register,
+                "tensor and MPS bond collapse did not reach QRegister");
+        require(result.fallback_reason.find("tensor:") != std::string::npos &&
+                    result.fallback_reason.find("mps:") != std::string::npos,
+                "probability fallback did not preserve tensor and MPS reasons");
+        require_close(result.value, direct.amplitude(0U).norm2(),
+                      "probability bond fallback changed the result");
     }
 
     {
