@@ -1,5 +1,6 @@
 #pragma once
 
+#include "qubit/qmps.hpp"
 #include "qubit/qpauli.hpp"
 #include "qubit/qplan.hpp"
 #include "qubit/qstate.hpp"
@@ -16,10 +17,12 @@ enum class ExactExecutionRoute : std::uint8_t {
     Register = 0,
     CausalPauli = 1,
     TensorNetwork = 2,
+    PersistentMPS = 3,
 };
 
 struct ExactExecutionBrokerConfig {
     TensorNetworkConfig tensor{};
+    MPSConfig mps{};
     QStateConfig register_state{};
 };
 
@@ -43,6 +46,11 @@ public:
 
     [[nodiscard]] ExactExpectationResult expectation(
         const QRegister& input,
+        std::span<const Operation> operations,
+        const PauliObservable& observable) const;
+
+    [[nodiscard]] ExactExpectationResult expectation_from_zero(
+        std::size_t qubit_count,
         std::span<const Operation> operations,
         const PauliObservable& observable) const;
 

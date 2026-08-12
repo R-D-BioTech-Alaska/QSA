@@ -24,6 +24,59 @@ void validate_basis_width(std::size_t qubit_count, std::span<const std::uint8_t>
     }
 }
 
+void execute_mps(MatrixProductState& state, std::span<const Operation> operations) {
+    for (const Operation& operation : operations) {
+        switch (operation.code) {
+            case OperationCode::X:
+                state.apply_unitary(operation.first, gates::x());
+                break;
+            case OperationCode::Y:
+                state.apply_unitary(operation.first, gates::y());
+                break;
+            case OperationCode::Z:
+                state.apply_unitary(operation.first, gates::z());
+                break;
+            case OperationCode::H:
+                state.apply_unitary(operation.first, gates::h());
+                break;
+            case OperationCode::S:
+                state.apply_unitary(operation.first, gates::s());
+                break;
+            case OperationCode::Sdg:
+                state.apply_unitary(operation.first, gates::sdg());
+                break;
+            case OperationCode::T:
+                state.apply_unitary(operation.first, gates::t());
+                break;
+            case OperationCode::Tdg:
+                state.apply_unitary(operation.first, gates::tdg());
+                break;
+            case OperationCode::Rx:
+                state.apply_unitary(operation.first, gates::rx(operation.parameter));
+                break;
+            case OperationCode::Ry:
+                state.apply_unitary(operation.first, gates::ry(operation.parameter));
+                break;
+            case OperationCode::Rz:
+                state.apply_unitary(operation.first, gates::rz(operation.parameter));
+                break;
+            case OperationCode::Cnot:
+                state.apply_cnot(operation.first, operation.second);
+                break;
+            case OperationCode::Cz:
+                state.apply_cz(operation.first, operation.second);
+                break;
+            case OperationCode::Swap:
+                throw QStateError("Persistent MPS route does not support SWAP");
+            case OperationCode::BitFlipTrajectory:
+            case OperationCode::PhaseFlipTrajectory:
+            case OperationCode::DepolarizingTrajectory:
+            case OperationCode::AmplitudeDampingTrajectory:
+                throw QStateError("Persistent MPS route supports unitary operations only");
+        }
+    }
+}
+
 }  // namespace
 
 ExactExecutionBroker::ExactExecutionBroker(ExactExecutionBrokerConfig config)
@@ -42,6 +95,8 @@ const char* exact_execution_route_name(ExactExecutionRoute route) noexcept {
             return "CausalPauli";
         case ExactExecutionRoute::TensorNetwork:
             return "TensorNetwork";
+        case ExactExecutionRoute::PersistentMPS:
+            return "PersistentMPS";
     }
     return "unknown";
 }
@@ -74,6 +129,52 @@ ExactExpectationResult ExactExecutionBroker::expectation(
     OperationPlan plan(operations);
     plan.execute(state);
     result.value = observable.expectation(state);
+    result.route = ExactExecutionRoute::Register;
+    return result;
+}
+
+ExactExpectationResult ExactExecutionBroker::expectation_from_zero(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    const PauliObservable& observable) const {
+    if (qubit_count == 0U) {
+        throw QStateError("Execution broker requires at least one qubit");
+    }
+    if (observable.qubit_count() != qubit_count) {
+        throw QStateError("Execution broker Pauli observable width does not match input");
+    }
+    if (!observable.validate()) {
+        throw QStateError("Execution broker Pauli observable failed validation");
+    }
+
+    QRegister input(qubit_count, config_.register_state);
+    ExactExpectationResult result;
+    try {
+        PauliPropagationPlan plan(qubit_count, operations);
+        const PauliObservable propagated = plan.propagate_backward(
+            observable,
+            &result.pauli_stats);
+        result.value = propagated.expectation(input);
+        result.route = ExactExecutionRoute::CausalPauli;
+        return result;
+    } catch (const QStateError& error) {
+        result.fallback_reason = "causal: " + failure_message(error);
+    }
+
+    try {
+        MatrixProductState state = MatrixProductState::zero(qubit_count, config_.mps);
+        execute_mps(state, operations);
+        result.value = state.expectation(observable);
+        result.route = ExactExecutionRoute::PersistentMPS;
+        return result;
+    } catch (const QStateError& error) {
+        result.fallback_reason += "; mps: ";
+        result.fallback_reason += failure_message(error);
+    }
+
+    OperationPlan plan(operations);
+    plan.execute(input);
+    result.value = observable.expectation(input);
     result.route = ExactExecutionRoute::Register;
     return result;
 }

@@ -78,6 +78,29 @@ int main() {
     }
 
     {
+        const std::array<Operation, 2> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+        }};
+        PauliObservable observable(2U);
+        const std::array<PauliFactor, 2> factors{{
+            {0U, PauliAxis::X},
+            {1U, PauliAxis::X},
+        }};
+        observable.add_term({1.0, 0.0}, factors);
+
+        ExactExecutionBroker broker;
+        const auto result = broker.expectation_from_zero(2U, operations, observable);
+        const QRegister direct = evolve(QRegister(2U), operations);
+        require(result.route == ExactExecutionRoute::CausalPauli,
+                "from-zero causal workload did not preserve causal-first routing");
+        require(result.fallback_reason.empty(),
+                "from-zero causal success reported a fallback reason");
+        require_close(result.value, observable.expectation(direct),
+                      "from-zero causal broker value differs from QRegister");
+    }
+
+    {
         QRegister input(3U);
         input.apply_h(0U);
         PauliPropagationConfig pauli_config;
@@ -98,6 +121,95 @@ int main() {
                 "term-cap fallback did not record its reason");
         require_close(result.value, observable.expectation(direct),
                       "term-cap fallback changed the observable value");
+    }
+
+    {
+        constexpr std::size_t qubits = 8U;
+        std::vector<Operation> operations;
+        operations.reserve(2U * qubits);
+        for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+            operations.push_back({
+                OperationCode::H,
+                static_cast<qubit::QubitId>(qubit),
+                0U,
+                0.0,
+                0.0,
+            });
+        }
+        for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+            operations.push_back({
+                OperationCode::Cz,
+                static_cast<qubit::QubitId>(qubit),
+                static_cast<qubit::QubitId>(qubit + 1U),
+                0.0,
+                0.0,
+            });
+        }
+        operations.push_back({OperationCode::Rz, 4U, 0U, 0.37, 0.0});
+
+        PauliPropagationConfig pauli_config;
+        pauli_config.max_terms = 1U;
+        PauliObservable observable(qubits, pauli_config);
+        const std::array<PauliFactor, 1> factors{{{4U, PauliAxis::X}}};
+        observable.add_term({1.0, 0.0}, factors);
+
+        ExactExecutionBroker broker;
+        const auto result = broker.expectation_from_zero(qubits, operations, observable);
+        const QRegister direct = evolve(QRegister(qubits), operations);
+        require(result.route == ExactExecutionRoute::PersistentMPS,
+                "causal term-cap collapse did not select persistent MPS");
+        require(!result.fallback_reason.empty(),
+                "persistent MPS route did not retain causal rejection reason");
+        require_close(result.value, observable.expectation(direct),
+                      "persistent MPS broker value differs from QRegister");
+    }
+
+    {
+        PauliPropagationConfig pauli_config;
+        pauli_config.max_terms = 1U;
+        PauliObservable observable(3U, pauli_config);
+        const std::array<PauliFactor, 1> factors{{{0U, PauliAxis::X}}};
+        observable.add_term({1.0, 0.0}, factors);
+        const std::array<Operation, 3> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 0U, 2U, 0.0, 0.0},
+            {OperationCode::Rz, 0U, 0U, 0.37, 0.0},
+        }};
+
+        ExactExecutionBroker broker;
+        const auto result = broker.expectation_from_zero(3U, operations, observable);
+        const QRegister direct = evolve(QRegister(3U), operations);
+        require(result.route == ExactExecutionRoute::Register,
+                "nonadjacent MPS collapse did not fall through to QRegister");
+        require(result.fallback_reason.find("mps:") != std::string::npos,
+                "nonadjacent MPS fallback did not report its route reason");
+        require_close(result.value, observable.expectation(direct),
+                      "nonadjacent MPS fallback changed the observable value");
+    }
+
+    {
+        ExactExecutionBrokerConfig config;
+        config.mps.max_bond_dimension = 1U;
+        ExactExecutionBroker broker(config);
+        PauliPropagationConfig pauli_config;
+        pauli_config.max_terms = 1U;
+        PauliObservable observable(2U, pauli_config);
+        const std::array<PauliFactor, 1> factors{{{0U, PauliAxis::X}}};
+        observable.add_term({1.0, 0.0}, factors);
+        const std::array<Operation, 3> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+            {OperationCode::Rz, 0U, 0U, 0.37, 0.0},
+        }};
+
+        const auto result = broker.expectation_from_zero(2U, operations, observable);
+        const QRegister direct = evolve(QRegister(2U), operations);
+        require(result.route == ExactExecutionRoute::Register,
+                "MPS bond collapse did not fall through to QRegister");
+        require(result.fallback_reason.find("mps:") != std::string::npos,
+                "MPS bond fallback did not report its route reason");
+        require_close(result.value, observable.expectation(direct),
+                      "MPS bond fallback changed the observable value");
     }
 
     {
