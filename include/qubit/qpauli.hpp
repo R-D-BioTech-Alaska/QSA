@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -90,6 +91,10 @@ public:
 
     [[nodiscard]] PauliObservable propagate_backward(
         const PauliObservable& observable,
+        PauliPropagationStats* stats = nullptr) const;
+    [[nodiscard]] std::optional<PauliObservable> try_propagate_backward(
+        const PauliObservable& observable,
+        const char** reason = nullptr,
         PauliPropagationStats* stats = nullptr) const;
 
 private:

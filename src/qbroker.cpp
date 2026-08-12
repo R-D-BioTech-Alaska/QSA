@@ -135,12 +135,17 @@ ExactExpectationResult ExactExecutionBroker::expectation(
     ExactExpectationResult result;
     try {
         PauliPropagationPlan plan(input.qubit_count(), operations);
-        const PauliObservable propagated = plan.propagate_backward(
+        const char* reason = nullptr;
+        auto propagated = plan.try_propagate_backward(
             observable,
+            &reason,
             &result.pauli_stats);
-        result.value = propagated.expectation(input);
-        result.route = ExactExecutionRoute::CausalPauli;
-        return result;
+        if (propagated.has_value()) {
+            result.value = propagated->expectation(input);
+            result.route = ExactExecutionRoute::CausalPauli;
+            return result;
+        }
+        result.fallback_reason = reason != nullptr ? reason : "Pauli propagation failed exact routing";
     } catch (const QStateError& error) {
         result.fallback_reason = failure_message(error);
     }
@@ -164,12 +169,18 @@ ExactExpectationResult ExactExecutionBroker::expectation_from_zero(
     ExactExpectationResult result;
     try {
         PauliPropagationPlan plan(qubit_count, operations);
-        const PauliObservable propagated = plan.propagate_backward(
+        const char* reason = nullptr;
+        auto propagated = plan.try_propagate_backward(
             observable,
+            &reason,
             &result.pauli_stats);
-        result.value = propagated.expectation(input);
-        result.route = ExactExecutionRoute::CausalPauli;
-        return result;
+        if (propagated.has_value()) {
+            result.value = propagated->expectation(input);
+            result.route = ExactExecutionRoute::CausalPauli;
+            return result;
+        }
+        result.fallback_reason = "causal: ";
+        result.fallback_reason += reason != nullptr ? reason : "Pauli propagation failed exact routing";
     } catch (const QStateError& error) {
         result.fallback_reason = "causal: " + failure_message(error);
     }
@@ -280,16 +291,18 @@ ExactExpectationResult ExactPreparedExpectationPlan::expectation(
 
     ExactExpectationResult result;
     if (causal_plan_.has_value()) {
-        try {
-            const PauliObservable propagated = causal_plan_->propagate_backward(
-                observable,
-                &result.pauli_stats);
-            result.value = propagated.expectation(zero_input_);
+        const char* reason = nullptr;
+        auto propagated = causal_plan_->try_propagate_backward(
+            observable,
+            &reason,
+            &result.pauli_stats);
+        if (propagated.has_value()) {
+            result.value = propagated->expectation(zero_input_);
             result.route = ExactExecutionRoute::CausalPauli;
             return result;
-        } catch (const QStateError& error) {
-            result.fallback_reason = "causal: " + failure_message(error);
         }
+        result.fallback_reason = "causal: ";
+        result.fallback_reason += reason != nullptr ? reason : "Pauli propagation failed exact routing";
     } else {
         result.fallback_reason = "causal: " + causal_preparation_reason_;
     }

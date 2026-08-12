@@ -1,8 +1,10 @@
 #include "qubit/qpauli.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 #include <limits>
+#include <utility>
 
 namespace qubit {
 namespace {
@@ -32,6 +34,25 @@ namespace {
             throw QStateError("Pauli propagation plans do not accept trajectory noise operations");
     }
     throw QStateError("Pauli propagation plan received an unknown opcode");
+}
+
+[[nodiscard]] bool term_expanding_operation(OperationCode code) noexcept {
+    switch (code) {
+        case OperationCode::T:
+        case OperationCode::Tdg:
+        case OperationCode::Rx:
+        case OperationCode::Ry:
+        case OperationCode::Rz:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] bool parameterized_rotation(OperationCode code) noexcept {
+    return code == OperationCode::Rx ||
+           code == OperationCode::Ry ||
+           code == OperationCode::Rz;
 }
 
 [[nodiscard]] std::vector<QubitId> observable_support(const PauliObservable& observable) {
@@ -98,14 +119,22 @@ std::size_t PauliPropagationPlan::estimated_bytes() const noexcept {
     return total;
 }
 
-PauliObservable PauliPropagationPlan::propagate_backward(
+std::optional<PauliObservable> PauliPropagationPlan::try_propagate_backward(
     const PauliObservable& observable,
+    const char** reason,
     PauliPropagationStats* stats) const {
+    const auto fail = [reason](const char* message) -> std::optional<PauliObservable> {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return std::nullopt;
+    };
+
     if (observable.qubit_count() != qubit_count_) {
-        throw QStateError("Pauli observable width does not match propagation plan");
+        return fail("Pauli observable width does not match propagation plan");
     }
     if (!observable.validate()) {
-        throw QStateError("Pauli observable failed exact validation");
+        return fail("Pauli observable failed exact validation");
     }
 
     PauliObservable result = observable;
@@ -130,7 +159,22 @@ PauliObservable PauliPropagationPlan::propagate_backward(
             break;
         }
 
-        result.apply_backward(operations_[latest]);
+        const Operation& operation = operations_[latest];
+        if (parameterized_rotation(operation.code) && !std::isfinite(operation.parameter)) {
+            return fail("Pauli rotation angle must be finite");
+        }
+
+        const std::size_t term_limit = result.config_.max_terms;
+        if (term_expanding_operation(operation.code) &&
+            term_limit <= std::numeric_limits<std::size_t>::max() / 2U) {
+            result.config_.max_terms = term_limit * 2U;
+        }
+        result.apply_backward(operation);
+        result.config_.max_terms = term_limit;
+        if (result.term_count() > term_limit) {
+            return fail("Pauli propagation exceeded max_terms");
+        }
+
         ++local_stats.visited_operations;
         local_stats.peak_terms = std::max(local_stats.peak_terms, result.term_count());
         local_stats.peak_support = std::max(local_stats.peak_support, result.support_size());
@@ -141,7 +185,21 @@ PauliObservable PauliPropagationPlan::propagate_backward(
     if (stats != nullptr) {
         *stats = local_stats;
     }
+    if (reason != nullptr) {
+        *reason = nullptr;
+    }
     return result;
+}
+
+PauliObservable PauliPropagationPlan::propagate_backward(
+    const PauliObservable& observable,
+    PauliPropagationStats* stats) const {
+    const char* reason = nullptr;
+    auto result = try_propagate_backward(observable, &reason, stats);
+    if (!result.has_value()) {
+        throw QStateError(reason != nullptr ? reason : "Pauli propagation failed exact routing");
+    }
+    return std::move(*result);
 }
 
 }  // namespace qubit
