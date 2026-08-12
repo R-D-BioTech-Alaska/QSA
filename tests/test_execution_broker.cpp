@@ -347,10 +347,9 @@ int main() {
         const auto result = broker.basis_probability_from_zero(4U, operations, bits);
         const QRegister direct = evolve(QRegister(4U), operations);
         require(result.route == ExactExecutionRoute::UniformMagnitude,
-                "tensor and MPS collapse did not select UniformMagnitude");
-        require(result.fallback_reason.find("tensor:") != std::string::npos &&
-                    result.fallback_reason.find("mps:") != std::string::npos,
-                "uniform route did not preserve earlier rejection reasons");
+                "uniform circuit did not select UniformMagnitude");
+        require(result.fallback_reason.empty(),
+                "successful uniform certificate reported a fallback reason");
         require_close(result.value, direct.amplitude_bits(bits).norm2(),
                       "uniform broker probability differs from QRegister");
     }
@@ -372,8 +371,8 @@ int main() {
         const QRegister direct = evolve(QRegister(4U), operations);
         require(result.route == ExactExecutionRoute::UniformMagnitude,
                 "uniform certificate remained constrained by PhaseGraph edge storage");
-        require(result.fallback_reason.find("phase_graph:") == std::string::npos,
-                "uniform success constructed or rejected a PhaseGraph state");
+        require(result.fallback_reason.empty(),
+                "uniform success attempted a stored representation");
         require_close(result.value, direct.amplitude(0U).norm2(),
                       "edge-independent uniform probability changed the result");
     }
