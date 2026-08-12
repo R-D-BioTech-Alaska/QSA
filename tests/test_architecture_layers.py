@@ -44,6 +44,8 @@ STRUCTURAL_FILES = (
     "include/qubit/qqtt_operator.hpp",
     "include/qubit/qqtt_field.hpp",
     "include/qubit/qqtt_poisson.hpp",
+    "include/qubit/qqtt_schrodinger_poisson.hpp",
+    "include/qubit/qqtt_sp_invariants.hpp",
     "src/qfactor.cpp",
 )
 
