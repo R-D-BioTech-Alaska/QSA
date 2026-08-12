@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -17,6 +18,7 @@ using Clock = std::chrono::steady_clock;
 using qubit::ExactExecutionBroker;
 using qubit::ExactExecutionBrokerConfig;
 using qubit::ExactExecutionRoute;
+using qubit::ExactPreparedProbabilityPlan;
 using qubit::Operation;
 using qubit::OperationCode;
 using qubit::PhaseGraphConfig;
@@ -122,6 +124,16 @@ template <class Function>
     }
     std::sort(samples.begin(), samples.end());
     return samples[samples.size() / 2U];
+}
+
+[[nodiscard]] double break_even_queries(
+    double setup_ms,
+    double one_shot_ms,
+    double prepared_query_ms) noexcept {
+    if (one_shot_ms <= prepared_query_ms) {
+        return -1.0;
+    }
+    return setup_ms / (one_shot_ms - prepared_query_ms);
 }
 
 [[nodiscard]] std::vector<Operation> broker_phase_operations(std::size_t qubits) {
@@ -360,6 +372,27 @@ int main() {
         std::cout << "uniform_broker_huge_operations=" << broker_operations.size() << '\n';
         std::cout << "uniform_broker_huge_ms=" << broker_ms << '\n';
         std::cout << "uniform_broker_huge_retained_state_bytes=0\n";
+
+        std::optional<ExactPreparedProbabilityPlan> prepared;
+        const double prepared_setup_ms = median_ms([&] {
+            prepared.emplace(qubits, broker_operations, broker_config);
+        }, 3);
+        qubit::ExactProbabilityResult prepared_result;
+        const double prepared_query_ms = median_ms([&] {
+            prepared_result = prepared->probability(bits);
+        }, 11);
+        if (prepared->prepared_route() != ExactExecutionRoute::UniformMagnitude ||
+            prepared_result.route != result.route ||
+            prepared_result.value != result.value) {
+            std::cerr << "prepared uniform probability plan changed exact semantics\n";
+            return 5;
+        }
+        std::cout << "uniform_prepared_setup_ms=" << prepared_setup_ms << '\n';
+        std::cout << "uniform_prepared_query_ms=" << prepared_query_ms << '\n';
+        std::cout << "uniform_prepared_over_one_shot_speed=" << broker_ms / prepared_query_ms << '\n';
+        std::cout << "uniform_prepared_break_even_queries="
+                  << break_even_queries(prepared_setup_ms, broker_ms, prepared_query_ms) << '\n';
+        std::cout << "uniform_prepared_bytes=" << prepared->estimated_bytes() << '\n';
     }
 
     {
@@ -395,7 +428,7 @@ int main() {
             result.value != 1.0 ||
             miss_result.value != 0.0) {
             std::cerr << "basis-permutation broker certificate failed\n";
-            return 5;
+            return 6;
         }
         std::cout << "basis_permutation_broker_qubits=" << qubits << '\n';
         std::cout << "basis_permutation_broker_route="
@@ -434,13 +467,37 @@ int main() {
             result.value != 1.0 ||
             miss_result.value != 0.0) {
             std::cerr << "100000-qubit basis-permutation broker certificate failed\n";
-            return 6;
+            return 7;
         }
         std::cout << "basis_permutation_broker_huge_qubits=" << qubits << '\n';
         std::cout << "basis_permutation_broker_huge_operations=" << broker_operations.size() << '\n';
         std::cout << "basis_permutation_broker_huge_ms=" << broker_ms << '\n';
         std::cout << "basis_permutation_broker_huge_tracked_bits=" << qubits << '\n';
         std::cout << "basis_permutation_broker_huge_retained_state_bytes=0\n";
+
+        std::optional<ExactPreparedProbabilityPlan> prepared;
+        const double prepared_setup_ms = median_ms([&] {
+            prepared.emplace(qubits, broker_operations);
+        }, 3);
+        qubit::ExactProbabilityResult prepared_result;
+        const double prepared_query_ms = median_ms([&] {
+            prepared_result = prepared->probability(bits);
+        }, 11);
+        const auto prepared_miss = prepared->probability(miss);
+        if (prepared->prepared_route() != ExactExecutionRoute::BasisPermutation ||
+            prepared_result.route != result.route ||
+            prepared_result.value != 1.0 ||
+            prepared_miss.value != 0.0) {
+            std::cerr << "prepared basis-permutation plan changed exact semantics\n";
+            return 8;
+        }
+        std::cout << "basis_permutation_prepared_setup_ms=" << prepared_setup_ms << '\n';
+        std::cout << "basis_permutation_prepared_query_ms=" << prepared_query_ms << '\n';
+        std::cout << "basis_permutation_prepared_over_one_shot_speed="
+                  << broker_ms / prepared_query_ms << '\n';
+        std::cout << "basis_permutation_prepared_break_even_queries="
+                  << break_even_queries(prepared_setup_ms, broker_ms, prepared_query_ms) << '\n';
+        std::cout << "basis_permutation_prepared_bytes=" << prepared->estimated_bytes() << '\n';
     }
     return 0;
 }
