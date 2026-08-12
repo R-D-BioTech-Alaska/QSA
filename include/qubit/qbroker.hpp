@@ -7,6 +7,7 @@
 #include "qubit/qstate.hpp"
 #include "qubit/qtensor.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -71,6 +72,12 @@ public:
         std::span<const Operation> operations,
         BasisIndex basis) const;
 
+    [[nodiscard]] ExactProbabilityResult marginal_probability_from_zero(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        std::span<const QubitId> qubits,
+        std::span<const std::uint8_t> bits) const;
+
     [[nodiscard]] const ExactExecutionBrokerConfig& config() const noexcept {
         return config_;
     }
@@ -113,6 +120,9 @@ public:
     [[nodiscard]] ExactProbabilityResult probability(
         std::span<const std::uint8_t> basis_bits) const;
     [[nodiscard]] ExactProbabilityResult probability(BasisIndex basis) const;
+    [[nodiscard]] ExactProbabilityResult marginal_probability(
+        std::span<const QubitId> qubits,
+        std::span<const std::uint8_t> bits) const;
     [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
     [[nodiscard]] ExactExecutionRoute prepared_route() const noexcept { return route_; }
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
@@ -129,6 +139,61 @@ private:
     std::optional<QRegister> register_state_{};
     std::string fallback_reason_{};
 };
+
+inline ExactProbabilityResult ExactPreparedProbabilityPlan::marginal_probability(
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) const {
+    if (qubits.size() != bits.size()) {
+        throw QStateError("Prepared marginal query qubit and bit counts do not match");
+    }
+    for (std::size_t index = 0U; index < qubits.size(); ++index) {
+        if (static_cast<std::size_t>(qubits[index]) >= qubit_count_) {
+            throw QStateError("Prepared marginal query qubit is out of range");
+        }
+        if (bits[index] > 1U) {
+            throw QStateError("Prepared marginal query bits must be zero or one");
+        }
+        for (std::size_t previous = 0U; previous < index; ++previous) {
+            if (qubits[previous] == qubits[index]) {
+                throw QStateError("Prepared marginal query contains duplicate qubits");
+            }
+        }
+    }
+
+    ExactProbabilityResult result;
+    result.route = route_;
+    result.fallback_reason = fallback_reason_;
+    if (route_ == ExactExecutionRoute::BasisPermutation) {
+        if (basis_permutation_bits_.size() != qubit_count_) {
+            throw QStateError("Prepared BasisPermutation plan is missing its terminal state");
+        }
+        for (std::size_t index = 0U; index < qubits.size(); ++index) {
+            if (basis_permutation_bits_[qubits[index]] != bits[index]) {
+                result.value = 0.0;
+                return result;
+            }
+        }
+        result.value = 1.0;
+        return result;
+    }
+    if (route_ == ExactExecutionRoute::UniformMagnitude) {
+        result.value = bits.size() > 1074U
+            ? 0.0
+            : std::ldexp(1.0, -static_cast<int>(bits.size()));
+        return result;
+    }
+    throw QStateError(
+        "Prepared marginal probability currently requires a BasisPermutation or UniformMagnitude route");
+}
+
+inline ExactProbabilityResult ExactExecutionBroker::marginal_probability_from_zero(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) const {
+    ExactPreparedProbabilityPlan prepared(qubit_count, operations, config_);
+    return prepared.marginal_probability(qubits, bits);
+}
 
 [[nodiscard]] const char* exact_execution_route_name(ExactExecutionRoute route) noexcept;
 
