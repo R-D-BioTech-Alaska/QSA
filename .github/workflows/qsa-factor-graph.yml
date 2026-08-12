@@ -6,6 +6,7 @@ on:
       - "include/qubit/qfactor.hpp"
       - "src/qfactor.cpp"
       - "tests/test_factor_graph.cpp"
+      - "tests/test_factor_targeted_rebind.cpp"
       - "benchmarks/factor_graph.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/qsa-factor-graph.yml"
@@ -30,6 +31,20 @@ jobs:
           --target qstate_factor_graph_tests qstate_factor_graph_benchmark
       - name: Run exact factor gate
         run: ./build/qstate_factor_graph_tests
+      - name: Run targeted rebind gate
+        run: |
+          c++ -std=c++20 -O3 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude tests/test_factor_targeted_rebind.cpp build/libqstate_core.a -pthread \
+            -o build/qstate_factor_targeted_rebind_tests
+          ./build/qstate_factor_targeted_rebind_tests
+      - name: Run targeted rebind sanitizers
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            src/qfactor.cpp tests/test_factor_targeted_rebind.cpp \
+            -o build/qstate_factor_targeted_rebind_sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 \
+            ./build/qstate_factor_targeted_rebind_sanitize
       - name: Enforce architecture layers
         run: python tests/test_architecture_layers.py
       - name: Run matched factor benchmark
