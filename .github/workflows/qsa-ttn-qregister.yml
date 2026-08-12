@@ -6,6 +6,9 @@ on:
       - "include/qubit/qttn.hpp"
       - "tests/test_tree_tensor_qregister.cpp"
       - "src/qstate.cpp"
+      - "src/qread.cpp"
+      - "src/qsc.cpp"
+      - "CMakeLists.txt"
       - ".github/workflows/qsa-ttn-qregister.yml"
   workflow_dispatch:
 
@@ -17,9 +20,20 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - name: Configure QSA core
+        run: >-
+          cmake -S . -B qregister-build
+          -DCMAKE_BUILD_TYPE=Release
+          -DQSTATE_BUILD_TESTS=OFF
+          -DQSTATE_BUILD_EXAMPLES=OFF
+          -DQSTATE_BUILD_BENCHMARKS=OFF
+          -DQSTATE_BUILD_PYTHON_TESTS=OFF
+      - name: Build QSA core
+        run: cmake --build qregister-build --target qstate_core --parallel 2
+      - name: Build differential
         run: |
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
-            -Iinclude tests/test_tree_tensor_qregister.cpp src/qstate.cpp -o tree-tensor-qregister
+            -Iinclude tests/test_tree_tensor_qregister.cpp \
+            qregister-build/libqstate_core.a -pthread -o tree-tensor-qregister
       - name: Run
         run: ./tree-tensor-qregister
