@@ -1,6 +1,7 @@
 #include "qubit/qmps.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -14,6 +15,15 @@ namespace {
 
 [[nodiscard]] bool zero(const QComplex& value) noexcept {
     return value.re == 0.0 && value.im == 0.0;
+}
+
+[[nodiscard]] std::size_t count_scalars(
+    const std::vector<MPSSiteTensor>& sites) noexcept {
+    std::size_t count = 0U;
+    for (const MPSSiteTensor& site : sites) {
+        count += site.zero.size() + site.one.size();
+    }
+    return count;
 }
 
 [[nodiscard]] const std::vector<QComplex>& physical(
@@ -40,6 +50,30 @@ namespace {
             return gates::z();
     }
     throw QStateError("invalid Pauli axis");
+}
+
+[[nodiscard]] bool unitary(const QMatrix2& matrix, double tolerance) noexcept {
+    for (const QComplex value : matrix.values) {
+        if (!finite(value)) {
+            return false;
+        }
+    }
+    const double first_norm = matrix(0U, 0U).norm2() + matrix(1U, 0U).norm2();
+    const double second_norm = matrix(0U, 1U).norm2() + matrix(1U, 1U).norm2();
+    const QComplex cross =
+        matrix(0U, 0U).conjugate() * matrix(0U, 1U) +
+        matrix(1U, 0U).conjugate() * matrix(1U, 1U);
+    return std::abs(first_norm - 1.0) <= tolerance &&
+           std::abs(second_norm - 1.0) <= tolerance &&
+           cross.magnitude() <= tolerance;
+}
+
+[[nodiscard]] QMatrix2 projector_zero() {
+    return {{{1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}}};
+}
+
+[[nodiscard]] QMatrix2 projector_one() {
+    return {{{0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}}};
 }
 
 void transfer_left(
@@ -145,9 +179,30 @@ MatrixProductState::MatrixProductState(
     MPSConfig config)
     : sites_(std::move(sites)), config_(config) {
     std::string reason;
-    if (!validate(&reason)) {
+    if (!validate_structure(&reason)) {
         throw QStateError("invalid matrix-product state: " + reason);
     }
+    scalar_count_ = count_scalars(sites_);
+    const QComplex normalization = product_expectation(std::span<const PauliAxis>{});
+    if (!finite(normalization) ||
+        std::abs(normalization.im) > config_.normalization_tolerance ||
+        std::abs(normalization.re - 1.0) > config_.normalization_tolerance) {
+        throw QStateError("invalid matrix-product state: MPS tensors are not normalized");
+    }
+}
+
+MatrixProductState MatrixProductState::zero(
+    std::size_t qubit_count,
+    MPSConfig config) {
+    if (qubit_count == 0U) {
+        throw QStateError("zero MPS requires at least one qubit");
+    }
+    std::vector<MPSSiteTensor> sites;
+    sites.reserve(qubit_count);
+    for (std::size_t qubit = 0U; qubit < qubit_count; ++qubit) {
+        sites.push_back({1U, 1U, {{1.0, 0.0}}, {{0.0, 0.0}}});
+    }
+    return MatrixProductState(std::move(sites), config);
 }
 
 MatrixProductState MatrixProductState::ghz(
@@ -259,20 +314,138 @@ std::size_t MatrixProductState::max_bond_dimension() const noexcept {
     return result;
 }
 
-std::size_t MatrixProductState::scalar_count() const noexcept {
-    std::size_t count = 0U;
-    for (const MPSSiteTensor& site : sites_) {
-        count += site.zero.size() + site.one.size();
-    }
-    return count;
-}
-
 std::size_t MatrixProductState::estimated_bytes() const noexcept {
     std::size_t bytes = sizeof(*this) + sites_.capacity() * sizeof(MPSSiteTensor);
     for (const MPSSiteTensor& site : sites_) {
         bytes += (site.zero.capacity() + site.one.capacity()) * sizeof(QComplex);
     }
     return bytes;
+}
+
+void MatrixProductState::apply_unitary(
+    std::size_t qubit,
+    const QMatrix2& matrix) {
+    if (qubit >= sites_.size()) {
+        throw QStateError("MPS single-qubit target is out of range");
+    }
+    const double tolerance = std::max(1e-12, config_.normalization_tolerance);
+    if (!unitary(matrix, tolerance)) {
+        throw QStateError("MPS single-qubit operation is not unitary");
+    }
+
+    MPSSiteTensor& site = sites_[qubit];
+    std::vector<QComplex> next_zero(site.zero.size());
+    std::vector<QComplex> next_one(site.one.size());
+    for (std::size_t index = 0U; index < site.zero.size(); ++index) {
+        next_zero[index] = matrix(0U, 0U) * site.zero[index] +
+                           matrix(0U, 1U) * site.one[index];
+        next_one[index] = matrix(1U, 0U) * site.zero[index] +
+                          matrix(1U, 1U) * site.one[index];
+    }
+    site.zero.swap(next_zero);
+    site.one.swap(next_one);
+}
+
+void MatrixProductState::apply_adjacent_controlled(
+    std::size_t control,
+    std::size_t target,
+    const QMatrix2& active) {
+    if (control >= sites_.size() || target >= sites_.size()) {
+        throw QStateError("MPS controlled gate qubit is out of range");
+    }
+    if (control == target ||
+        (control + 1U != target && target + 1U != control)) {
+        throw QStateError("MPS controlled gates require adjacent distinct qubits");
+    }
+
+    const std::size_t left_index = std::min(control, target);
+    const std::size_t right_index = left_index + 1U;
+    const MPSSiteTensor& left = sites_[left_index];
+    const MPSSiteTensor& right = sites_[right_index];
+    const std::size_t old_bond = left.right_dimension;
+    if (old_bond != right.left_dimension) {
+        throw QStateError("MPS controlled gate found an inconsistent bond");
+    }
+    if (old_bond > std::numeric_limits<std::size_t>::max() / 2U) {
+        throw QStateError("MPS controlled gate bond dimension overflows size_t");
+    }
+    const std::size_t next_bond = old_bond * 2U;
+    if (next_bond > config_.max_bond_dimension) {
+        throw QStateError("MPS controlled gate exceeds configured bond dimension");
+    }
+
+    const std::size_t old_local_scalars =
+        left.zero.size() + left.one.size() + right.zero.size() + right.one.size();
+    if (scalar_count_ > config_.max_scalars ||
+        old_local_scalars > config_.max_scalars - scalar_count_) {
+        throw QStateError("MPS controlled gate exceeds configured scalar count");
+    }
+
+    const QMatrix2 p0 = projector_zero();
+    const QMatrix2 p1 = projector_one();
+    const QMatrix2 identity = gates::identity();
+    const std::array<QMatrix2, 2> left_ops = control == left_index
+        ? std::array<QMatrix2, 2>{p0, p1}
+        : std::array<QMatrix2, 2>{identity, active};
+    const std::array<QMatrix2, 2> right_ops = control == left_index
+        ? std::array<QMatrix2, 2>{identity, active}
+        : std::array<QMatrix2, 2>{p0, p1};
+
+    const std::size_t left_area = left.left_dimension * next_bond;
+    const std::size_t right_area = next_bond * right.right_dimension;
+    std::array<std::vector<QComplex>, 2> next_left{
+        std::vector<QComplex>(left_area),
+        std::vector<QComplex>(left_area),
+    };
+    std::array<std::vector<QComplex>, 2> next_right{
+        std::vector<QComplex>(right_area),
+        std::vector<QComplex>(right_area),
+    };
+
+    for (std::size_t branch = 0U; branch < 2U; ++branch) {
+        for (std::uint8_t output = 0U; output < 2U; ++output) {
+            for (std::size_t row = 0U; row < left.left_dimension; ++row) {
+                for (std::size_t bond = 0U; bond < old_bond; ++bond) {
+                    QComplex value{};
+                    for (std::uint8_t input = 0U; input < 2U; ++input) {
+                        value += left_ops[branch](output, input) *
+                                 physical(left, input)[row * old_bond + bond];
+                    }
+                    next_left[output][row * next_bond + bond * 2U + branch] = value;
+                }
+            }
+
+            for (std::size_t bond = 0U; bond < old_bond; ++bond) {
+                for (std::size_t column = 0U; column < right.right_dimension; ++column) {
+                    QComplex value{};
+                    for (std::uint8_t input = 0U; input < 2U; ++input) {
+                        value += right_ops[branch](output, input) *
+                                 physical(right, input)[bond * right.right_dimension + column];
+                    }
+                    next_right[output][
+                        (bond * 2U + branch) * right.right_dimension + column] = value;
+                }
+            }
+        }
+    }
+
+    MPSSiteTensor& mutable_left = sites_[left_index];
+    MPSSiteTensor& mutable_right = sites_[right_index];
+    mutable_left.right_dimension = next_bond;
+    mutable_right.left_dimension = next_bond;
+    mutable_left.zero.swap(next_left[0]);
+    mutable_left.one.swap(next_left[1]);
+    mutable_right.zero.swap(next_right[0]);
+    mutable_right.one.swap(next_right[1]);
+    scalar_count_ += old_local_scalars;
+}
+
+void MatrixProductState::apply_cnot(std::size_t control, std::size_t target) {
+    apply_adjacent_controlled(control, target, gates::x());
+}
+
+void MatrixProductState::apply_cz(std::size_t first, std::size_t second) {
+    apply_adjacent_controlled(first, second, gates::z());
 }
 
 QComplex MatrixProductState::amplitude(std::span<const std::uint8_t> bits) const {
@@ -434,6 +607,12 @@ bool MatrixProductState::validate_structure(std::string* reason) const {
 
 bool MatrixProductState::validate(std::string* reason) const {
     if (!validate_structure(reason)) {
+        return false;
+    }
+    if (count_scalars(sites_) != scalar_count_) {
+        if (reason != nullptr) {
+            *reason = "MPS scalar-count cache is inconsistent";
+        }
         return false;
     }
     const QComplex normalization = product_expectation(std::span<const PauliAxis>{});

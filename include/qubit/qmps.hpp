@@ -30,6 +30,9 @@ public:
         std::vector<MPSSiteTensor> sites,
         MPSConfig config = {});
 
+    [[nodiscard]] static MatrixProductState zero(
+        std::size_t qubit_count,
+        MPSConfig config = {});
     [[nodiscard]] static MatrixProductState ghz(
         std::size_t qubit_count,
         double phase = 0.0,
@@ -43,10 +46,14 @@ public:
 
     [[nodiscard]] std::size_t qubit_count() const noexcept { return sites_.size(); }
     [[nodiscard]] std::size_t max_bond_dimension() const noexcept;
-    [[nodiscard]] std::size_t scalar_count() const noexcept;
+    [[nodiscard]] std::size_t scalar_count() const noexcept { return scalar_count_; }
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
     [[nodiscard]] const MPSConfig& config() const noexcept { return config_; }
     [[nodiscard]] const std::vector<MPSSiteTensor>& sites() const noexcept { return sites_; }
+
+    void apply_unitary(std::size_t qubit, const QMatrix2& unitary);
+    void apply_cnot(std::size_t control, std::size_t target);
+    void apply_cz(std::size_t first, std::size_t second);
 
     [[nodiscard]] QComplex amplitude(std::span<const std::uint8_t> bits) const;
     [[nodiscard]] QComplex pauli_expectation(std::span<const PauliAxis> axes) const;
@@ -58,9 +65,14 @@ public:
 private:
     std::vector<MPSSiteTensor> sites_{};
     MPSConfig config_{};
+    std::size_t scalar_count_{0};
 
     [[nodiscard]] bool validate_structure(std::string* reason) const;
     [[nodiscard]] QComplex product_expectation(std::span<const PauliAxis> axes) const;
+    void apply_adjacent_controlled(
+        std::size_t control,
+        std::size_t target,
+        const QMatrix2& active);
 };
 
 class MPSPauliPlan {

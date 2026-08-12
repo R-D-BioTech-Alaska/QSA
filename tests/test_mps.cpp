@@ -21,6 +21,7 @@ using qubit::PauliAxis;
 using qubit::PauliFactor;
 using qubit::PauliObservable;
 using qubit::QComplex;
+using qubit::QMatrix2;
 using qubit::QRegister;
 using qubit::QStateError;
 using qubit::QubitId;
@@ -101,6 +102,66 @@ int main() {
                 "compiled cluster MPS Pauli expectation disagrees with direct MPS");
         require(std::abs(mps_value.re - 1.0) <= 2e-11 && std::abs(mps_value.im) <= 2e-11,
                 "cluster stabilizer expectation is not one");
+
+        MatrixProductState evolved = MatrixProductState::zero(qubits);
+        for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+            evolved.apply_unitary(qubit, qubit::gates::h());
+        }
+        for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+            evolved.apply_cz(qubit, qubit + 1U);
+        }
+        compare_dense(evolved, reference, 2e-11, "evolved cluster MPS");
+        require(evolved.scalar_count() == mps.scalar_count(),
+                "evolved cluster MPS scalar count differs from canonical form");
+        require(evolved.max_bond_dimension() == 2U,
+                "evolved cluster MPS bond dimension differs from canonical form");
+        require(evolved.validate(), "evolved cluster MPS failed validation");
+    }
+
+    {
+        constexpr std::size_t qubits = 6U;
+        MatrixProductState mps = MatrixProductState::zero(qubits);
+        QRegister reference(qubits);
+
+        mps.apply_unitary(0U, qubit::gates::h());
+        reference.apply_h(0U);
+        mps.apply_unitary(1U, qubit::gates::ry(0.37));
+        reference.apply_ry(1U, 0.37);
+        mps.apply_cnot(0U, 1U);
+        reference.apply_cnot(0U, 1U);
+        mps.apply_unitary(2U, qubit::gates::rx(-0.41));
+        reference.apply_rx(2U, -0.41);
+        mps.apply_cz(1U, 2U);
+        reference.apply_cz(1U, 2U);
+        mps.apply_unitary(3U, qubit::gates::rz(0.29));
+        reference.apply_rz(3U, 0.29);
+        mps.apply_cnot(3U, 2U);
+        reference.apply_cnot(3U, 2U);
+        mps.apply_unitary(4U, qubit::gates::h());
+        reference.apply_h(4U);
+        mps.apply_cz(4U, 5U);
+        reference.apply_cz(4U, 5U);
+
+        compare_dense(mps, reference, 5e-11, "mixed evolved MPS");
+        require(mps.validate(), "mixed evolved MPS failed validation");
+    }
+
+    {
+        MatrixProductState left_control = MatrixProductState::zero(2U);
+        left_control.apply_unitary(0U, qubit::gates::h());
+        left_control.apply_cnot(0U, 1U);
+        QRegister left_reference(2U);
+        left_reference.apply_h(0U);
+        left_reference.apply_cnot(0U, 1U);
+        compare_dense(left_control, left_reference, 2e-12, "left-control CNOT MPS");
+
+        MatrixProductState right_control = MatrixProductState::zero(2U);
+        right_control.apply_unitary(1U, qubit::gates::h());
+        right_control.apply_cnot(1U, 0U);
+        QRegister right_reference(2U);
+        right_reference.apply_h(1U);
+        right_reference.apply_cnot(1U, 0U);
+        compare_dense(right_control, right_reference, 2e-12, "right-control CNOT MPS");
     }
 
     {
@@ -169,6 +230,21 @@ int main() {
         require(std::abs(direct.re - 1.0) <= 2e-9 && std::abs(direct.im) <= 2e-9,
                 "large cluster MPS stabilizer expectation is incorrect");
         require(mps.validate(), "large cluster MPS failed validation");
+
+        MatrixProductState evolved = MatrixProductState::zero(qubits);
+        for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+            evolved.apply_unitary(qubit, qubit::gates::h());
+        }
+        for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+            evolved.apply_cz(qubit, qubit + 1U);
+        }
+        require(evolved.scalar_count() == mps.scalar_count(),
+                "large evolved cluster scalar count differs from canonical MPS");
+        require(evolved.max_bond_dimension() == 2U,
+                "large evolved cluster bond dimension differs from canonical MPS");
+        require(qubit::almost_equal(evolved.expectation(stabilizer), direct, 2e-9),
+                "large evolved cluster local observable differs from canonical MPS");
+        require(evolved.validate(), "large evolved cluster MPS failed validation");
     }
 
     {
@@ -193,6 +269,57 @@ int main() {
             rejected = true;
         }
         require(rejected, "MPS scalar limit did not fail closed");
+    }
+
+    {
+        MPSConfig config;
+        config.max_bond_dimension = 2U;
+        MatrixProductState mps = MatrixProductState::zero(2U, config);
+        mps.apply_unitary(0U, qubit::gates::h());
+        mps.apply_cnot(0U, 1U);
+        const std::vector<QComplex> before = mps.materialize();
+        bool rejected = false;
+        try {
+            mps.apply_cnot(0U, 1U);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "repeated MPS entangler did not fail closed at bond limit");
+        require(mps.materialize() == before,
+                "failed MPS bond expansion changed the state");
+    }
+
+    {
+        MatrixProductState mps = MatrixProductState::zero(3U);
+        const std::vector<QComplex> before = mps.materialize();
+        bool rejected = false;
+        try {
+            mps.apply_cz(0U, 2U);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "nonadjacent MPS CZ was accepted");
+        require(mps.materialize() == before,
+                "rejected nonadjacent MPS CZ changed the state");
+    }
+
+    {
+        MatrixProductState mps = MatrixProductState::zero(2U);
+        const std::vector<QComplex> before = mps.materialize();
+        QMatrix2 bad{};
+        bad.values = {
+            QComplex{2.0, 0.0}, QComplex{0.0, 0.0},
+            QComplex{0.0, 0.0}, QComplex{1.0, 0.0},
+        };
+        bool rejected = false;
+        try {
+            mps.apply_unitary(0U, bad);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "nonunitary MPS single-qubit operation was accepted");
+        require(mps.materialize() == before,
+                "rejected MPS single-qubit operation changed the state");
     }
 
     {
