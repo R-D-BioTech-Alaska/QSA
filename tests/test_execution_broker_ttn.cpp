@@ -1,5 +1,6 @@
 #include "qubit/qbroker.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
