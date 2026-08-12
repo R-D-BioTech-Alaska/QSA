@@ -137,6 +137,7 @@ private:
     std::optional<StabilizerState> stabilizer_state_{};
     std::optional<TensorContractionPlan> tensor_plan_{};
     std::optional<MatrixProductState> mps_state_{};
+    std::optional<MPSPauliPlan> mps_plan_{};
     std::optional<PhaseGraphState> phase_graph_state_{};
     std::optional<QRegister> register_state_{};
     std::string fallback_reason_{};
