@@ -111,6 +111,7 @@ int main() {
     constexpr std::size_t factors = variables - 2U;
     ExactFactorConfig config;
     config.max_factor_entries = 64U;
+    config.reuse_workspace_slots = true;
 
     std::vector<std::array<QComplex, 8>> tables(factors);
     for (std::size_t factor = 0U; factor < factors; ++factor) {
