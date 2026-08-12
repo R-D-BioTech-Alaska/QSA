@@ -47,6 +47,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qqtt_schrodinger_poisson.hpp",
     "include/qubit/qqtt_sp_invariants.hpp",
     "include/qubit/qqtt_split_step.hpp",
+    "include/qubit/qfock.hpp",
     "src/qfactor.cpp",
 )
 
