@@ -80,6 +80,29 @@ double max_error(
     return error;
 }
 
+void populate_chain(
+    ExactFactorGraph& graph,
+    std::span<const std::array<QComplex, 8>> tables,
+    std::vector<FactorId>* factor_ids = nullptr) {
+    for (std::size_t variable = 0U; variable < tables.size() + 2U; ++variable) {
+        static_cast<void>(graph.add_variable(2U));
+    }
+    if (factor_ids != nullptr) {
+        factor_ids->reserve(tables.size());
+    }
+    for (std::size_t factor = 0U; factor < tables.size(); ++factor) {
+        const std::array<FactorVariableId, 3> scope{{
+            static_cast<FactorVariableId>(factor),
+            static_cast<FactorVariableId>(factor + 1U),
+            static_cast<FactorVariableId>(factor + 2U),
+        }};
+        const FactorId id = graph.add_dense_factor(scope, tables[factor]);
+        if (factor_ids != nullptr) {
+            factor_ids->push_back(id);
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -89,23 +112,14 @@ int main() {
     ExactFactorConfig config;
     config.max_factor_entries = 64U;
 
-    ExactFactorGraph graph(config);
-    for (std::size_t variable = 0U; variable < variables; ++variable) {
-        static_cast<void>(graph.add_variable(2U));
-    }
-
     std::vector<std::array<QComplex, 8>> tables(factors);
-    std::vector<FactorId> factor_ids;
-    factor_ids.reserve(factors);
     for (std::size_t factor = 0U; factor < factors; ++factor) {
         tables[factor] = nonlinear_table(factor);
-        const std::array<FactorVariableId, 3> scope{{
-            static_cast<FactorVariableId>(factor),
-            static_cast<FactorVariableId>(factor + 1U),
-            static_cast<FactorVariableId>(factor + 2U),
-        }};
-        factor_ids.push_back(graph.add_dense_factor(scope, tables[factor]));
     }
+
+    ExactFactorGraph graph(config);
+    std::vector<FactorId> factor_ids;
+    populate_chain(graph, tables, &factor_ids);
 
     const std::array<FactorVariableId, 2> retained{{
         static_cast<FactorVariableId>(variables - 2U),
@@ -122,11 +136,24 @@ int main() {
         qsa_values = plan.evaluate(workspace);
     }, 101);
 
+    ExactFactorConfig generic_config = config;
+    generic_config.max_compiled_index_entries = 0U;
+    ExactFactorGraph generic_graph(generic_config);
+    populate_chain(generic_graph, tables);
+    ExactFactorPlan generic_plan = generic_graph.compile(retained);
+    auto generic_workspace = generic_plan.workspace();
+    std::vector<QComplex> generic_values;
+    const double generic_query_ms = median_ms([&] {
+        generic_values = generic_plan.evaluate(generic_workspace);
+    }, 101);
+
     std::array<QComplex, 4> control{};
     const double control_ms = median_ms([&] {
         control = chain_control(tables);
     }, 101);
     const double initial_error = max_error(qsa_values, control);
+    const double generic_error = max_error(generic_values, control);
+    const double compiled_generic_error = max_error(qsa_values, generic_values);
 
     std::vector<QComplex> one_shot_values;
     const double one_shot_ms = median_ms([&] {
@@ -191,7 +218,8 @@ int main() {
     const double one_shot_total_ms =
         std::chrono::duration<double, std::milli>(one_shot_stop - one_shot_start).count();
 
-    if (initial_error > 2e-9 || one_shot_error > 2e-9 ||
+    if (initial_error > 2e-9 || generic_error > 2e-9 ||
+        compiled_generic_error > 2e-9 || one_shot_error > 2e-9 ||
         targeted_error > 2e-9 || full_rebind_error > 2e-9 ||
         one_shot_point_error > 2e-9) {
         std::cerr << "exact factor benchmark control mismatch\n";
@@ -204,15 +232,25 @@ int main() {
     std::cout << "factor_route=" << qubit::exact_factor_route_name(plan.route()) << '\n';
     std::cout << "factor_compile_ms=" << compile_ms << '\n';
     std::cout << "factor_prepared_query_ms=" << prepared_query_ms << '\n';
+    std::cout << "factor_generic_query_ms=" << generic_query_ms << '\n';
+    std::cout << "factor_compiled_over_generic_speed=" << generic_query_ms / prepared_query_ms << '\n';
     std::cout << "factor_one_shot_ms=" << one_shot_ms << '\n';
     std::cout << "factor_prepared_over_one_shot_speed=" << one_shot_ms / prepared_query_ms << '\n';
     std::cout << "factor_specialized_control_ms=" << control_ms << '\n';
     std::cout << "factor_prepared_over_specialized_control_ratio=" << control_ms / prepared_query_ms << '\n';
+    std::cout << "factor_generic_over_specialized_control_ratio=" << control_ms / generic_query_ms << '\n';
     std::cout << "factor_peak_union_variables=" << plan.stats().peak_union_variables << '\n';
     std::cout << "factor_peak_entries=" << plan.stats().peak_factor_entries << '\n';
+    std::cout << "factor_compiled_index_entries=" << plan.stats().compiled_index_entries << '\n';
+    std::cout << "factor_generic_compiled_index_entries=" << generic_plan.stats().compiled_index_entries << '\n';
     std::cout << "factor_plan_bytes=" << plan.estimated_bytes() << '\n';
+    std::cout << "factor_generic_plan_bytes=" << generic_plan.estimated_bytes() << '\n';
+    std::cout << "factor_compiled_index_memory_bytes="
+              << plan.estimated_bytes() - generic_plan.estimated_bytes() << '\n';
     std::cout << "factor_workspace_bytes=" << workspace.estimated_bytes() << '\n';
     std::cout << "factor_initial_error=" << initial_error << '\n';
+    std::cout << "factor_generic_error=" << generic_error << '\n';
+    std::cout << "factor_compiled_generic_error=" << compiled_generic_error << '\n';
     std::cout << "factor_rebind_points=" << points << '\n';
     std::cout << "factor_targeted_rebind_total_ms=" << targeted_total_ms << '\n';
     std::cout << "factor_full_rebind_total_ms=" << full_rebind_total_ms << '\n';
