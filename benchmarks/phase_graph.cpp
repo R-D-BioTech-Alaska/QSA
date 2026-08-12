@@ -136,11 +136,11 @@ template <class Function>
             0.0,
         });
     }
-    for (std::size_t qubit = 0; qubit < qubits / 2U; ++qubit) {
+    for (std::size_t qubit = 1U; qubit < qubits; ++qubit) {
         operations.push_back({
             OperationCode::Cz,
+            0U,
             static_cast<QubitId>(qubit),
-            static_cast<QubitId>(qubits - 1U - qubit),
             0.0,
             0.0,
         });
