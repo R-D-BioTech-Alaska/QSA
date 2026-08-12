@@ -2,6 +2,7 @@
 #include "qubit/qmps.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -391,11 +392,74 @@ int main() {
         broker_reference.apply_unitary(qubits / 2U, qubit::gates::rz(0.37));
         const QComplex broker_reference_value = broker_reference.expectation(broker_observable);
 
+        const std::size_t center = qubits / 2U;
+        std::vector<Operation> marginal_operations = broker_operations;
+        marginal_operations.push_back({
+            OperationCode::Ry,
+            static_cast<QubitId>(center),
+            0U,
+            0.19,
+            0.0,
+        });
+        MatrixProductState marginal_reference = broker_reference;
+        marginal_reference.apply_unitary(center, qubit::gates::ry(0.19));
+        const std::array<QubitId, 3> marginal_qubits{{
+            static_cast<QubitId>(center - 1U),
+            static_cast<QubitId>(center),
+            static_cast<QubitId>(center + 1U),
+        }};
+        const std::array<std::uint8_t, 3> marginal_bits{{0U, 1U, 0U}};
+
+        double marginal_direct_value = 0.0;
+        const double marginal_direct_ms = median_ms([&] {
+            marginal_direct_value = marginal_reference.marginal_probability(
+                marginal_qubits, marginal_bits);
+        }, 7);
+        std::optional<MPSPauliPlan> marginal_plan;
+        const double marginal_plan_setup_ms = median_ms([&] {
+            marginal_plan.emplace(marginal_reference);
+        }, 3);
+        double marginal_plan_value = 0.0;
+        const double marginal_plan_ms = median_ms([&] {
+            marginal_plan_value = marginal_plan->marginal_probability(
+                marginal_qubits, marginal_bits);
+        }, 11, 1000);
+
+        qubit::ExactExecutionBrokerConfig marginal_config;
+        marginal_config.tensor.max_contraction_entries = 8U;
+        ExactExecutionBroker marginal_broker(marginal_config);
+        qubit::ExactProbabilityResult marginal_one_shot_result;
+        const double marginal_one_shot_ms = median_ms([&] {
+            marginal_one_shot_result = marginal_broker.marginal_probability_from_zero(
+                qubits,
+                marginal_operations,
+                marginal_qubits,
+                marginal_bits);
+        }, 3);
+        std::optional<ExactPreparedProbabilityPlan> marginal_prepared;
+        const double marginal_prepared_setup_ms = median_ms([&] {
+            marginal_prepared.emplace(qubits, marginal_operations, marginal_config);
+        }, 3);
+        qubit::ExactProbabilityResult marginal_prepared_result;
+        const double marginal_prepared_ms = median_ms([&] {
+            marginal_prepared_result = marginal_prepared->marginal_probability(
+                marginal_qubits, marginal_bits);
+        }, 11, 1000);
+
         if (broker_result.route != ExactExecutionRoute::PersistentMPS ||
             prepared_result.route != ExactExecutionRoute::PersistentMPS ||
             prepared->prepared_fallback_route() != ExactExecutionRoute::PersistentMPS) {
             std::cerr << "large prepared broker did not retain persistent MPS route\n";
             return 6;
+        }
+        if (marginal_one_shot_result.route != ExactExecutionRoute::PersistentMPS ||
+            marginal_prepared->prepared_route() != ExactExecutionRoute::PersistentMPS ||
+            marginal_prepared_result.route != ExactExecutionRoute::PersistentMPS ||
+            std::abs(marginal_plan_value - marginal_direct_value) > 2e-9 ||
+            std::abs(marginal_one_shot_result.value - marginal_direct_value) > 2e-9 ||
+            std::abs(marginal_prepared_result.value - marginal_direct_value) > 2e-9) {
+            std::cerr << "large MPS marginal probability route changed exact semantics\n";
+            return 7;
         }
 
         std::cout << "mps_large_qubits=" << qubits << '\n';
@@ -431,6 +495,29 @@ int main() {
                   << (broker_result.value - broker_reference_value).magnitude() << '\n';
         std::cout << "mps_large_prepared_value_error="
                   << (prepared_result.value - broker_reference_value).magnitude() << '\n';
+        std::cout << "mps_large_marginal_direct_ms=" << marginal_direct_ms << '\n';
+        std::cout << "mps_large_marginal_plan_setup_ms=" << marginal_plan_setup_ms << '\n';
+        std::cout << "mps_large_marginal_plan_ms=" << marginal_plan_ms << '\n';
+        std::cout << "mps_large_marginal_plan_over_direct_speed="
+                  << marginal_direct_ms / marginal_plan_ms << '\n';
+        std::cout << "mps_large_marginal_plan_value_error="
+                  << std::abs(marginal_plan_value - marginal_direct_value) << '\n';
+        std::cout << "mps_large_marginal_one_shot_ms=" << marginal_one_shot_ms << '\n';
+        std::cout << "mps_large_marginal_prepared_setup_ms=" << marginal_prepared_setup_ms << '\n';
+        std::cout << "mps_large_marginal_prepared_ms=" << marginal_prepared_ms << '\n';
+        std::cout << "mps_large_marginal_prepared_over_one_shot_speed="
+                  << marginal_one_shot_ms / marginal_prepared_ms << '\n';
+        std::cout << "mps_large_marginal_prepared_over_direct_speed="
+                  << marginal_direct_ms / marginal_prepared_ms << '\n';
+        std::cout << "mps_large_marginal_break_even_queries="
+                  << break_even_queries(
+                         marginal_prepared_setup_ms,
+                         marginal_one_shot_ms,
+                         marginal_prepared_ms) << '\n';
+        std::cout << "mps_large_marginal_prepared_bytes="
+                  << marginal_prepared->estimated_bytes() << '\n';
+        std::cout << "mps_large_marginal_value_error="
+                  << std::abs(marginal_prepared_result.value - marginal_direct_value) << '\n';
     }
 
     return 0;
