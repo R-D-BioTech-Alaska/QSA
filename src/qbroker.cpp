@@ -132,6 +132,74 @@ void validate_observable(std::size_t qubit_count, const PauliObservable& observa
     return true;
 }
 
+[[nodiscard]] bool mps_resource_eligible(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    const MPSConfig& config,
+    const char** reason) {
+    const auto fail = [&](const char* message) {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return false;
+    };
+
+    if (config.max_bond_dimension == 0U || config.max_scalars == 0U ||
+        config.max_materialize_qubits == 0U ||
+        !std::isfinite(config.normalization_tolerance) ||
+        config.normalization_tolerance <= 0.0) {
+        return fail("MPS resource certificate found an invalid resource configuration");
+    }
+    if (qubit_count > config.max_scalars / 2U) {
+        return fail("MPS resource certificate exceeds configured initial scalar count");
+    }
+
+    std::size_t scalar_count = qubit_count * 2U;
+    std::vector<std::size_t> bonds(qubit_count > 1U ? qubit_count - 1U : 0U, 1U);
+    for (const Operation& operation : operations) {
+        if (operation.code != OperationCode::Cnot && operation.code != OperationCode::Cz) {
+            continue;
+        }
+
+        const std::size_t edge = std::min(
+            static_cast<std::size_t>(operation.first),
+            static_cast<std::size_t>(operation.second));
+        if (edge >= bonds.size()) {
+            return fail("MPS resource certificate requires structurally eligible operations");
+        }
+
+        const std::size_t old_bond = bonds[edge];
+        if (old_bond > std::numeric_limits<std::size_t>::max() / 2U) {
+            return fail("MPS resource certificate bond dimension overflows size_t");
+        }
+        const std::size_t next_bond = old_bond * 2U;
+        if (next_bond > config.max_bond_dimension) {
+            return fail("MPS resource certificate exceeds configured bond dimension");
+        }
+
+        const std::size_t left_dimension = edge == 0U ? 1U : bonds[edge - 1U];
+        const std::size_t right_dimension =
+            edge + 1U == bonds.size() ? 1U : bonds[edge + 1U];
+        if (left_dimension >
+            std::numeric_limits<std::size_t>::max() - right_dimension) {
+            return fail("MPS resource certificate scalar count overflows size_t");
+        }
+        const std::size_t neighbor_sum = left_dimension + right_dimension;
+        if (next_bond >
+            std::numeric_limits<std::size_t>::max() / neighbor_sum) {
+            return fail("MPS resource certificate scalar count overflows size_t");
+        }
+        const std::size_t old_local_scalars = next_bond * neighbor_sum;
+        if (scalar_count > config.max_scalars ||
+            old_local_scalars > config.max_scalars - scalar_count) {
+            return fail("MPS resource certificate exceeds configured scalar count");
+        }
+        scalar_count += old_local_scalars;
+        bonds[edge] = next_bond;
+    }
+    return true;
+}
+
 [[nodiscard]] std::size_t tensor_planner_variable_count(
     std::size_t qubit_count,
     std::span<const Operation> operations) noexcept {
@@ -870,8 +938,11 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
 
     const char* mps_reason = nullptr;
     const bool mps_eligible = mps_structure_eligible(qubit_count, operations, &mps_reason);
+    const char* mps_resource_reason = nullptr;
+    const bool mps_resource_ok = mps_eligible && mps_resource_eligible(
+        qubit_count, operations, config_.mps, &mps_resource_reason);
     const bool defer_tensor =
-        mps_eligible &&
+        mps_resource_ok &&
         config_.tensor_planning_defer_variables != 0U &&
         tensor_planner_variable_count(qubit_count, operations) >
             config_.tensor_planning_defer_variables;
@@ -1167,9 +1238,12 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
 
     const char* mps_reason = nullptr;
     const bool mps_eligible = mps_structure_eligible(qubit_count_, operations, &mps_reason);
+    const char* mps_resource_reason = nullptr;
+    const bool mps_resource_ok = mps_eligible && mps_resource_eligible(
+        qubit_count_, operations, config_.mps, &mps_resource_reason);
     const bool defer_tensor =
         capability == QueryCapability::FullBasis &&
-        mps_eligible &&
+        mps_resource_ok &&
         config_.tensor_planning_defer_variables != 0U &&
         tensor_planner_variable_count(qubit_count_, operations) >
             config_.tensor_planning_defer_variables;
