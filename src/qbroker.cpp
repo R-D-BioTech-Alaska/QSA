@@ -164,6 +164,102 @@ void execute_mps(MatrixProductState& state, std::span<const Operation> operation
     }
 }
 
+[[nodiscard]] bool basis_permutation_probability(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    std::span<const std::uint8_t> basis_bits,
+    double* probability,
+    const char** reason) {
+    const auto fail = [&](const char* message) {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return false;
+    };
+
+    std::vector<std::uint8_t> bits(qubit_count, 0U);
+    for (const Operation& operation : operations) {
+        switch (operation.code) {
+            case OperationCode::X:
+            case OperationCode::Y:
+                if (operation.first >= qubit_count) {
+                    return fail("BasisPermutation route single-qubit target is out of range");
+                }
+                bits[operation.first] ^= 1U;
+                break;
+            case OperationCode::Z:
+            case OperationCode::S:
+            case OperationCode::Sdg:
+            case OperationCode::T:
+            case OperationCode::Tdg:
+                if (operation.first >= qubit_count) {
+                    return fail("BasisPermutation route single-qubit target is out of range");
+                }
+                break;
+            case OperationCode::Rz:
+                if (operation.first >= qubit_count) {
+                    return fail("BasisPermutation route single-qubit target is out of range");
+                }
+                if (!std::isfinite(operation.parameter)) {
+                    return fail("BasisPermutation route Rz angle must be finite");
+                }
+                break;
+            case OperationCode::Cnot:
+                if (operation.first >= qubit_count || operation.second >= qubit_count) {
+                    return fail("BasisPermutation route CNOT qubit is out of range");
+                }
+                if (operation.first == operation.second) {
+                    return fail("BasisPermutation route CNOT requires distinct qubits");
+                }
+                if (bits[operation.first] != 0U) {
+                    bits[operation.second] ^= 1U;
+                }
+                break;
+            case OperationCode::Cz:
+                if (operation.first >= qubit_count || operation.second >= qubit_count) {
+                    return fail("BasisPermutation route CZ qubit is out of range");
+                }
+                if (operation.first == operation.second) {
+                    return fail("BasisPermutation route CZ requires distinct qubits");
+                }
+                break;
+            case OperationCode::Swap:
+                if (operation.first >= qubit_count || operation.second >= qubit_count) {
+                    return fail("BasisPermutation route SWAP qubit is out of range");
+                }
+                if (operation.first == operation.second) {
+                    return fail("BasisPermutation route SWAP requires distinct qubits");
+                }
+                std::swap(bits[operation.first], bits[operation.second]);
+                break;
+            case OperationCode::H:
+                return fail("BasisPermutation route does not support H");
+            case OperationCode::Rx:
+            case OperationCode::Ry:
+                return fail("BasisPermutation route supports monomial rotations only");
+            case OperationCode::BitFlipTrajectory:
+            case OperationCode::PhaseFlipTrajectory:
+            case OperationCode::DepolarizingTrajectory:
+            case OperationCode::AmplitudeDampingTrajectory:
+                return fail("BasisPermutation route supports unitary operations only");
+            default:
+                return fail("BasisPermutation route received an unknown opcode");
+        }
+    }
+
+    bool match = true;
+    for (std::size_t qubit = 0U; qubit < qubit_count; ++qubit) {
+        if (bits[qubit] != basis_bits[qubit]) {
+            match = false;
+            break;
+        }
+    }
+    if (probability != nullptr) {
+        *probability = match ? 1.0 : 0.0;
+    }
+    return true;
+}
+
 [[nodiscard]] bool monomial_operation(
     std::size_t qubit_count,
     const Operation& operation,
@@ -423,6 +519,8 @@ const char* exact_execution_route_name(ExactExecutionRoute route) noexcept {
             return "PhaseGraph";
         case ExactExecutionRoute::UniformMagnitude:
             return "UniformMagnitude";
+        case ExactExecutionRoute::BasisPermutation:
+            return "BasisPermutation";
     }
     return "unknown";
 }
@@ -517,6 +615,19 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
     validate_basis_width(qubit_count, basis_bits);
 
     ExactProbabilityResult result;
+    const char* basis_reason = nullptr;
+    double basis_probability = 0.0;
+    if (basis_permutation_probability(
+            qubit_count,
+            operations,
+            basis_bits,
+            &basis_probability,
+            &basis_reason)) {
+        result.value = basis_probability;
+        result.route = ExactExecutionRoute::BasisPermutation;
+        return result;
+    }
+
     const char* uniform_reason = nullptr;
     if (uniform_magnitude_eligible(qubit_count, operations, &uniform_reason)) {
         result.value = uniform_probability(qubit_count);
@@ -530,7 +641,11 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         result.route = ExactExecutionRoute::TensorNetwork;
         return result;
     } catch (const QStateError& error) {
-        result.fallback_reason = "uniform: ";
+        result.fallback_reason = "basis_permutation: ";
+        result.fallback_reason += basis_reason != nullptr
+            ? basis_reason
+            : "basis-permutation certificate failed";
+        result.fallback_reason += "; uniform: ";
         result.fallback_reason += uniform_reason != nullptr
             ? uniform_reason
             : "uniform-magnitude certificate failed";
