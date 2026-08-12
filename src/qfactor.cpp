@@ -80,7 +80,8 @@ struct PlannerCandidateGreater {
     const ExactFactorConfig& second) noexcept {
     return first.max_factor_entries == second.max_factor_entries &&
            first.max_factors == second.max_factors &&
-           first.max_variables == second.max_variables;
+           first.max_variables == second.max_variables &&
+           first.max_compiled_index_entries == second.max_compiled_index_entries;
 }
 
 }  // namespace
@@ -476,6 +477,7 @@ ExactFactorPlan::ExactFactorPlan(
     stats_.variable_count = dimensions_.size();
     stats_.source_factors = graph.factors_.size();
     stats_.retained_variables = retained_variables_.size();
+    std::size_t compiled_index_entries = 0U;
 
     while (true) {
         while (!candidates.empty()) {
@@ -521,6 +523,11 @@ ExactFactorPlan::ExactFactorPlan(
             step.output_entries > config_.max_factor_entries) {
             throw QStateError("Exact factor reduced table exceeded max_factor_entries");
         }
+        if (step.output_entries >
+            std::numeric_limits<std::size_t>::max() / step.selected_dimension ||
+            step.output_entries * step.selected_dimension != selected_entries) {
+            throw QStateError("Exact factor elimination assignment count is inconsistent");
+        }
 
         step.inputs.reserve(selected_bucket.size());
         for (const std::size_t node : selected_bucket) {
@@ -539,6 +546,58 @@ ExactFactorPlan::ExactFactorPlan(
             input.strides = scope_strides(scopes[node], dimensions_);
             step.inputs.push_back(std::move(input));
             active[node] = false;
+        }
+
+        const std::size_t assignment_count = step.output_entries * step.selected_dimension;
+        std::size_t mapping_entries = 0U;
+        if (!step.inputs.empty() &&
+            assignment_count <=
+                std::numeric_limits<std::size_t>::max() / step.inputs.size()) {
+            mapping_entries = assignment_count * step.inputs.size();
+        }
+        if (mapping_entries != 0U &&
+            compiled_index_entries <= config_.max_compiled_index_entries &&
+            mapping_entries <= config_.max_compiled_index_entries - compiled_index_entries) {
+            step.compiled_input_indices.resize(mapping_entries);
+            std::vector<std::size_t> coordinates(step.union_variables.size(), 0U);
+            for (std::size_t output_index = 0U;
+                 output_index < step.output_entries;
+                 ++output_index) {
+                std::size_t remaining = output_index;
+                for (std::size_t position = 0U;
+                     position < step.union_variables.size();
+                     ++position) {
+                    if (position == step.selected_position) {
+                        continue;
+                    }
+                    const std::size_t dimension_value =
+                        dimensions_[step.union_variables[position]];
+                    coordinates[position] = remaining % dimension_value;
+                    remaining /= dimension_value;
+                }
+                for (std::size_t selected_value = 0U;
+                     selected_value < step.selected_dimension;
+                     ++selected_value) {
+                    coordinates[step.selected_position] = selected_value;
+                    const std::size_t base =
+                        (output_index * step.selected_dimension + selected_value) *
+                        step.inputs.size();
+                    for (std::size_t input_index = 0U;
+                         input_index < step.inputs.size();
+                         ++input_index) {
+                        const InputMap& input = step.inputs[input_index];
+                        std::size_t local_index = 0U;
+                        for (std::size_t position = 0U;
+                             position < input.positions.size();
+                             ++position) {
+                            local_index += coordinates[input.positions[position]] *
+                                           input.strides[position];
+                        }
+                        step.compiled_input_indices[base + input_index] = local_index;
+                    }
+                }
+            }
+            compiled_index_entries += mapping_entries;
         }
 
         stats_.peak_union_variables =
@@ -566,6 +625,7 @@ ExactFactorPlan::ExactFactorPlan(
         }
         steps_.push_back(std::move(step));
     }
+    stats_.compiled_index_entries = compiled_index_entries;
 
     for (std::size_t node = 0U; node < active.size(); ++node) {
         if (!active[node]) {
@@ -676,6 +736,35 @@ void ExactFactorPlan::evaluate(
     for (std::size_t step_index = 0U; step_index < steps_.size(); ++step_index) {
         const Step& step = steps_[step_index];
         std::vector<QComplex>& step_output = workspace_value.outputs_[step_index];
+        if (!step.compiled_input_indices.empty()) {
+            const std::size_t input_count = step.inputs.size();
+            for (std::size_t output_index = 0U;
+                 output_index < step_output.size();
+                 ++output_index) {
+                QComplex sum{};
+                const std::size_t output_base =
+                    output_index * step.selected_dimension * input_count;
+                for (std::size_t selected_value = 0U;
+                     selected_value < step.selected_dimension;
+                     ++selected_value) {
+                    QComplex product{1.0, 0.0};
+                    const std::size_t input_base =
+                        output_base + selected_value * input_count;
+                    for (std::size_t input_index = 0U;
+                         input_index < input_count;
+                         ++input_index) {
+                        product *= node_value(
+                            step.inputs[input_index].node,
+                            step.compiled_input_indices[input_base + input_index],
+                            workspace_value);
+                    }
+                    sum += product;
+                }
+                step_output[output_index] = sum;
+            }
+            continue;
+        }
+
         for (std::size_t output_index = 0U; output_index < step_output.size(); ++output_index) {
             std::size_t remaining = output_index;
             for (std::size_t position = 0U; position < step.union_variables.size(); ++position) {
@@ -853,7 +942,8 @@ std::size_t ExactFactorPlan::estimated_bytes() const noexcept {
     for (const Step& step : steps_) {
         bytes += step.union_variables.capacity() * sizeof(FactorVariableId) +
                  step.output_variables.capacity() * sizeof(FactorVariableId) +
-                 step.inputs.capacity() * sizeof(InputMap);
+                 step.inputs.capacity() * sizeof(InputMap) +
+                 step.compiled_input_indices.capacity() * sizeof(std::size_t);
         for (const InputMap& input : step.inputs) {
             bytes += input.positions.capacity() * sizeof(std::size_t) +
                      input.strides.capacity() * sizeof(std::size_t);
