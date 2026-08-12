@@ -1,0 +1,90 @@
+name: QSA Exact Factor Broker
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qfactor.hpp"
+      - "include/qubit/qfactor_chain.hpp"
+      - "include/qubit/qfactor_broker.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_factor_broker.cpp"
+      - "benchmarks/factor_broker.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-factor-broker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  broker-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create standalone broker build
+        shell: bash
+        run: |
+          mkdir -p broker-driver
+          cat > broker-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAFactorBrokerCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(broker_tests ../tests/test_factor_broker.cpp ../src/qfactor.cpp)
+          target_include_directories(broker_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(broker_tests PRIVATE /W4)
+          else()
+              target_compile_options(broker_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME broker_tests COMMAND broker_tests)
+          EOF
+      - name: Configure
+        run: cmake -S broker-driver -B broker-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build broker-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir broker-build -C Release --output-on-failure
+
+  broker-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_factor_broker.cpp src/qfactor.cpp -o factor-broker-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./factor-broker-sanitize
+
+  broker-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build benchmark
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/factor_broker.cpp src/qfactor.cpp -o factor-broker-benchmark
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run matched controls
+        run: |
+          set -o pipefail
+          ./factor-broker-benchmark | tee factor-broker-evidence.txt
+      - name: Hash evidence
+        run: sha256sum factor-broker-evidence.txt | tee factor-broker-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-factor-broker-evidence
+          path: |
+            factor-broker-evidence.txt
+            factor-broker-evidence.sha256
