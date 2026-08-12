@@ -1,6 +1,9 @@
+#include "qubit/qbroker.hpp"
 #include "qubit/qphase_graph.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -11,6 +14,11 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using qubit::ExactExecutionBroker;
+using qubit::ExactExecutionBrokerConfig;
+using qubit::ExactExecutionRoute;
+using qubit::Operation;
+using qubit::OperationCode;
 using qubit::PhaseGraphConfig;
 using qubit::PhaseGraphState;
 using qubit::QComplex;
@@ -105,6 +113,83 @@ template <class Function>
     return std::chrono::duration<double, std::milli>(stop - start).count();
 }
 
+template <class Function>
+[[nodiscard]] double median_ms(Function&& function, int repeats = 7) {
+    std::vector<double> samples;
+    samples.reserve(static_cast<std::size_t>(repeats));
+    for (int repeat = 0; repeat < repeats; ++repeat) {
+        samples.push_back(timed_ms(function));
+    }
+    std::sort(samples.begin(), samples.end());
+    return samples[samples.size() / 2U];
+}
+
+[[nodiscard]] std::vector<Operation> broker_phase_operations(std::size_t qubits) {
+    std::vector<Operation> operations;
+    operations.reserve(3U * qubits);
+    for (std::size_t qubit = 0; qubit < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::H,
+            static_cast<QubitId>(qubit),
+            0U,
+            0.0,
+            0.0,
+        });
+    }
+    for (std::size_t qubit = 0; qubit < qubits / 2U; ++qubit) {
+        operations.push_back({
+            OperationCode::Cz,
+            static_cast<QubitId>(qubit),
+            static_cast<QubitId>(qubits - 1U - qubit),
+            0.0,
+            0.0,
+        });
+    }
+    for (std::size_t qubit = 0; qubit < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::Rz,
+            static_cast<QubitId>(qubit),
+            0U,
+            0.0003 * static_cast<double>((qubit % 17U) + 1U),
+            0.0,
+        });
+    }
+    for (std::size_t qubit = 0; qubit < qubits; qubit += 3U) {
+        operations.push_back({
+            OperationCode::T,
+            static_cast<QubitId>(qubit),
+            0U,
+            0.0,
+            0.0,
+        });
+    }
+    return operations;
+}
+
+[[nodiscard]] PhaseGraphState direct_phase_graph(
+    std::size_t qubits,
+    std::span<const Operation> operations,
+    PhaseGraphConfig config = {}) {
+    PhaseGraphState state(qubits, config);
+    for (std::size_t index = qubits; index < operations.size(); ++index) {
+        const Operation& operation = operations[index];
+        switch (operation.code) {
+            case OperationCode::Cz:
+                state.apply_cz(operation.first, operation.second);
+                break;
+            case OperationCode::Rz:
+                state.apply_rz(operation.first, operation.parameter);
+                break;
+            case OperationCode::T:
+                state.apply_t(operation.first);
+                break;
+            default:
+                break;
+        }
+    }
+    return state;
+}
+
 }  // namespace
 
 int main() {
@@ -141,5 +226,78 @@ int main() {
     std::cout << "phase_graph qubits=100000 gates=199999 milliseconds=" << large_ms
               << " edges=" << large.edge_count()
               << " bytes=" << large.estimated_bytes() << '\n';
+
+    {
+        constexpr std::size_t qubits = 18U;
+        const std::vector<Operation> broker_operations = broker_phase_operations(qubits);
+        const std::vector<std::uint8_t> bits(qubits, 0U);
+        ExactExecutionBrokerConfig broker_config;
+        broker_config.tensor.max_contraction_entries = 8U;
+        ExactExecutionBroker broker(broker_config);
+        qubit::ExactProbabilityResult broker_result;
+        const double broker_ms = median_ms([&] {
+            broker_result = broker.basis_probability_from_zero(
+                qubits,
+                broker_operations,
+                bits);
+        });
+
+        double reference_probability = 0.0;
+        std::size_t reference_bytes = 0U;
+        const double qregister_ms = median_ms([&] {
+            QRegister state(qubits);
+            qubit::OperationPlan plan(broker_operations);
+            plan.execute(state);
+            reference_probability = state.amplitude_bits(bits).norm2();
+            reference_bytes = state.estimated_bytes();
+        });
+        const PhaseGraphState direct = direct_phase_graph(qubits, broker_operations);
+        if (broker_result.route != ExactExecutionRoute::PhaseGraph) {
+            std::cerr << "phase-graph broker did not select PhaseGraph\n";
+            return 2;
+        }
+        std::cout << "phase_graph_broker_qubits=" << qubits << '\n';
+        std::cout << "phase_graph_broker_route="
+                  << qubit::exact_execution_route_name(broker_result.route) << '\n';
+        std::cout << "phase_graph_broker_ms=" << broker_ms << '\n';
+        std::cout << "phase_graph_broker_qregister_ms=" << qregister_ms << '\n';
+        std::cout << "phase_graph_broker_speed_ratio=" << qregister_ms / broker_ms << '\n';
+        std::cout << "phase_graph_broker_value_error="
+                  << std::abs(broker_result.value - reference_probability) << '\n';
+        std::cout << "phase_graph_broker_bytes=" << direct.estimated_bytes() << '\n';
+        std::cout << "phase_graph_broker_edges=" << direct.edge_count() << '\n';
+        std::cout << "phase_graph_broker_qregister_bytes=" << reference_bytes << '\n';
+    }
+
+    {
+        constexpr std::size_t qubits = 1'000U;
+        const std::vector<Operation> broker_operations = broker_phase_operations(qubits);
+        const std::vector<std::uint8_t> bits(qubits, 0U);
+        ExactExecutionBrokerConfig broker_config;
+        broker_config.tensor.max_contraction_entries = 8U;
+        broker_config.phase_graph.max_edges = 2'000U;
+        ExactExecutionBroker broker(broker_config);
+        qubit::ExactProbabilityResult result;
+        const double broker_ms = median_ms([&] {
+            result = broker.basis_probability_from_zero(
+                qubits,
+                broker_operations,
+                bits);
+        }, 3);
+        const PhaseGraphState direct = direct_phase_graph(
+            qubits,
+            broker_operations,
+            broker_config.phase_graph);
+        const double expected = std::exp2(-static_cast<double>(qubits));
+        if (result.route != ExactExecutionRoute::PhaseGraph) {
+            std::cerr << "wide phase-graph broker did not select PhaseGraph\n";
+            return 3;
+        }
+        std::cout << "phase_graph_broker_wide_qubits=" << qubits << '\n';
+        std::cout << "phase_graph_broker_wide_ms=" << broker_ms << '\n';
+        std::cout << "phase_graph_broker_wide_error=" << std::abs(result.value - expected) << '\n';
+        std::cout << "phase_graph_broker_wide_edges=" << direct.edge_count() << '\n';
+        std::cout << "phase_graph_broker_wide_bytes=" << direct.estimated_bytes() << '\n';
+    }
     return 0;
 }

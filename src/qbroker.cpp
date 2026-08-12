@@ -101,6 +101,82 @@ void execute_mps(MatrixProductState& state, std::span<const Operation> operation
     }
 }
 
+[[nodiscard]] PhaseGraphState execute_phase_graph_from_zero(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    PhaseGraphConfig config) {
+    if (operations.size() < qubit_count) {
+        throw QStateError("PhaseGraph route requires a complete leading H layer");
+    }
+
+    std::vector<std::uint8_t> seen(qubit_count, 0U);
+    for (std::size_t index = 0; index < qubit_count; ++index) {
+        const Operation& operation = operations[index];
+        if (operation.code != OperationCode::H) {
+            throw QStateError("PhaseGraph route requires a complete leading H layer");
+        }
+        if (operation.first >= qubit_count) {
+            throw QStateError("PhaseGraph route leading H qubit is out of range");
+        }
+        if (seen[operation.first] != 0U) {
+            throw QStateError("PhaseGraph route leading H layer contains duplicate qubits");
+        }
+        seen[operation.first] = 1U;
+    }
+
+    PhaseGraphState state(qubit_count, config);
+    for (std::size_t index = qubit_count; index < operations.size(); ++index) {
+        const Operation& operation = operations[index];
+        switch (operation.code) {
+            case OperationCode::X:
+                state.apply_x(operation.first);
+                break;
+            case OperationCode::Y:
+                state.apply_y(operation.first);
+                break;
+            case OperationCode::Z:
+                state.apply_z(operation.first);
+                break;
+            case OperationCode::S:
+                state.apply_s(operation.first);
+                break;
+            case OperationCode::Sdg:
+                state.apply_sdg(operation.first);
+                break;
+            case OperationCode::T:
+                state.apply_t(operation.first);
+                break;
+            case OperationCode::Tdg:
+                state.apply_tdg(operation.first);
+                break;
+            case OperationCode::Rz:
+                state.apply_rz(operation.first, operation.parameter);
+                break;
+            case OperationCode::Cz:
+                state.apply_cz(operation.first, operation.second);
+                break;
+            case OperationCode::Swap:
+                state.apply_swap(operation.first, operation.second);
+                break;
+            case OperationCode::H:
+                throw QStateError("PhaseGraph route does not support H after the leading layer");
+            case OperationCode::Rx:
+            case OperationCode::Ry:
+                throw QStateError("PhaseGraph route supports phase-preserving rotations only");
+            case OperationCode::Cnot:
+                throw QStateError("PhaseGraph route does not support CNOT");
+            case OperationCode::BitFlipTrajectory:
+            case OperationCode::PhaseFlipTrajectory:
+            case OperationCode::DepolarizingTrajectory:
+            case OperationCode::AmplitudeDampingTrajectory:
+                throw QStateError("PhaseGraph route supports unitary phase-graph operations only");
+            default:
+                throw QStateError("PhaseGraph route received an unknown opcode");
+        }
+    }
+    return state;
+}
+
 [[nodiscard]] std::size_t dynamic_bytes(std::size_t estimated, std::size_t object_size) noexcept {
     return estimated > object_size ? estimated - object_size : 0U;
 }
@@ -122,6 +198,8 @@ const char* exact_execution_route_name(ExactExecutionRoute route) noexcept {
             return "TensorNetwork";
         case ExactExecutionRoute::PersistentMPS:
             return "PersistentMPS";
+        case ExactExecutionRoute::PhaseGraph:
+            return "PhaseGraph";
     }
     return "unknown";
 }
@@ -227,6 +305,19 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         return result;
     } catch (const QStateError& error) {
         result.fallback_reason += "; mps: ";
+        result.fallback_reason += failure_message(error);
+    }
+
+    try {
+        PhaseGraphState state = execute_phase_graph_from_zero(
+            qubit_count,
+            operations,
+            config_.phase_graph);
+        result.value = state.amplitude_bits(basis_bits).norm2();
+        result.route = ExactExecutionRoute::PhaseGraph;
+        return result;
+    } catch (const QStateError& error) {
+        result.fallback_reason += "; phase_graph: ";
         result.fallback_reason += failure_message(error);
     }
 

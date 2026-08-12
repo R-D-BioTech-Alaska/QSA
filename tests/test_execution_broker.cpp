@@ -329,6 +329,81 @@ int main() {
     }
 
     {
+        ExactExecutionBrokerConfig config;
+        config.tensor.max_contraction_entries = 8U;
+        ExactExecutionBroker broker(config);
+        const std::array<Operation, 9> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::H, 1U, 0U, 0.0, 0.0},
+            {OperationCode::H, 2U, 0U, 0.0, 0.0},
+            {OperationCode::H, 3U, 0U, 0.0, 0.0},
+            {OperationCode::Cz, 0U, 3U, 0.0, 0.0},
+            {OperationCode::Rz, 1U, 0U, 0.37, 0.0},
+            {OperationCode::T, 2U, 0U, 0.0, 0.0},
+            {OperationCode::Sdg, 3U, 0U, 0.0, 0.0},
+            {OperationCode::Swap, 0U, 2U, 0.0, 0.0},
+        }};
+        const std::array<std::uint8_t, 4> bits{{1U, 0U, 1U, 1U}};
+        const auto result = broker.basis_probability_from_zero(4U, operations, bits);
+        const QRegister direct = evolve(QRegister(4U), operations);
+        require(result.route == ExactExecutionRoute::PhaseGraph,
+                "tensor and MPS collapse did not select PhaseGraph");
+        require(result.fallback_reason.find("tensor:") != std::string::npos &&
+                    result.fallback_reason.find("mps:") != std::string::npos,
+                "PhaseGraph route did not preserve earlier rejection reasons");
+        require_close(result.value, direct.amplitude_bits(bits).norm2(),
+                      "PhaseGraph broker probability differs from QRegister");
+    }
+
+    {
+        ExactExecutionBrokerConfig config;
+        config.tensor.max_contraction_entries = 8U;
+        config.phase_graph.max_edges = 1U;
+        ExactExecutionBroker broker(config);
+        const std::array<Operation, 6> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::H, 1U, 0U, 0.0, 0.0},
+            {OperationCode::H, 2U, 0U, 0.0, 0.0},
+            {OperationCode::H, 3U, 0U, 0.0, 0.0},
+            {OperationCode::Cz, 0U, 3U, 0.0, 0.0},
+            {OperationCode::Cz, 1U, 3U, 0.0, 0.0},
+        }};
+        const auto result = broker.basis_probability_from_zero(4U, operations, BasisIndex{0});
+        const QRegister direct = evolve(QRegister(4U), operations);
+        require(result.route == ExactExecutionRoute::Register,
+                "PhaseGraph edge-limit collapse did not reach QRegister");
+        require(result.fallback_reason.find("tensor:") != std::string::npos &&
+                    result.fallback_reason.find("mps:") != std::string::npos &&
+                    result.fallback_reason.find("phase_graph:") != std::string::npos,
+                "edge-limit fallback did not preserve all specialized route reasons");
+        require_close(result.value, direct.amplitude(0U).norm2(),
+                      "PhaseGraph edge-limit fallback changed the result");
+    }
+
+    {
+        ExactExecutionBrokerConfig config;
+        config.tensor.max_contraction_entries = 8U;
+        ExactExecutionBroker broker(config);
+        const std::array<Operation, 5> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::H, 1U, 0U, 0.0, 0.0},
+            {OperationCode::H, 2U, 0U, 0.0, 0.0},
+            {OperationCode::H, 3U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 0U, 3U, 0.0, 0.0},
+        }};
+        const auto result = broker.basis_probability_from_zero(4U, operations, BasisIndex{0});
+        const QRegister direct = evolve(QRegister(4U), operations);
+        require(result.route == ExactExecutionRoute::Register,
+                "unsupported PhaseGraph operation did not reach QRegister");
+        require(result.fallback_reason.find("tensor:") != std::string::npos &&
+                    result.fallback_reason.find("mps:") != std::string::npos &&
+                    result.fallback_reason.find("phase_graph:") != std::string::npos,
+                "unsupported fallback did not preserve all specialized route reasons");
+        require_close(result.value, direct.amplitude(0U).norm2(),
+                      "unsupported PhaseGraph fallback changed the result");
+    }
+
+    {
         ExactExecutionBroker broker;
         const std::array<Operation, 2> operations{{
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
@@ -338,8 +413,9 @@ int main() {
         const QRegister direct = evolve(QRegister(1U), operations);
         require(result.route == ExactExecutionRoute::Register,
                 "trajectory probability did not fall back to QRegister");
-        require(result.fallback_reason.find("mps:") != std::string::npos,
-                "trajectory probability fallback did not record MPS rejection");
+        require(result.fallback_reason.find("mps:") != std::string::npos &&
+                    result.fallback_reason.find("phase_graph:") != std::string::npos,
+                "trajectory probability fallback did not record specialized rejections");
         require_close(result.value, direct.amplitude(1U).norm2(),
                       "trajectory probability fallback changed the result");
     }
@@ -358,8 +434,9 @@ int main() {
         require(result.route == ExactExecutionRoute::Register,
                 "tensor and MPS bond collapse did not reach QRegister");
         require(result.fallback_reason.find("tensor:") != std::string::npos &&
-                    result.fallback_reason.find("mps:") != std::string::npos,
-                "probability fallback did not preserve tensor and MPS reasons");
+                    result.fallback_reason.find("mps:") != std::string::npos &&
+                    result.fallback_reason.find("phase_graph:") != std::string::npos,
+                "probability fallback did not preserve specialized reasons");
         require_close(result.value, direct.amplitude(0U).norm2(),
                       "probability bond fallback changed the result");
     }

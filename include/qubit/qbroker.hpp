@@ -2,6 +2,7 @@
 
 #include "qubit/qmps.hpp"
 #include "qubit/qpauli.hpp"
+#include "qubit/qphase_graph.hpp"
 #include "qubit/qplan.hpp"
 #include "qubit/qstate.hpp"
 #include "qubit/qtensor.hpp"
@@ -19,11 +20,13 @@ enum class ExactExecutionRoute : std::uint8_t {
     CausalPauli = 1,
     TensorNetwork = 2,
     PersistentMPS = 3,
+    PhaseGraph = 4,
 };
 
 struct ExactExecutionBrokerConfig {
     TensorNetworkConfig tensor{};
     MPSConfig mps{};
+    PhaseGraphConfig phase_graph{};
     QStateConfig register_state{};
 };
 
