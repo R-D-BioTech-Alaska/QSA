@@ -13,7 +13,7 @@ namespace {
     return std::isfinite(value.re) && std::isfinite(value.im);
 }
 
-[[nodiscard]] bool zero(const QComplex& value) noexcept {
+[[nodiscard]] bool is_zero(const QComplex& value) noexcept {
     return value.re == 0.0 && value.im == 0.0;
 }
 
@@ -69,11 +69,21 @@ namespace {
 }
 
 [[nodiscard]] QMatrix2 projector_zero() {
-    return {{{1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}}};
+    QMatrix2 matrix{};
+    matrix.values = {
+        QComplex{1.0, 0.0}, QComplex{0.0, 0.0},
+        QComplex{0.0, 0.0}, QComplex{0.0, 0.0},
+    };
+    return matrix;
 }
 
 [[nodiscard]] QMatrix2 projector_one() {
-    return {{{0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {1.0, 0.0}}};
+    QMatrix2 matrix{};
+    matrix.values = {
+        QComplex{0.0, 0.0}, QComplex{0.0, 0.0},
+        QComplex{0.0, 0.0}, QComplex{1.0, 0.0},
+    };
+    return matrix;
 }
 
 void transfer_left(
@@ -86,14 +96,14 @@ void transfer_left(
         for (std::size_t left_ket = 0U; left_ket < site.left_dimension; ++left_ket) {
             const QComplex prefix =
                 environment[left_bra * site.left_dimension + left_ket];
-            if (zero(prefix)) {
+            if (is_zero(prefix)) {
                 continue;
             }
             for (std::uint8_t bra = 0U; bra < 2U; ++bra) {
                 const std::vector<QComplex>& bra_tensor = physical(site, bra);
                 for (std::uint8_t ket = 0U; ket < 2U; ++ket) {
                     const QComplex local = operation(bra, ket);
-                    if (zero(local)) {
+                    if (is_zero(local)) {
                         continue;
                     }
                     const std::vector<QComplex>& ket_tensor = physical(site, ket);
@@ -102,7 +112,7 @@ void transfer_left(
                          ++right_bra) {
                         const QComplex bra_value =
                             bra_tensor[left_bra * site.right_dimension + right_bra];
-                        if (zero(bra_value)) {
+                        if (is_zero(bra_value)) {
                             continue;
                         }
                         const QComplex weight = prefix * bra_value.conjugate() * local;
@@ -111,7 +121,7 @@ void transfer_left(
                              ++right_ket) {
                             const QComplex ket_value =
                                 ket_tensor[left_ket * site.right_dimension + right_ket];
-                            if (!zero(ket_value)) {
+                            if (!is_zero(ket_value)) {
                                 next[right_bra * site.right_dimension + right_ket] +=
                                     weight * ket_value;
                             }
@@ -138,7 +148,7 @@ void transfer_right_identity(
                      ++right_bra) {
                     const QComplex bra_value =
                         tensor[left_bra * site.right_dimension + right_bra];
-                    if (zero(bra_value)) {
+                    if (is_zero(bra_value)) {
                         continue;
                     }
                     for (std::size_t right_ket = 0U;
@@ -148,7 +158,7 @@ void transfer_right_identity(
                             tensor[left_ket * site.right_dimension + right_ket];
                         const QComplex suffix =
                             environment[right_bra * site.right_dimension + right_ket];
-                        if (!zero(ket_value) && !zero(suffix)) {
+                        if (!is_zero(ket_value) && !is_zero(suffix)) {
                             value += bra_value.conjugate() * ket_value * suffix;
                         }
                     }
@@ -460,12 +470,12 @@ QComplex MatrixProductState::amplitude(std::span<const std::uint8_t> bits) const
         const std::vector<QComplex>& tensor = physical(site, bits[qubit]);
         next.assign(site.right_dimension, QComplex{});
         for (std::size_t row = 0U; row < site.left_dimension; ++row) {
-            if (zero(left[row])) {
+            if (is_zero(left[row])) {
                 continue;
             }
             for (std::size_t column = 0U; column < site.right_dimension; ++column) {
                 const QComplex value = tensor[row * site.right_dimension + column];
-                if (!zero(value)) {
+                if (!is_zero(value)) {
                     next[column] += left[row] * value;
                 }
             }
