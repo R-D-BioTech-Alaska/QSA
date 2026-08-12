@@ -1104,7 +1104,11 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
         try {
             MatrixProductState state = MatrixProductState::zero(qubit_count_, config_.mps);
             execute_mps(state, operations);
-            mps_state_.emplace(std::move(state));
+            try {
+                mps_plan_.emplace(state);
+            } catch (const QStateError&) {
+                mps_state_.emplace(std::move(state));
+            }
             route_ = ExactExecutionRoute::PersistentMPS;
             return;
         } catch (const QStateError& error) {
@@ -1178,11 +1182,15 @@ ExactProbabilityResult ExactPreparedProbabilityPlan::probability(
             result.value = tensor_plan_->amplitude(basis_bits, &result.tensor_stats).norm2();
             return result;
         case ExactExecutionRoute::PersistentMPS:
-            if (!mps_state_.has_value()) {
-                throw QStateError("Prepared MPS probability plan is missing its state");
+            if (mps_plan_.has_value()) {
+                result.value = mps_plan_->state().amplitude(basis_bits).norm2();
+                return result;
             }
-            result.value = mps_state_->amplitude(basis_bits).norm2();
-            return result;
+            if (mps_state_.has_value()) {
+                result.value = mps_state_->amplitude(basis_bits).norm2();
+                return result;
+            }
+            throw QStateError("Prepared MPS probability plan is missing its state");
         case ExactExecutionRoute::PhaseGraph:
             if (!phase_graph_state_.has_value()) {
                 throw QStateError("Prepared PhaseGraph probability plan is missing its state");
@@ -1247,12 +1255,21 @@ ExactProbabilityResult ExactPreparedProbabilityPlan::marginal_probability(
             }
             result.value = stabilizer_marginal_probability(*stabilizer_state_, qubits, bits);
             return result;
-        case ExactExecutionRoute::TensorNetwork:
         case ExactExecutionRoute::PersistentMPS:
+            if (mps_plan_.has_value()) {
+                result.value = mps_plan_->marginal_probability(qubits, bits);
+                return result;
+            }
+            if (mps_state_.has_value()) {
+                result.value = mps_state_->marginal_probability(qubits, bits);
+                return result;
+            }
+            throw QStateError("Prepared MPS probability plan is missing its state");
+        case ExactExecutionRoute::TensorNetwork:
         case ExactExecutionRoute::PhaseGraph:
         case ExactExecutionRoute::Register:
             throw QStateError(
-                "Prepared marginal probability currently requires a BasisPermutation, UniformMagnitude, or Stabilizer route");
+                "Prepared marginal probability currently requires a BasisPermutation, UniformMagnitude, Stabilizer, or PersistentMPS route");
         case ExactExecutionRoute::CausalPauli:
             throw QStateError("Prepared probability plan cannot use CausalPauli");
     }
@@ -1267,6 +1284,9 @@ std::size_t ExactPreparedProbabilityPlan::estimated_bytes() const noexcept {
     }
     if (tensor_plan_.has_value()) {
         total += dynamic_bytes(tensor_plan_->estimated_bytes(), sizeof(TensorContractionPlan));
+    }
+    if (mps_plan_.has_value()) {
+        total += dynamic_bytes(mps_plan_->estimated_bytes(), sizeof(MPSPauliPlan));
     }
     if (mps_state_.has_value()) {
         total += dynamic_bytes(mps_state_->estimated_bytes(), sizeof(MatrixProductState));
