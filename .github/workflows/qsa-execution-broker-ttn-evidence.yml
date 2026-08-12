@@ -1,0 +1,57 @@
+name: QSA Marginal TTN Broker Evidence
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qbroker.hpp"
+      - "include/qubit/qttn.hpp"
+      - "include/qubit/qttn_marginal.hpp"
+      - "src/qbroker.cpp"
+      - "src/qstate.cpp"
+      - "benchmarks/execution_broker_ttn.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-execution-broker-ttn-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  marginal-ttn-broker-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Configure QSA core
+        run: >-
+          cmake -S . -B broker-ttn-evidence-build
+          -DCMAKE_BUILD_TYPE=Release
+          -DQSTATE_BUILD_TESTS=OFF
+          -DQSTATE_BUILD_EXAMPLES=OFF
+          -DQSTATE_BUILD_BENCHMARKS=OFF
+          -DQSTATE_BUILD_PYTHON_TESTS=OFF
+          -DQSTATE_ENABLE_IPO=OFF
+      - name: Build QSA core
+        run: cmake --build broker-ttn-evidence-build --target qstate_core --parallel 2
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/execution_broker_ttn.cpp \
+            broker-ttn-evidence-build/libqstate_core.a -pthread \
+            -o marginal-ttn-broker-benchmark
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run matched and capability controls
+        run: |
+          set -o pipefail
+          ./marginal-ttn-broker-benchmark | tee marginal-ttn-broker-evidence.txt
+      - name: Hash evidence
+        run: sha256sum marginal-ttn-broker-evidence.txt | tee marginal-ttn-broker-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-marginal-ttn-broker-evidence
+          path: |
+            marginal-ttn-broker-evidence.txt
+            marginal-ttn-broker-evidence.sha256
