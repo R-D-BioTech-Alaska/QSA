@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -70,6 +71,30 @@ public:
 
 private:
     ExactExecutionBrokerConfig config_{};
+};
+
+class ExactPreparedExpectationPlan {
+public:
+    ExactPreparedExpectationPlan(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        ExactExecutionBrokerConfig config = {});
+
+    [[nodiscard]] ExactExpectationResult expectation(
+        const PauliObservable& observable) const;
+    [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
+    [[nodiscard]] ExactExecutionRoute prepared_fallback_route() const noexcept;
+    [[nodiscard]] std::size_t estimated_bytes() const noexcept;
+
+private:
+    std::size_t qubit_count_{0};
+    ExactExecutionBrokerConfig config_{};
+    QRegister zero_input_;
+    std::optional<PauliPropagationPlan> causal_plan_{};
+    std::optional<MPSPauliPlan> mps_plan_{};
+    std::optional<QRegister> register_state_{};
+    std::string causal_preparation_reason_{};
+    std::string mps_preparation_reason_{};
 };
 
 [[nodiscard]] const char* exact_execution_route_name(ExactExecutionRoute route) noexcept;

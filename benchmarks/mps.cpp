@@ -16,6 +16,7 @@ namespace {
 using Clock = std::chrono::steady_clock;
 using qubit::ExactExecutionBroker;
 using qubit::ExactExecutionRoute;
+using qubit::ExactPreparedExpectationPlan;
 using qubit::MPSPauliPlan;
 using qubit::MatrixProductState;
 using qubit::Operation;
@@ -71,6 +72,59 @@ MatrixProductState evolved_cluster(std::size_t qubits) {
     return state;
 }
 
+std::vector<Operation> cluster_operations(std::size_t qubits, double center_rz) {
+    std::vector<Operation> operations;
+    operations.reserve(2U * qubits);
+    for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::H,
+            static_cast<QubitId>(qubit),
+            0U,
+            0.0,
+            0.0,
+        });
+    }
+    for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::Cz,
+            static_cast<QubitId>(qubit),
+            static_cast<QubitId>(qubit + 1U),
+            0.0,
+            0.0,
+        });
+    }
+    operations.push_back({
+        OperationCode::Rz,
+        static_cast<QubitId>(qubits / 2U),
+        0U,
+        center_rz,
+        0.0,
+    });
+    return operations;
+}
+
+PauliObservable causal_collapse_observable(std::size_t qubits) {
+    PauliPropagationConfig config;
+    config.max_terms = 1U;
+    PauliObservable observable(qubits, config);
+    const std::vector<PauliFactor> factors{{
+        static_cast<QubitId>(qubits / 2U),
+        PauliAxis::X,
+    }};
+    observable.add_term({1.0, 0.0}, factors);
+    return observable;
+}
+
+[[nodiscard]] double break_even_queries(
+    double setup_ms,
+    double one_shot_ms,
+    double prepared_query_ms) noexcept {
+    if (one_shot_ms <= prepared_query_ms) {
+        return -1.0;
+    }
+    return setup_ms / (one_shot_ms - prepared_query_ms);
+}
+
 }  // namespace
 
 int main() {
@@ -123,34 +177,8 @@ int main() {
             plan_value = plan->expectation(observable);
         }, 11, 1000);
 
-        std::vector<Operation> broker_operations;
-        broker_operations.reserve(2U * qubits);
-        for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
-            broker_operations.push_back({
-                OperationCode::H,
-                static_cast<QubitId>(qubit),
-                0U,
-                0.0,
-                0.0,
-            });
-        }
-        for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
-            broker_operations.push_back({
-                OperationCode::Cz,
-                static_cast<QubitId>(qubit),
-                static_cast<QubitId>(qubit + 1U),
-                0.0,
-                0.0,
-            });
-        }
-        const QubitId broker_center = static_cast<QubitId>(qubits / 2U);
-        broker_operations.push_back({OperationCode::Rz, broker_center, 0U, 0.37, 0.0});
-
-        PauliPropagationConfig broker_pauli_config;
-        broker_pauli_config.max_terms = 1U;
-        PauliObservable broker_observable(qubits, broker_pauli_config);
-        const std::vector<PauliFactor> broker_factors{{broker_center, PauliAxis::X}};
-        broker_observable.add_term({1.0, 0.0}, broker_factors);
+        const std::vector<Operation> broker_operations = cluster_operations(qubits, 0.37);
+        const PauliObservable broker_observable = causal_collapse_observable(qubits);
 
         ExactExecutionBroker broker;
         qubit::ExactExpectationResult broker_result;
@@ -171,7 +199,16 @@ int main() {
             broker_reference = std::move(next);
         });
         MatrixProductState broker_mps = evolved_cluster(qubits);
-        broker_mps.apply_unitary(broker_center, qubit::gates::rz(0.37));
+        broker_mps.apply_unitary(qubits / 2U, qubit::gates::rz(0.37));
+
+        std::optional<ExactPreparedExpectationPlan> prepared;
+        const double prepared_setup_ms = median_ms([&] {
+            prepared.emplace(qubits, broker_operations);
+        });
+        qubit::ExactExpectationResult prepared_result;
+        const double prepared_query_ms = median_ms([&] {
+            prepared_result = prepared->expectation(broker_observable);
+        }, 11, 1000);
 
         qubit::ExactExecutionBrokerConfig probability_config;
         probability_config.tensor.max_contraction_entries = 8U;
@@ -196,9 +233,14 @@ int main() {
             std::cerr << "broker did not select persistent MPS after causal collapse\n";
             return 2;
         }
+        if (prepared_result.route != ExactExecutionRoute::PersistentMPS ||
+            prepared->prepared_fallback_route() != ExactExecutionRoute::PersistentMPS) {
+            std::cerr << "prepared broker did not retain persistent MPS fallback\n";
+            return 3;
+        }
         if (probability_result.route != ExactExecutionRoute::PersistentMPS) {
             std::cerr << "probability broker did not select persistent MPS after tensor collapse\n";
-            return 3;
+            return 4;
         }
 
         std::cout << "mps18_qubits=" << qubits << '\n';
@@ -239,6 +281,14 @@ int main() {
         std::cout << "mps18_broker_mps_bytes=" << broker_mps.estimated_bytes() << '\n';
         std::cout << "mps18_broker_mps_scalars=" << broker_mps.scalar_count() << '\n';
         std::cout << "mps18_broker_mps_max_bond=" << broker_mps.max_bond_dimension() << '\n';
+        std::cout << "mps18_prepared_setup_ms=" << prepared_setup_ms << '\n';
+        std::cout << "mps18_prepared_query_ms=" << prepared_query_ms << '\n';
+        std::cout << "mps18_prepared_over_one_shot_speed=" << broker_ms / prepared_query_ms << '\n';
+        std::cout << "mps18_prepared_break_even_queries="
+                  << break_even_queries(prepared_setup_ms, broker_ms, prepared_query_ms) << '\n';
+        std::cout << "mps18_prepared_bytes=" << prepared->estimated_bytes() << '\n';
+        std::cout << "mps18_prepared_value_error="
+                  << (prepared_result.value - broker_reference_value).magnitude() << '\n';
         std::cout << "mps18_probability_broker_route="
                   << qubit::exact_execution_route_name(probability_result.route) << '\n';
         std::cout << "mps18_probability_broker_ms=" << probability_ms << '\n';
@@ -277,6 +327,37 @@ int main() {
             plan_value = plan->expectation(observable);
         }, 11, 1000);
 
+        const std::vector<Operation> broker_operations = cluster_operations(qubits, 0.37);
+        const PauliObservable broker_observable = causal_collapse_observable(qubits);
+        ExactExecutionBroker broker;
+        qubit::ExactExpectationResult broker_result;
+        const double broker_ms = median_ms([&] {
+            broker_result = broker.expectation_from_zero(
+                qubits,
+                broker_operations,
+                broker_observable);
+        }, 3);
+
+        std::optional<ExactPreparedExpectationPlan> prepared;
+        const double prepared_setup_ms = median_ms([&] {
+            prepared.emplace(qubits, broker_operations);
+        }, 3);
+        qubit::ExactExpectationResult prepared_result;
+        const double prepared_query_ms = median_ms([&] {
+            prepared_result = prepared->expectation(broker_observable);
+        }, 11, 500);
+
+        MatrixProductState broker_reference = evolved_cluster(qubits);
+        broker_reference.apply_unitary(qubits / 2U, qubit::gates::rz(0.37));
+        const QComplex broker_reference_value = broker_reference.expectation(broker_observable);
+
+        if (broker_result.route != ExactExecutionRoute::PersistentMPS ||
+            prepared_result.route != ExactExecutionRoute::PersistentMPS ||
+            prepared->prepared_fallback_route() != ExactExecutionRoute::PersistentMPS) {
+            std::cerr << "large prepared broker did not retain persistent MPS route\n";
+            return 5;
+        }
+
         std::cout << "mps_large_qubits=" << qubits << '\n';
         std::cout << "mps_large_setup_ms=" << setup_ms << '\n';
         std::cout << "mps_large_evolved_setup_ms=" << evolved_setup_ms << '\n';
@@ -299,6 +380,17 @@ int main() {
         std::cout << "mps_large_value_imag=" << value.im << '\n';
         std::cout << "mps_large_norm_error=" << std::abs(mps->norm2() - 1.0) << '\n';
         std::cout << "mps_large_evolved_norm_error=" << std::abs(evolved->norm2() - 1.0) << '\n';
+        std::cout << "mps_large_broker_one_shot_ms=" << broker_ms << '\n';
+        std::cout << "mps_large_prepared_setup_ms=" << prepared_setup_ms << '\n';
+        std::cout << "mps_large_prepared_query_ms=" << prepared_query_ms << '\n';
+        std::cout << "mps_large_prepared_over_one_shot_speed=" << broker_ms / prepared_query_ms << '\n';
+        std::cout << "mps_large_prepared_break_even_queries="
+                  << break_even_queries(prepared_setup_ms, broker_ms, prepared_query_ms) << '\n';
+        std::cout << "mps_large_prepared_bytes=" << prepared->estimated_bytes() << '\n';
+        std::cout << "mps_large_broker_value_error="
+                  << (broker_result.value - broker_reference_value).magnitude() << '\n';
+        std::cout << "mps_large_prepared_value_error="
+                  << (prepared_result.value - broker_reference_value).magnitude() << '\n';
     }
 
     return 0;

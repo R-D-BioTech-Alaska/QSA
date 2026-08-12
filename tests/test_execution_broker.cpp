@@ -15,6 +15,7 @@ using qubit::BasisIndex;
 using qubit::ExactExecutionBroker;
 using qubit::ExactExecutionBrokerConfig;
 using qubit::ExactExecutionRoute;
+using qubit::ExactPreparedExpectationPlan;
 using qubit::Operation;
 using qubit::OperationCode;
 using qubit::PauliAxis;
@@ -98,6 +99,15 @@ int main() {
                 "from-zero causal success reported a fallback reason");
         require_close(result.value, observable.expectation(direct),
                       "from-zero causal broker value differs from QRegister");
+
+        ExactPreparedExpectationPlan prepared(2U, operations);
+        const auto prepared_result = prepared.expectation(observable);
+        require(prepared_result.route == ExactExecutionRoute::CausalPauli,
+                "prepared plan did not preserve causal-first routing");
+        require(prepared_result.fallback_reason.empty(),
+                "prepared causal success reported a fallback reason");
+        require_close(prepared_result.value, result.value,
+                      "prepared causal result differs from one-shot broker");
     }
 
     {
@@ -162,6 +172,19 @@ int main() {
                 "persistent MPS route did not retain causal rejection reason");
         require_close(result.value, observable.expectation(direct),
                       "persistent MPS broker value differs from QRegister");
+
+        ExactPreparedExpectationPlan prepared(qubits, operations);
+        const auto prepared_result = prepared.expectation(observable);
+        require(prepared.prepared_fallback_route() == ExactExecutionRoute::PersistentMPS,
+                "prepared low-bond circuit did not retain MPS fallback");
+        require(prepared_result.route == ExactExecutionRoute::PersistentMPS,
+                "prepared causal collapse did not select persistent MPS");
+        require(!prepared_result.fallback_reason.empty(),
+                "prepared MPS route did not retain causal rejection reason");
+        require_close(prepared_result.value, result.value,
+                      "prepared MPS value differs from one-shot broker");
+        require(prepared.estimated_bytes() > 0U,
+                "prepared MPS plan did not report retained memory");
     }
 
     {
@@ -185,6 +208,17 @@ int main() {
                 "nonadjacent MPS fallback did not report its route reason");
         require_close(result.value, observable.expectation(direct),
                       "nonadjacent MPS fallback changed the observable value");
+
+        ExactPreparedExpectationPlan prepared(3U, operations);
+        const auto prepared_result = prepared.expectation(observable);
+        require(prepared.prepared_fallback_route() == ExactExecutionRoute::Register,
+                "prepared nonadjacent circuit did not prepare QRegister fallback");
+        require(prepared_result.route == ExactExecutionRoute::Register,
+                "prepared nonadjacent MPS collapse did not reach QRegister");
+        require(prepared_result.fallback_reason.find("mps:") != std::string::npos,
+                "prepared nonadjacent fallback did not retain MPS reason");
+        require_close(prepared_result.value, result.value,
+                      "prepared nonadjacent fallback differs from one-shot broker");
     }
 
     {
@@ -210,6 +244,15 @@ int main() {
                 "MPS bond fallback did not report its route reason");
         require_close(result.value, observable.expectation(direct),
                       "MPS bond fallback changed the observable value");
+
+        ExactPreparedExpectationPlan prepared(2U, operations, config);
+        const auto prepared_result = prepared.expectation(observable);
+        require(prepared.prepared_fallback_route() == ExactExecutionRoute::Register,
+                "prepared bond collapse did not prepare QRegister fallback");
+        require(prepared_result.route == ExactExecutionRoute::Register,
+                "prepared bond collapse did not execute QRegister fallback");
+        require_close(prepared_result.value, result.value,
+                      "prepared bond fallback differs from one-shot broker");
     }
 
     {
@@ -231,6 +274,19 @@ int main() {
                 "trajectory fallback did not record its reason");
         require_close(result.value, observable.expectation(direct),
                       "trajectory fallback changed the observable value");
+
+        const auto from_zero = broker.expectation_from_zero(2U, operations, observable);
+        ExactPreparedExpectationPlan prepared(2U, operations);
+        const auto prepared_result = prepared.expectation(observable);
+        require(prepared.prepared_fallback_route() == ExactExecutionRoute::Register,
+                "trajectory prepared plan did not prepare QRegister fallback");
+        require(prepared_result.route == ExactExecutionRoute::Register,
+                "trajectory prepared plan did not use QRegister");
+        require(prepared_result.fallback_reason.find("causal:") != std::string::npos &&
+                    prepared_result.fallback_reason.find("mps:") != std::string::npos,
+                "trajectory prepared plan did not retain causal and MPS rejection reasons");
+        require_close(prepared_result.value, from_zero.value,
+                      "trajectory prepared fallback differs from one-shot from-zero broker");
     }
 
     {

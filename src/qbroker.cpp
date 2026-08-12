@@ -1,6 +1,7 @@
 #include "qubit/qbroker.hpp"
 
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace qubit {
@@ -10,10 +11,22 @@ namespace {
     return error.what();
 }
 
-void validate_basis_width(std::size_t qubit_count, std::span<const std::uint8_t> basis_bits) {
+[[nodiscard]] std::size_t validated_qubit_count(std::size_t qubit_count) {
     if (qubit_count == 0U) {
         throw QStateError("Execution broker requires at least one qubit");
     }
+    return qubit_count;
+}
+
+void validate_broker_config(const ExactExecutionBrokerConfig& config) {
+    if (config.tensor.max_contraction_entries < 2U ||
+        config.tensor.max_factors == 0U) {
+        throw QStateError("Execution broker tensor limits are invalid");
+    }
+}
+
+void validate_basis_width(std::size_t qubit_count, std::span<const std::uint8_t> basis_bits) {
+    validated_qubit_count(qubit_count);
     if (basis_bits.size() != qubit_count) {
         throw QStateError("Execution broker basis width does not match qubit count");
     }
@@ -21,6 +34,15 @@ void validate_basis_width(std::size_t qubit_count, std::span<const std::uint8_t>
         if (bit > 1U) {
             throw QStateError("Execution broker basis bits must be zero or one");
         }
+    }
+}
+
+void validate_observable(std::size_t qubit_count, const PauliObservable& observable) {
+    if (observable.qubit_count() != qubit_count) {
+        throw QStateError("Execution broker Pauli observable width does not match input");
+    }
+    if (!observable.validate()) {
+        throw QStateError("Execution broker Pauli observable failed validation");
     }
 }
 
@@ -73,18 +95,21 @@ void execute_mps(MatrixProductState& state, std::span<const Operation> operation
             case OperationCode::DepolarizingTrajectory:
             case OperationCode::AmplitudeDampingTrajectory:
                 throw QStateError("Persistent MPS route supports unitary operations only");
+            default:
+                throw QStateError("Persistent MPS route received an unknown opcode");
         }
     }
+}
+
+[[nodiscard]] std::size_t dynamic_bytes(std::size_t estimated, std::size_t object_size) noexcept {
+    return estimated > object_size ? estimated - object_size : 0U;
 }
 
 }  // namespace
 
 ExactExecutionBroker::ExactExecutionBroker(ExactExecutionBrokerConfig config)
     : config_(config) {
-    if (config_.tensor.max_contraction_entries < 2U ||
-        config_.tensor.max_factors == 0U) {
-        throw QStateError("Execution broker tensor limits are invalid");
-    }
+    validate_broker_config(config_);
 }
 
 const char* exact_execution_route_name(ExactExecutionRoute route) noexcept {
@@ -105,12 +130,7 @@ ExactExpectationResult ExactExecutionBroker::expectation(
     const QRegister& input,
     std::span<const Operation> operations,
     const PauliObservable& observable) const {
-    if (observable.qubit_count() != input.qubit_count()) {
-        throw QStateError("Execution broker Pauli observable width does not match input");
-    }
-    if (!observable.validate()) {
-        throw QStateError("Execution broker Pauli observable failed validation");
-    }
+    validate_observable(input.qubit_count(), observable);
 
     ExactExpectationResult result;
     try {
@@ -137,15 +157,8 @@ ExactExpectationResult ExactExecutionBroker::expectation_from_zero(
     std::size_t qubit_count,
     std::span<const Operation> operations,
     const PauliObservable& observable) const {
-    if (qubit_count == 0U) {
-        throw QStateError("Execution broker requires at least one qubit");
-    }
-    if (observable.qubit_count() != qubit_count) {
-        throw QStateError("Execution broker Pauli observable width does not match input");
-    }
-    if (!observable.validate()) {
-        throw QStateError("Execution broker Pauli observable failed validation");
-    }
+    validated_qubit_count(qubit_count);
+    validate_observable(qubit_count, observable);
 
     QRegister input(qubit_count, config_.register_state);
     ExactExpectationResult result;
@@ -218,9 +231,7 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
     std::size_t qubit_count,
     std::span<const Operation> operations,
     BasisIndex basis) const {
-    if (qubit_count == 0U) {
-        throw QStateError("Execution broker requires at least one qubit");
-    }
+    validated_qubit_count(qubit_count);
     if (qubit_count > std::numeric_limits<BasisIndex>::digits) {
         throw QStateError("Execution broker BasisIndex query is limited to 64 qubits");
     }
@@ -234,6 +245,96 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         bits[qubit] = static_cast<std::uint8_t>((basis >> qubit) & BasisIndex{1});
     }
     return basis_probability_from_zero(qubit_count, operations, bits);
+}
+
+ExactPreparedExpectationPlan::ExactPreparedExpectationPlan(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    ExactExecutionBrokerConfig config)
+    : qubit_count_(validated_qubit_count(qubit_count)),
+      config_(config),
+      zero_input_(qubit_count_, config_.register_state) {
+    validate_broker_config(config_);
+
+    try {
+        causal_plan_.emplace(qubit_count_, operations);
+    } catch (const QStateError& error) {
+        causal_preparation_reason_ = failure_message(error);
+    }
+
+    try {
+        MatrixProductState state = MatrixProductState::zero(qubit_count_, config_.mps);
+        execute_mps(state, operations);
+        mps_plan_.emplace(std::move(state));
+    } catch (const QStateError& error) {
+        mps_preparation_reason_ = failure_message(error);
+        register_state_.emplace(qubit_count_, config_.register_state);
+        OperationPlan plan(operations);
+        plan.execute(*register_state_);
+    }
+}
+
+ExactExpectationResult ExactPreparedExpectationPlan::expectation(
+    const PauliObservable& observable) const {
+    validate_observable(qubit_count_, observable);
+
+    ExactExpectationResult result;
+    if (causal_plan_.has_value()) {
+        try {
+            const PauliObservable propagated = causal_plan_->propagate_backward(
+                observable,
+                &result.pauli_stats);
+            result.value = propagated.expectation(zero_input_);
+            result.route = ExactExecutionRoute::CausalPauli;
+            return result;
+        } catch (const QStateError& error) {
+            result.fallback_reason = "causal: " + failure_message(error);
+        }
+    } else {
+        result.fallback_reason = "causal: " + causal_preparation_reason_;
+    }
+
+    if (mps_plan_.has_value()) {
+        result.value = mps_plan_->expectation(observable);
+        result.route = ExactExecutionRoute::PersistentMPS;
+        return result;
+    }
+
+    if (!mps_preparation_reason_.empty()) {
+        if (!result.fallback_reason.empty()) {
+            result.fallback_reason += "; ";
+        }
+        result.fallback_reason += "mps: " + mps_preparation_reason_;
+    }
+    if (!register_state_.has_value()) {
+        throw QStateError("Prepared expectation plan has no exact fallback state");
+    }
+    result.value = observable.expectation(*register_state_);
+    result.route = ExactExecutionRoute::Register;
+    return result;
+}
+
+ExactExecutionRoute ExactPreparedExpectationPlan::prepared_fallback_route() const noexcept {
+    return mps_plan_.has_value()
+        ? ExactExecutionRoute::PersistentMPS
+        : ExactExecutionRoute::Register;
+}
+
+std::size_t ExactPreparedExpectationPlan::estimated_bytes() const noexcept {
+    std::size_t total = sizeof(*this);
+    total += dynamic_bytes(zero_input_.estimated_bytes(), sizeof(QRegister));
+    if (causal_plan_.has_value()) {
+        total += dynamic_bytes(causal_plan_->estimated_bytes(), sizeof(PauliPropagationPlan));
+    }
+    if (mps_plan_.has_value()) {
+        total += dynamic_bytes(mps_plan_->estimated_bytes(), sizeof(MPSPauliPlan));
+    }
+    if (register_state_.has_value()) {
+        total += dynamic_bytes(register_state_->estimated_bytes(), sizeof(QRegister));
+    }
+    total += causal_preparation_reason_.capacity();
+    total += mps_preparation_reason_.capacity();
+    return total;
 }
 
 }  // namespace qubit
