@@ -5,6 +5,7 @@ on:
     paths:
       - "include/qubit/qfactor.hpp"
       - "include/qubit/qfactor_chain.hpp"
+      - "include/qubit/qfactor_decision.hpp"
       - "include/qubit/qfactor_broker.hpp"
       - "src/qfactor.cpp"
       - "tests/test_factor_broker.cpp"
