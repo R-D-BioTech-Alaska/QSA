@@ -95,6 +95,29 @@ void test_complex_exponential() {
             throw std::runtime_error("complex exponential selected value failed");
         }
     }
+
+    constexpr std::size_t wide_bits = 4096U;
+    const ExactQTTFunction wide = ExactQTTFunction::complex_exponential(wide_bits, 1.0e-6);
+    if (wide.logical_bits() != wide_bits || wide.stats().maximum_rank != 1U ||
+        wide.stats().descriptor_scalars != 8192U) {
+        throw std::runtime_error("4096-bit complex exponential descriptor changed");
+    }
+    for (const QTTCore& core : wide.cores()) {
+        const QComplex phase = core.one.front();
+        if (!std::isfinite(phase.re) || !std::isfinite(phase.im) ||
+            !close(phase.norm2(), 1.0, 2e-12)) {
+            throw std::runtime_error("4096-bit complex exponential phase lost unit magnitude");
+        }
+    }
+    std::vector<std::uint8_t> selected(wide_bits);
+    for (std::size_t position = 0U; position < wide_bits; ++position) {
+        selected[position] = static_cast<std::uint8_t>(((position * 19U + 7U) % 23U) < 11U);
+    }
+    const QComplex selected_value = wide.value_bits(selected);
+    if (!std::isfinite(selected_value.re) || !std::isfinite(selected_value.im) ||
+        !close(selected_value.norm2(), 1.0, 2e-9)) {
+        throw std::runtime_error("4096-bit complex exponential selected value is unstable");
+    }
 }
 
 void test_algebra_and_reductions() {
