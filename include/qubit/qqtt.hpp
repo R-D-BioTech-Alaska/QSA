@@ -165,15 +165,16 @@ public:
         if (!std::isfinite(angular_frequency) || !finite(amplitude)) {
             throw QStateError("QTT complex exponential parameters must be finite");
         }
+        const double two_pi = 2.0 * std::acos(-1.0);
+        double phase_angle = std::remainder(angular_frequency, two_pi);
         std::vector<std::array<QComplex, 2>> factors(logical_bits);
-        QComplex phase = QComplex::from_polar(1.0, angular_frequency);
         for (std::size_t reverse = logical_bits; reverse-- > 0U;) {
-            factors[reverse] = {QComplex{1.0}, phase};
+            factors[reverse] = {
+                QComplex{1.0},
+                QComplex::from_polar(1.0, phase_angle),
+            };
             if (reverse != 0U) {
-                phase *= phase;
-                if (!finite(phase)) {
-                    throw QStateError("QTT complex exponential phase exceeded finite scalar range");
-                }
+                phase_angle = std::remainder(2.0 * phase_angle, two_pi);
             }
         }
         return product(factors, config).scaled(amplitude);
