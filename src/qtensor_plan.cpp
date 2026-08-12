@@ -9,6 +9,8 @@
 namespace qubit {
 namespace {
 
+using VariableId = std::uint32_t;
+
 [[nodiscard]] std::size_t compiled_binary_entries(std::size_t variables) noexcept {
     if (variables >= std::numeric_limits<std::size_t>::digits) {
         return std::numeric_limits<std::size_t>::max();
