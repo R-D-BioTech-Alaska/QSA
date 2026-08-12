@@ -5,8 +5,12 @@ on:
     paths:
       - "include/qubit/qtensor.hpp"
       - "src/qtensor.cpp"
+      - "src/qtensor_plan.cpp"
       - "tests/test_tensor_network.cpp"
+      - "tests/test_tensor_contraction_plan.cpp"
       - "benchmarks/tensor_network.cpp"
+      - "benchmarks/tensor_contraction_plan.cpp"
+      - "benchmarks/tensor_planner_scaling.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/qsa-tensor-network.yml"
   workflow_dispatch:
@@ -21,16 +25,28 @@ jobs:
       - name: Build tensor targets
         run: >-
           cmake --build build --config Release --parallel 2
-          --target qstate_tensor_network_tests qstate_tensor_network_benchmark
+          --target
+          qstate_tensor_network_tests
+          qstate_tensor_contraction_plan_tests
+          qstate_tensor_network_benchmark
+          qstate_tensor_contraction_plan_benchmark
       - name: Run exactness and collapse gates
-        run: ./build/qstate_tensor_network_tests
-      - name: Run structural benchmark
-        run: ./build/qstate_tensor_network_benchmark | tee tensor_network_evidence.txt
+        run: |
+          ./build/qstate_tensor_network_tests
+          ./build/qstate_tensor_contraction_plan_tests
+      - name: Run structural benchmarks
+        run: |
+          ./build/qstate_tensor_network_benchmark | tee tensor_network_evidence.txt
+          ./build/qstate_tensor_contraction_plan_benchmark | tee tensor_plan_evidence.txt
       - name: Hash evidence
-        run: sha256sum tensor_network_evidence.txt | tee tensor_network_evidence.sha256
+        run: |
+          sha256sum tensor_network_evidence.txt | tee tensor_network_evidence.sha256
+          sha256sum tensor_plan_evidence.txt | tee tensor_plan_evidence.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: qsa-tensor-network-evidence
           path: |
             tensor_network_evidence.txt
             tensor_network_evidence.sha256
+            tensor_plan_evidence.txt
+            tensor_plan_evidence.sha256
