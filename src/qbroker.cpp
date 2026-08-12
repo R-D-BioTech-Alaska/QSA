@@ -164,11 +164,10 @@ void execute_mps(MatrixProductState& state, std::span<const Operation> operation
     }
 }
 
-[[nodiscard]] bool basis_permutation_probability(
+[[nodiscard]] bool basis_permutation_state(
     std::size_t qubit_count,
     std::span<const Operation> operations,
-    std::span<const std::uint8_t> basis_bits,
-    double* probability,
+    std::vector<std::uint8_t>* terminal_bits,
     const char** reason) {
     const auto fail = [&](const char* message) {
         if (reason != nullptr) {
@@ -245,6 +244,23 @@ void execute_mps(MatrixProductState& state, std::span<const Operation> operation
             default:
                 return fail("BasisPermutation route received an unknown opcode");
         }
+    }
+
+    if (terminal_bits != nullptr) {
+        *terminal_bits = std::move(bits);
+    }
+    return true;
+}
+
+[[nodiscard]] bool basis_permutation_probability(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    std::span<const std::uint8_t> basis_bits,
+    double* probability,
+    const char** reason) {
+    std::vector<std::uint8_t> bits;
+    if (!basis_permutation_state(qubit_count, operations, &bits, reason)) {
+        return false;
     }
 
     bool match = true;
@@ -814,6 +830,182 @@ std::size_t ExactPreparedExpectationPlan::estimated_bytes() const noexcept {
     }
     total += causal_preparation_reason_.capacity();
     total += mps_preparation_reason_.capacity();
+    return total;
+}
+
+ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    ExactExecutionBrokerConfig config)
+    : qubit_count_(validated_qubit_count(qubit_count)),
+      config_(config) {
+    validate_broker_config(config_);
+
+    const char* basis_reason = nullptr;
+    if (basis_permutation_state(
+            qubit_count_,
+            operations,
+            &basis_permutation_bits_,
+            &basis_reason)) {
+        route_ = ExactExecutionRoute::BasisPermutation;
+        return;
+    }
+    basis_permutation_bits_.clear();
+    basis_permutation_bits_.shrink_to_fit();
+
+    const char* uniform_reason = nullptr;
+    if (uniform_magnitude_eligible(qubit_count_, operations, &uniform_reason)) {
+        route_ = ExactExecutionRoute::UniformMagnitude;
+        uniform_probability_ = uniform_probability(qubit_count_);
+        return;
+    }
+
+    try {
+        TensorNetworkCircuit tensor(qubit_count_, operations, config_.tensor);
+        tensor_plan_.emplace(tensor.compile());
+        route_ = ExactExecutionRoute::TensorNetwork;
+        return;
+    } catch (const QStateError& error) {
+        fallback_reason_ = "basis_permutation: ";
+        fallback_reason_ += basis_reason != nullptr
+            ? basis_reason
+            : "basis-permutation certificate failed";
+        fallback_reason_ += "; uniform: ";
+        fallback_reason_ += uniform_reason != nullptr
+            ? uniform_reason
+            : "uniform-magnitude certificate failed";
+        fallback_reason_ += "; tensor: ";
+        fallback_reason_ += failure_message(error);
+    }
+
+    const char* mps_reason = nullptr;
+    if (mps_structure_eligible(qubit_count_, operations, &mps_reason)) {
+        try {
+            MatrixProductState state = MatrixProductState::zero(qubit_count_, config_.mps);
+            execute_mps(state, operations);
+            mps_state_.emplace(std::move(state));
+            route_ = ExactExecutionRoute::PersistentMPS;
+            return;
+        } catch (const QStateError& error) {
+            fallback_reason_ += "; mps: ";
+            fallback_reason_ += failure_message(error);
+        }
+    } else {
+        fallback_reason_ += "; mps: ";
+        fallback_reason_ += mps_reason != nullptr ? mps_reason : "structural preflight failed";
+    }
+
+    const char* phase_reason = nullptr;
+    if (phase_graph_structure_eligible(qubit_count_, operations, &phase_reason)) {
+        try {
+            phase_graph_state_.emplace(execute_phase_graph_from_zero(
+                qubit_count_,
+                operations,
+                config_.phase_graph));
+            route_ = ExactExecutionRoute::PhaseGraph;
+            return;
+        } catch (const QStateError& error) {
+            fallback_reason_ += "; phase_graph: ";
+            fallback_reason_ += failure_message(error);
+        }
+    } else {
+        fallback_reason_ += "; phase_graph: ";
+        fallback_reason_ += phase_reason != nullptr ? phase_reason : "structural preflight failed";
+    }
+
+    register_state_.emplace(qubit_count_, config_.register_state);
+    OperationPlan plan(operations);
+    plan.execute(*register_state_);
+    route_ = ExactExecutionRoute::Register;
+}
+
+ExactProbabilityResult ExactPreparedProbabilityPlan::probability(
+    std::span<const std::uint8_t> basis_bits) const {
+    validate_basis_width(qubit_count_, basis_bits);
+
+    ExactProbabilityResult result;
+    result.route = route_;
+    result.fallback_reason = fallback_reason_;
+    switch (route_) {
+        case ExactExecutionRoute::BasisPermutation: {
+            if (basis_permutation_bits_.size() != qubit_count_) {
+                throw QStateError("Prepared BasisPermutation plan is missing its terminal state");
+            }
+            bool match = true;
+            for (std::size_t qubit = 0U; qubit < qubit_count_; ++qubit) {
+                if (basis_permutation_bits_[qubit] != basis_bits[qubit]) {
+                    match = false;
+                    break;
+                }
+            }
+            result.value = match ? 1.0 : 0.0;
+            return result;
+        }
+        case ExactExecutionRoute::UniformMagnitude:
+            result.value = uniform_probability_;
+            return result;
+        case ExactExecutionRoute::TensorNetwork:
+            if (!tensor_plan_.has_value()) {
+                throw QStateError("Prepared tensor probability plan is missing its contraction plan");
+            }
+            result.value = tensor_plan_->amplitude(basis_bits, &result.tensor_stats).norm2();
+            return result;
+        case ExactExecutionRoute::PersistentMPS:
+            if (!mps_state_.has_value()) {
+                throw QStateError("Prepared MPS probability plan is missing its state");
+            }
+            result.value = mps_state_->amplitude(basis_bits).norm2();
+            return result;
+        case ExactExecutionRoute::PhaseGraph:
+            if (!phase_graph_state_.has_value()) {
+                throw QStateError("Prepared PhaseGraph probability plan is missing its state");
+            }
+            result.value = phase_graph_state_->amplitude_bits(basis_bits).norm2();
+            return result;
+        case ExactExecutionRoute::Register:
+            if (!register_state_.has_value()) {
+                throw QStateError("Prepared register probability plan is missing its state");
+            }
+            result.value = register_state_->amplitude_bits(basis_bits).norm2();
+            return result;
+        case ExactExecutionRoute::CausalPauli:
+            throw QStateError("Prepared probability plan cannot use CausalPauli");
+    }
+    throw QStateError("Prepared probability plan has an unknown route");
+}
+
+ExactProbabilityResult ExactPreparedProbabilityPlan::probability(BasisIndex basis) const {
+    if (qubit_count_ > std::numeric_limits<BasisIndex>::digits) {
+        throw QStateError("Prepared probability BasisIndex query is limited to 64 qubits");
+    }
+    if (qubit_count_ < std::numeric_limits<BasisIndex>::digits &&
+        basis >= (BasisIndex{1} << qubit_count_)) {
+        throw QStateError("Prepared probability basis index is out of range");
+    }
+
+    std::vector<std::uint8_t> bits(qubit_count_, 0U);
+    for (std::size_t qubit = 0U; qubit < qubit_count_; ++qubit) {
+        bits[qubit] = static_cast<std::uint8_t>((basis >> qubit) & BasisIndex{1});
+    }
+    return probability(bits);
+}
+
+std::size_t ExactPreparedProbabilityPlan::estimated_bytes() const noexcept {
+    std::size_t total = sizeof(*this);
+    total += basis_permutation_bits_.capacity() * sizeof(std::uint8_t);
+    if (tensor_plan_.has_value()) {
+        total += dynamic_bytes(tensor_plan_->estimated_bytes(), sizeof(TensorContractionPlan));
+    }
+    if (mps_state_.has_value()) {
+        total += dynamic_bytes(mps_state_->estimated_bytes(), sizeof(MatrixProductState));
+    }
+    if (phase_graph_state_.has_value()) {
+        total += dynamic_bytes(phase_graph_state_->estimated_bytes(), sizeof(PhaseGraphState));
+    }
+    if (register_state_.has_value()) {
+        total += dynamic_bytes(register_state_->estimated_bytes(), sizeof(QRegister));
+    }
+    total += fallback_reason_.capacity();
     return total;
 }
 
