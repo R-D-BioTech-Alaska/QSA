@@ -166,6 +166,47 @@ template <class Function>
     return operations;
 }
 
+[[nodiscard]] std::vector<Operation> broker_basis_operations(std::size_t qubits) {
+    std::vector<Operation> operations;
+    operations.reserve(3U * qubits);
+    operations.push_back({OperationCode::X, 0U, 0U, 0.0, 0.0});
+    for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::Cnot,
+            static_cast<QubitId>(qubit),
+            static_cast<QubitId>(qubit + 1U),
+            0.0,
+            0.0,
+        });
+    }
+    for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::Rz,
+            static_cast<QubitId>(qubit),
+            0U,
+            0.0007 * static_cast<double>((qubit % 19U) + 1U),
+            0.0,
+        });
+    }
+    for (std::size_t qubit = 0U; qubit + 1U < qubits; qubit += 2U) {
+        operations.push_back({
+            OperationCode::Cz,
+            static_cast<QubitId>(qubit),
+            static_cast<QubitId>(qubit + 1U),
+            0.0,
+            0.0,
+        });
+        operations.push_back({
+            OperationCode::Swap,
+            static_cast<QubitId>(qubit),
+            static_cast<QubitId>(qubit + 1U),
+            0.0,
+            0.0,
+        });
+    }
+    return operations;
+}
+
 [[nodiscard]] PhaseGraphState direct_phase_graph(
     std::size_t qubits,
     std::span<const Operation> operations,
@@ -319,6 +360,87 @@ int main() {
         std::cout << "uniform_broker_huge_operations=" << broker_operations.size() << '\n';
         std::cout << "uniform_broker_huge_ms=" << broker_ms << '\n';
         std::cout << "uniform_broker_huge_retained_state_bytes=0\n";
+    }
+
+    {
+        constexpr std::size_t qubits = 18U;
+        const std::vector<Operation> broker_operations = broker_basis_operations(qubits);
+        const std::vector<std::uint8_t> bits(qubits, 1U);
+        ExactExecutionBroker broker;
+        qubit::ExactProbabilityResult result;
+        const double broker_ms = median_ms([&] {
+            result = broker.basis_probability_from_zero(
+                qubits,
+                broker_operations,
+                bits);
+        });
+
+        double reference_probability = 0.0;
+        std::size_t reference_bytes = 0U;
+        const double qregister_ms = median_ms([&] {
+            QRegister state(qubits);
+            qubit::OperationPlan plan(broker_operations);
+            plan.execute(state);
+            reference_probability = state.amplitude_bits(bits).norm2();
+            reference_bytes = state.estimated_bytes();
+        });
+        std::vector<std::uint8_t> miss(bits);
+        miss.back() = 0U;
+        const auto miss_result = broker.basis_probability_from_zero(
+            qubits,
+            broker_operations,
+            miss);
+        if (result.route != ExactExecutionRoute::BasisPermutation ||
+            miss_result.route != ExactExecutionRoute::BasisPermutation ||
+            result.value != 1.0 ||
+            miss_result.value != 0.0) {
+            std::cerr << "basis-permutation broker certificate failed\n";
+            return 5;
+        }
+        std::cout << "basis_permutation_broker_qubits=" << qubits << '\n';
+        std::cout << "basis_permutation_broker_route="
+                  << qubit::exact_execution_route_name(result.route) << '\n';
+        std::cout << "basis_permutation_broker_operations=" << broker_operations.size() << '\n';
+        std::cout << "basis_permutation_broker_ms=" << broker_ms << '\n';
+        std::cout << "basis_permutation_broker_qregister_ms=" << qregister_ms << '\n';
+        std::cout << "basis_permutation_broker_speed_ratio=" << qregister_ms / broker_ms << '\n';
+        std::cout << "basis_permutation_broker_value_error="
+                  << std::abs(result.value - reference_probability) << '\n';
+        std::cout << "basis_permutation_broker_tracked_bits=" << qubits << '\n';
+        std::cout << "basis_permutation_broker_retained_state_bytes=0\n";
+        std::cout << "basis_permutation_broker_qregister_bytes=" << reference_bytes << '\n';
+    }
+
+    {
+        constexpr std::size_t qubits = 100'000U;
+        const std::vector<Operation> broker_operations = broker_basis_operations(qubits);
+        const std::vector<std::uint8_t> bits(qubits, 1U);
+        ExactExecutionBroker broker;
+        qubit::ExactProbabilityResult result;
+        const double broker_ms = median_ms([&] {
+            result = broker.basis_probability_from_zero(
+                qubits,
+                broker_operations,
+                bits);
+        }, 3);
+        std::vector<std::uint8_t> miss(bits);
+        miss[qubits / 2U] = 0U;
+        const auto miss_result = broker.basis_probability_from_zero(
+            qubits,
+            broker_operations,
+            miss);
+        if (result.route != ExactExecutionRoute::BasisPermutation ||
+            miss_result.route != ExactExecutionRoute::BasisPermutation ||
+            result.value != 1.0 ||
+            miss_result.value != 0.0) {
+            std::cerr << "100000-qubit basis-permutation broker certificate failed\n";
+            return 6;
+        }
+        std::cout << "basis_permutation_broker_huge_qubits=" << qubits << '\n';
+        std::cout << "basis_permutation_broker_huge_operations=" << broker_operations.size() << '\n';
+        std::cout << "basis_permutation_broker_huge_ms=" << broker_ms << '\n';
+        std::cout << "basis_permutation_broker_huge_tracked_bits=" << qubits << '\n';
+        std::cout << "basis_permutation_broker_huge_retained_state_bytes=0\n";
     }
     return 0;
 }
