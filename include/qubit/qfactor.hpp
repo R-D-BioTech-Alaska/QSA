@@ -55,6 +55,7 @@ class ExactFactorPlan;
 class ExactFactorWorkspace;
 class ExactFactorChainPlan;
 class ExactFactorDecisionPlan;
+class ExactFactorAffinePlan;
 
 class ExactFactorGraph {
 public:
@@ -109,6 +110,7 @@ private:
     friend class ExactFactorPlan;
     friend class ExactFactorChainPlan;
     friend class ExactFactorDecisionPlan;
+    friend class ExactFactorAffinePlan;
 };
 
 class ExactFactorWorkspace {
