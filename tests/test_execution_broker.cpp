@@ -329,6 +329,52 @@ int main() {
     }
 
     {
+        ExactExecutionBroker broker;
+        const std::array<Operation, 12> operations{{
+            {OperationCode::X, 0U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 1U, 2U, 0.0, 0.0},
+            {OperationCode::Y, 1U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 1U, 2U, 0.0, 0.0},
+            {OperationCode::Z, 2U, 0U, 0.0, 0.0},
+            {OperationCode::S, 3U, 0U, 0.0, 0.0},
+            {OperationCode::Sdg, 3U, 0U, 0.0, 0.0},
+            {OperationCode::T, 1U, 0U, 0.0, 0.0},
+            {OperationCode::Tdg, 2U, 0U, 0.0, 0.0},
+            {OperationCode::Rz, 0U, 0U, 0.37, 0.0},
+            {OperationCode::Cz, 1U, 2U, 0.0, 0.0},
+            {OperationCode::Swap, 0U, 3U, 0.0, 0.0},
+        }};
+        const std::array<std::uint8_t, 4> hit{{0U, 1U, 1U, 1U}};
+        const std::array<std::uint8_t, 4> miss{{1U, 1U, 1U, 1U}};
+        const auto hit_result = broker.basis_probability_from_zero(4U, operations, hit);
+        const auto miss_result = broker.basis_probability_from_zero(4U, operations, miss);
+        const QRegister direct = evolve(QRegister(4U), operations);
+        require(hit_result.route == ExactExecutionRoute::BasisPermutation &&
+                    miss_result.route == ExactExecutionRoute::BasisPermutation,
+                "monomial circuit did not use BasisPermutation");
+        require(hit_result.fallback_reason.empty() && miss_result.fallback_reason.empty(),
+                "successful BasisPermutation route reported a fallback reason");
+        require_close(hit_result.value, direct.amplitude_bits(hit).norm2(),
+                      "BasisPermutation hit probability differs from QRegister");
+        require_close(miss_result.value, direct.amplitude_bits(miss).norm2(),
+                      "BasisPermutation miss probability differs from QRegister");
+        require(hit_result.value == 1.0 && miss_result.value == 0.0,
+                "BasisPermutation did not return exact deterministic probabilities");
+        require(std::string(qubit::exact_execution_route_name(hit_result.route)) == "BasisPermutation",
+                "BasisPermutation route name is unstable");
+    }
+
+    {
+        ExactExecutionBroker broker;
+        const std::array<std::uint8_t, 3> zero{{0U, 0U, 0U}};
+        const auto result = broker.basis_probability_from_zero(3U, {}, zero);
+        require(result.route == ExactExecutionRoute::BasisPermutation,
+                "empty zero-state query did not use BasisPermutation");
+        require(result.value == 1.0,
+                "empty zero-state query did not return deterministic probability");
+    }
+
+    {
         ExactExecutionBrokerConfig config;
         config.tensor.max_contraction_entries = 8U;
         ExactExecutionBroker broker(config);
@@ -434,8 +480,9 @@ int main() {
         const QRegister direct = evolve(QRegister(4U), operations);
         require(result.route == ExactExecutionRoute::Register,
                 "later H was incorrectly admitted by UniformMagnitude");
-        require(result.fallback_reason.find("uniform:") != std::string::npos,
-                "later-H fallback did not retain uniform rejection reason");
+        require(result.fallback_reason.find("basis_permutation:") != std::string::npos &&
+                    result.fallback_reason.find("uniform:") != std::string::npos,
+                "later-H fallback did not retain analytic rejection reasons");
         require_close(result.value, direct.amplitude(0U).norm2(),
                       "later-H fallback changed the result");
     }
@@ -450,7 +497,8 @@ int main() {
         const QRegister direct = evolve(QRegister(1U), operations);
         require(result.route == ExactExecutionRoute::Register,
                 "trajectory probability did not fall back to QRegister");
-        require(result.fallback_reason.find("mps:") != std::string::npos &&
+        require(result.fallback_reason.find("basis_permutation:") != std::string::npos &&
+                    result.fallback_reason.find("mps:") != std::string::npos &&
                     result.fallback_reason.find("uniform:") != std::string::npos &&
                     result.fallback_reason.find("phase_graph:") != std::string::npos,
                 "trajectory probability fallback did not record specialized rejections");
@@ -471,7 +519,8 @@ int main() {
         const QRegister direct = evolve(QRegister(2U), operations);
         require(result.route == ExactExecutionRoute::Register,
                 "tensor and MPS bond collapse did not reach QRegister");
-        require(result.fallback_reason.find("tensor:") != std::string::npos &&
+        require(result.fallback_reason.find("basis_permutation:") != std::string::npos &&
+                    result.fallback_reason.find("tensor:") != std::string::npos &&
                     result.fallback_reason.find("mps:") != std::string::npos &&
                     result.fallback_reason.find("uniform:") != std::string::npos &&
                     result.fallback_reason.find("phase_graph:") != std::string::npos,
