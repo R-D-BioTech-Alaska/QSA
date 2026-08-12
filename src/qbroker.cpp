@@ -790,6 +790,8 @@ const char* exact_execution_route_name(ExactExecutionRoute route) noexcept {
             return "BasisPermutation";
         case ExactExecutionRoute::Stabilizer:
             return "Stabilizer";
+        case ExactExecutionRoute::TreeTensor:
+            return "TreeTensor";
     }
     return "unknown";
 }
@@ -1327,6 +1329,14 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
         }
     } else {
         fallback_reason_ += "; phase_graph: route does not support marginal probability";
+        try {
+            tree_tensor_plan_.emplace(qubit_count_, operations, config_.tree_tensor);
+            route_ = ExactExecutionRoute::TreeTensor;
+            return;
+        } catch (const QStateError& error) {
+            fallback_reason_ += "; ttn: ";
+            fallback_reason_ += failure_message(error);
+        }
     }
 
     register_state_.emplace(qubit_count_, config_.register_state);
@@ -1394,6 +1404,8 @@ ExactProbabilityResult ExactPreparedProbabilityPlan::probability(
             }
             result.value = register_state_->amplitude_bits(basis_bits).norm2();
             return result;
+        case ExactExecutionRoute::TreeTensor:
+            throw QStateError("Prepared TreeTensor route does not support full-basis probability");
         case ExactExecutionRoute::CausalPauli:
             throw QStateError("Prepared probability plan cannot use CausalPauli");
     }
@@ -1456,6 +1468,12 @@ ExactProbabilityResult ExactPreparedProbabilityPlan::marginal_probability(
                 return result;
             }
             throw QStateError("Prepared MPS probability plan is missing its state");
+        case ExactExecutionRoute::TreeTensor:
+            if (!tree_tensor_plan_.has_value()) {
+                throw QStateError("Prepared TreeTensor marginal plan is missing its state");
+            }
+            result.value = tree_tensor_plan_->marginal_probability(qubits, bits);
+            return result;
         case ExactExecutionRoute::Register:
             if (!register_state_.has_value()) {
                 throw QStateError("Prepared register probability plan is missing its state");
@@ -1489,6 +1507,10 @@ std::size_t ExactPreparedProbabilityPlan::estimated_bytes() const noexcept {
     }
     if (phase_graph_state_.has_value()) {
         total += dynamic_bytes(phase_graph_state_->estimated_bytes(), sizeof(PhaseGraphState));
+    }
+    if (tree_tensor_plan_.has_value()) {
+        total += dynamic_bytes(
+            tree_tensor_plan_->estimated_bytes(), sizeof(TreeTensorMarginalPlan));
     }
     if (register_state_.has_value()) {
         total += dynamic_bytes(register_state_->estimated_bytes(), sizeof(QRegister));
