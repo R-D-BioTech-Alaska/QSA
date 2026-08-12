@@ -312,18 +312,20 @@ int main() {
 
     {
         ExactExecutionBrokerConfig config;
-        config.tensor.max_contraction_entries = 8U;
+        config.tensor.max_contraction_entries = 2U;
         ExactExecutionBroker broker(config);
-        const std::array<Operation, 2> operations{{
+        const std::array<Operation, 3> operations{{
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+            {OperationCode::Ry, 1U, 0U, 0.19, 0.0},
         }};
         const auto result = broker.basis_probability_from_zero(2U, operations, BasisIndex{0});
         const QRegister direct = evolve(QRegister(2U), operations);
         require(result.route == ExactExecutionRoute::PersistentMPS,
                 "tensor width collapse did not select persistent MPS");
-        require(result.fallback_reason.find("tensor:") != std::string::npos,
-                "persistent MPS probability route did not retain tensor rejection reason");
+        require(result.fallback_reason.find("tensor:") != std::string::npos &&
+                    result.fallback_reason.find("stabilizer:") != std::string::npos,
+                "persistent MPS probability route did not retain upstream rejection reasons");
         require_close(result.value, direct.amplitude(0U).norm2(),
                       "persistent MPS probability differs from QRegister");
     }
@@ -465,6 +467,32 @@ int main() {
     }
 
     {
+        ExactExecutionBroker broker;
+        const std::array<Operation, 3> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+            {OperationCode::Cnot, 1U, 2U, 0.0, 0.0},
+        }};
+        const std::array<std::uint8_t, 3> zero{{0U, 0U, 0U}};
+        const std::array<std::uint8_t, 3> one{{1U, 1U, 1U}};
+        const std::array<std::uint8_t, 3> miss{{0U, 1U, 0U}};
+        const auto zero_result = broker.basis_probability_from_zero(3U, operations, zero);
+        const auto one_result = broker.basis_probability_from_zero(3U, operations, one);
+        const auto miss_result = broker.basis_probability_from_zero(3U, operations, miss);
+        require(zero_result.route == ExactExecutionRoute::Stabilizer &&
+                    one_result.route == ExactExecutionRoute::Stabilizer &&
+                    miss_result.route == ExactExecutionRoute::Stabilizer,
+                "GHZ Clifford probability did not use Stabilizer");
+        require_close(zero_result.value, 0.5, "Stabilizer GHZ P(000) is wrong");
+        require_close(one_result.value, 0.5, "Stabilizer GHZ P(111) is wrong");
+        require(miss_result.value == 0.0, "Stabilizer GHZ impossible basis state was nonzero");
+        require(zero_result.fallback_reason.empty(),
+                "successful Stabilizer route reported a fallback reason");
+        require(std::string(qubit::exact_execution_route_name(zero_result.route)) == "Stabilizer",
+                "Stabilizer route name is unstable");
+    }
+
+    {
         ExactExecutionBrokerConfig config;
         config.tensor.max_contraction_entries = 8U;
         ExactExecutionBroker broker(config);
@@ -478,13 +506,12 @@ int main() {
         }};
         const auto result = broker.basis_probability_from_zero(4U, operations, BasisIndex{0});
         const QRegister direct = evolve(QRegister(4U), operations);
-        require(result.route == ExactExecutionRoute::Register,
-                "later H was incorrectly admitted by UniformMagnitude");
-        require(result.fallback_reason.find("basis_permutation:") != std::string::npos &&
-                    result.fallback_reason.find("uniform:") != std::string::npos,
-                "later-H fallback did not retain analytic rejection reasons");
+        require(result.route == ExactExecutionRoute::Stabilizer,
+                "later-H Clifford circuit did not select Stabilizer after UniformMagnitude rejection");
+        require(result.fallback_reason.empty(),
+                "successful later-H Stabilizer route reported a fallback reason");
         require_close(result.value, direct.amplitude(0U).norm2(),
-                      "later-H fallback changed the result");
+                      "later-H Stabilizer probability changed the result");
     }
 
     {
@@ -498,6 +525,7 @@ int main() {
         require(result.route == ExactExecutionRoute::Register,
                 "trajectory probability did not fall back to QRegister");
         require(result.fallback_reason.find("basis_permutation:") != std::string::npos &&
+                    result.fallback_reason.find("stabilizer:") != std::string::npos &&
                     result.fallback_reason.find("mps:") != std::string::npos &&
                     result.fallback_reason.find("uniform:") != std::string::npos &&
                     result.fallback_reason.find("phase_graph:") != std::string::npos,
@@ -511,15 +539,17 @@ int main() {
         config.tensor.max_contraction_entries = 2U;
         config.mps.max_bond_dimension = 1U;
         ExactExecutionBroker broker(config);
-        const std::array<Operation, 2> operations{{
+        const std::array<Operation, 3> operations{{
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+            {OperationCode::Ry, 0U, 0U, 0.19, 0.0},
         }};
         const auto result = broker.basis_probability_from_zero(2U, operations, BasisIndex{0});
         const QRegister direct = evolve(QRegister(2U), operations);
         require(result.route == ExactExecutionRoute::Register,
-                "tensor and MPS bond collapse did not reach QRegister");
+                "non-Clifford tensor and MPS collapse did not reach QRegister");
         require(result.fallback_reason.find("basis_permutation:") != std::string::npos &&
+                    result.fallback_reason.find("stabilizer:") != std::string::npos &&
                     result.fallback_reason.find("tensor:") != std::string::npos &&
                     result.fallback_reason.find("mps:") != std::string::npos &&
                     result.fallback_reason.find("uniform:") != std::string::npos &&
