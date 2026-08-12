@@ -39,6 +39,15 @@ struct ExactFactorBrokerConfig {
 
 namespace detail {
 
+struct ExactFactorBrokerDecisionWorkspace {
+    ExactFactorDecisionWorkspace workspace{};
+    std::size_t generation{0U};
+
+    [[nodiscard]] std::size_t estimated_bytes() const noexcept {
+        return sizeof(*this) + workspace.estimated_bytes();
+    }
+};
+
 class ExactFactorBrokerDecisionBinding {
 public:
     ExactFactorBrokerDecisionBinding(
@@ -50,29 +59,30 @@ public:
           retained_variables_(retained_variables.begin(), retained_variables.end()),
           config_(config) {}
 
-    [[nodiscard]] ExactFactorDecisionWorkspace workspace() const {
-        return plan_.workspace();
-    }
-
-    [[nodiscard]] std::vector<QComplex> evaluate(
-        ExactFactorDecisionWorkspace& workspace_value) const {
-        return plan_.evaluate(workspace_value);
+    [[nodiscard]] ExactFactorBrokerDecisionWorkspace workspace() const {
+        ExactFactorBrokerDecisionWorkspace result;
+        result.workspace = plan_.workspace();
+        result.generation = generation_;
+        return result;
     }
 
     void evaluate(
         std::span<QComplex> output,
-        ExactFactorDecisionWorkspace& workspace_value) const {
-        plan_.evaluate(output, workspace_value);
+        ExactFactorBrokerDecisionWorkspace& workspace_value) const {
+        refresh(workspace_value);
+        plan_.evaluate(output, workspace_value.workspace);
     }
 
     [[nodiscard]] QComplex partition(
-        ExactFactorDecisionWorkspace& workspace_value) const {
-        return plan_.partition(workspace_value);
+        ExactFactorBrokerDecisionWorkspace& workspace_value) const {
+        refresh(workspace_value);
+        return plan_.partition(workspace_value.workspace);
     }
 
     [[nodiscard]] std::vector<QComplex> normalized_marginal(
-        ExactFactorDecisionWorkspace& workspace_value) const {
-        return plan_.normalized_marginal(workspace_value);
+        ExactFactorBrokerDecisionWorkspace& workspace_value) const {
+        refresh(workspace_value);
+        return plan_.normalized_marginal(workspace_value.workspace);
     }
 
     void rebind_dense_factor(FactorId factor, std::span<const QComplex> values) {
@@ -82,6 +92,7 @@ public:
             next_graph, retained_variables_, config_);
         graph_ = std::move(next_graph);
         plan_ = std::move(next_plan);
+        ++generation_;
         ++rebind_count_;
     }
 
@@ -94,6 +105,7 @@ public:
             next_graph, retained_variables_, config_);
         graph_ = std::move(next_graph);
         plan_ = std::move(next_plan);
+        ++generation_;
         ++rebind_count_;
     }
 
@@ -117,7 +129,16 @@ private:
     ExactFactorGraph graph_;
     std::vector<FactorVariableId> retained_variables_{};
     ExactFactorDecisionConfig config_{};
+    std::size_t generation_{0U};
     std::size_t rebind_count_{0U};
+
+    void refresh(ExactFactorBrokerDecisionWorkspace& workspace_value) const {
+        if (workspace_value.generation == generation_) {
+            return;
+        }
+        workspace_value.workspace = plan_.workspace();
+        workspace_value.generation = generation_;
+    }
 };
 
 }  // namespace detail
@@ -133,7 +154,7 @@ public:
         if (const auto* chain = std::get_if<ExactFactorChainWorkspace>(&workspace_)) {
             bytes += chain->estimated_bytes();
         } else if (const auto* decision =
-                       std::get_if<ExactFactorDecisionWorkspace>(&workspace_)) {
+                       std::get_if<detail::ExactFactorBrokerDecisionWorkspace>(&workspace_)) {
             bytes += decision->estimated_bytes();
         } else if (const auto* generic = std::get_if<ExactFactorWorkspace>(&workspace_)) {
             bytes += generic->estimated_bytes();
@@ -145,7 +166,7 @@ private:
     std::variant<
         std::monostate,
         ExactFactorChainWorkspace,
-        ExactFactorDecisionWorkspace,
+        detail::ExactFactorBrokerDecisionWorkspace,
         ExactFactorWorkspace> workspace_{};
 
     friend class ExactFactorBrokerPlan;
@@ -455,10 +476,10 @@ private:
         return *workspace;
     }
 
-    [[nodiscard]] static ExactFactorDecisionWorkspace& decision_workspace_of(
+    [[nodiscard]] static detail::ExactFactorBrokerDecisionWorkspace& decision_workspace_of(
         ExactFactorBrokerWorkspace& workspace_value) {
-        auto* workspace =
-            std::get_if<ExactFactorDecisionWorkspace>(&workspace_value.workspace_);
+        auto* workspace = std::get_if<detail::ExactFactorBrokerDecisionWorkspace>(
+            &workspace_value.workspace_);
         if (workspace == nullptr) {
             throw QStateError(
                 "Exact factor broker workspace route does not match DecisionDiagram");
