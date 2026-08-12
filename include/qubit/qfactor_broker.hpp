@@ -1,5 +1,6 @@
 #pragma once
 
+#include "qubit/qfactor_affine.hpp"
 #include "qubit/qfactor_chain.hpp"
 #include "qubit/qfactor_decision.hpp"
 
@@ -18,9 +19,11 @@ enum class ExactFactorBrokerRoute : std::uint8_t {
     ChainTransfer = 0,
     DecisionDiagram = 1,
     VariableElimination = 2,
+    AffineXOR = 3,
 };
 
 struct ExactFactorBrokerConfig {
+    ExactFactorAffineConfig affine{};
     ExactFactorDecisionConfig decision{};
 };
 
@@ -33,11 +36,95 @@ struct ExactFactorBrokerConfig {
             return "ExactFactorDecisionDiagram";
         case ExactFactorBrokerRoute::VariableElimination:
             return "ExactFactorVariableElimination";
+        case ExactFactorBrokerRoute::AffineXOR:
+            return "ExactFactorAffineXOR";
     }
     return "Unknown";
 }
 
 namespace detail {
+
+struct ExactFactorBrokerAffineWorkspace {
+    [[nodiscard]] std::size_t estimated_bytes() const noexcept {
+        return sizeof(*this);
+    }
+};
+
+class ExactFactorBrokerAffineBinding {
+public:
+    ExactFactorBrokerAffineBinding(
+        const ExactFactorGraph& graph,
+        std::span<const FactorVariableId> retained_variables,
+        ExactFactorAffineConfig config)
+        : plan_(graph, retained_variables, config),
+          graph_(graph),
+          retained_variables_(retained_variables.begin(), retained_variables.end()),
+          config_(config) {}
+
+    [[nodiscard]] ExactFactorBrokerAffineWorkspace workspace() const noexcept {
+        return {};
+    }
+
+    void evaluate(
+        std::span<QComplex> output,
+        ExactFactorBrokerAffineWorkspace&) const {
+        plan_.evaluate(output);
+    }
+
+    [[nodiscard]] QComplex partition(
+        ExactFactorBrokerAffineWorkspace&) const {
+        return plan_.partition();
+    }
+
+    [[nodiscard]] std::vector<QComplex> normalized_marginal(
+        ExactFactorBrokerAffineWorkspace&) const {
+        return plan_.normalized_marginal();
+    }
+
+    void rebind_dense_factor(FactorId factor, std::span<const QComplex> values) {
+        ExactFactorGraph next_graph = graph_;
+        next_graph.set_dense_factor(factor, values);
+        ExactFactorAffinePlan next_plan(
+            next_graph, retained_variables_, config_);
+        graph_ = std::move(next_graph);
+        plan_ = std::move(next_plan);
+        ++rebind_count_;
+    }
+
+    void rebind_sparse_factor(
+        FactorId factor,
+        std::span<const FactorSparseEntry> entries) {
+        ExactFactorGraph next_graph = graph_;
+        next_graph.set_sparse_factor(factor, entries);
+        ExactFactorAffinePlan next_plan(
+            next_graph, retained_variables_, config_);
+        graph_ = std::move(next_graph);
+        plan_ = std::move(next_plan);
+        ++rebind_count_;
+    }
+
+    [[nodiscard]] std::size_t output_entries() const noexcept {
+        return plan_.output_entries();
+    }
+
+    [[nodiscard]] std::size_t rebind_count() const noexcept {
+        return rebind_count_;
+    }
+
+    [[nodiscard]] std::size_t estimated_bytes() const noexcept {
+        return sizeof(*this) +
+               plan_.estimated_bytes() +
+               graph_.estimated_bytes() +
+               retained_variables_.capacity() * sizeof(FactorVariableId);
+    }
+
+private:
+    ExactFactorAffinePlan plan_;
+    ExactFactorGraph graph_;
+    std::vector<FactorVariableId> retained_variables_{};
+    ExactFactorAffineConfig config_{};
+    std::size_t rebind_count_{0U};
+};
 
 struct ExactFactorBrokerDecisionWorkspace {
     ExactFactorDecisionWorkspace workspace{};
@@ -153,6 +240,9 @@ public:
         std::size_t bytes = sizeof(*this);
         if (const auto* chain = std::get_if<ExactFactorChainWorkspace>(&workspace_)) {
             bytes += chain->estimated_bytes();
+        } else if (const auto* affine =
+                       std::get_if<detail::ExactFactorBrokerAffineWorkspace>(&workspace_)) {
+            bytes += affine->estimated_bytes();
         } else if (const auto* decision =
                        std::get_if<detail::ExactFactorBrokerDecisionWorkspace>(&workspace_)) {
             bytes += decision->estimated_bytes();
@@ -166,6 +256,7 @@ private:
     std::variant<
         std::monostate,
         ExactFactorChainWorkspace,
+        detail::ExactFactorBrokerAffineWorkspace,
         detail::ExactFactorBrokerDecisionWorkspace,
         ExactFactorWorkspace> workspace_{};
 
@@ -195,6 +286,15 @@ public:
 
         try {
             plan_.template emplace<2>(
+                graph, retained_variables_, config_.affine);
+            route_ = ExactFactorBrokerRoute::AffineXOR;
+            return;
+        } catch (const QStateError& error) {
+            affine_rejection_ = error.what();
+        }
+
+        try {
+            plan_.template emplace<3>(
                 graph, retained_variables_, config_.decision);
             route_ = ExactFactorBrokerRoute::DecisionDiagram;
             return;
@@ -202,7 +302,7 @@ public:
             decision_rejection_ = error.what();
         }
 
-        plan_.template emplace<3>(graph, retained_variables_);
+        plan_.template emplace<4>(graph, retained_variables_);
         route_ = ExactFactorBrokerRoute::VariableElimination;
     }
 
@@ -212,11 +312,14 @@ public:
             case ExactFactorBrokerRoute::ChainTransfer:
                 result.workspace_.template emplace<1>(chain_plan().workspace());
                 break;
+            case ExactFactorBrokerRoute::AffineXOR:
+                result.workspace_.template emplace<2>(affine_plan().workspace());
+                break;
             case ExactFactorBrokerRoute::DecisionDiagram:
-                result.workspace_.template emplace<2>(decision_plan().workspace());
+                result.workspace_.template emplace<3>(decision_plan().workspace());
                 break;
             case ExactFactorBrokerRoute::VariableElimination:
-                result.workspace_.template emplace<3>(generic_plan().workspace());
+                result.workspace_.template emplace<4>(generic_plan().workspace());
                 break;
         }
         return result;
@@ -251,6 +354,10 @@ public:
                 }
                 return;
             }
+            case ExactFactorBrokerRoute::AffineXOR:
+                affine_plan().evaluate(
+                    output, affine_workspace_of(workspace_value));
+                return;
             case ExactFactorBrokerRoute::DecisionDiagram:
                 decision_plan().evaluate(
                     output, decision_workspace_of(workspace_value));
@@ -272,6 +379,8 @@ public:
         switch (route_) {
             case ExactFactorBrokerRoute::ChainTransfer:
                 return chain_plan().partition(chain_workspace_of(workspace_value));
+            case ExactFactorBrokerRoute::AffineXOR:
+                return affine_plan().partition(affine_workspace_of(workspace_value));
             case ExactFactorBrokerRoute::DecisionDiagram:
                 return decision_plan().partition(decision_workspace_of(workspace_value));
             case ExactFactorBrokerRoute::VariableElimination:
@@ -303,6 +412,9 @@ public:
                 }
                 return chain_plan().normalized_marginal(chain_workspace);
             }
+            case ExactFactorBrokerRoute::AffineXOR:
+                return affine_plan().normalized_marginal(
+                    affine_workspace_of(workspace_value));
             case ExactFactorBrokerRoute::DecisionDiagram:
                 return decision_plan().normalized_marginal(
                     decision_workspace_of(workspace_value));
@@ -317,6 +429,9 @@ public:
         switch (route_) {
             case ExactFactorBrokerRoute::ChainTransfer:
                 chain_plan().rebind_dense_factor(factor, values);
+                break;
+            case ExactFactorBrokerRoute::AffineXOR:
+                affine_plan().rebind_dense_factor(factor, values);
                 break;
             case ExactFactorBrokerRoute::DecisionDiagram:
                 decision_plan().rebind_dense_factor(factor, values);
@@ -333,6 +448,9 @@ public:
         switch (route_) {
             case ExactFactorBrokerRoute::ChainTransfer:
                 chain_plan().rebind_sparse_factor(factor, entries);
+                break;
+            case ExactFactorBrokerRoute::AffineXOR:
+                affine_plan().rebind_sparse_factor(factor, entries);
                 break;
             case ExactFactorBrokerRoute::DecisionDiagram:
                 decision_plan().rebind_sparse_factor(factor, entries);
@@ -355,6 +473,10 @@ public:
         return chain_rejection_;
     }
 
+    [[nodiscard]] const std::string& affine_rejection() const noexcept {
+        return affine_rejection_;
+    }
+
     [[nodiscard]] const std::string& decision_rejection() const noexcept {
         return decision_rejection_;
     }
@@ -370,6 +492,8 @@ public:
         switch (route_) {
             case ExactFactorBrokerRoute::ChainTransfer:
                 return chain_plan().stats().output_entries;
+            case ExactFactorBrokerRoute::AffineXOR:
+                return affine_plan().output_entries();
             case ExactFactorBrokerRoute::DecisionDiagram:
                 return decision_plan().output_entries();
             case ExactFactorBrokerRoute::VariableElimination:
@@ -382,6 +506,8 @@ public:
         switch (route_) {
             case ExactFactorBrokerRoute::ChainTransfer:
                 return chain_plan().rebind_count();
+            case ExactFactorBrokerRoute::AffineXOR:
+                return affine_plan().rebind_count();
             case ExactFactorBrokerRoute::DecisionDiagram:
                 return decision_plan().rebind_count();
             case ExactFactorBrokerRoute::VariableElimination:
@@ -394,10 +520,14 @@ public:
         std::size_t bytes = sizeof(*this) +
                             retained_variables_.capacity() * sizeof(FactorVariableId) +
                             chain_rejection_.capacity() +
+                            affine_rejection_.capacity() +
                             decision_rejection_.capacity();
         switch (route_) {
             case ExactFactorBrokerRoute::ChainTransfer:
                 bytes += chain_plan().estimated_bytes();
+                break;
+            case ExactFactorBrokerRoute::AffineXOR:
+                bytes += affine_plan().estimated_bytes();
                 break;
             case ExactFactorBrokerRoute::DecisionDiagram:
                 bytes += decision_plan().estimated_bytes();
@@ -413,11 +543,13 @@ private:
     ExactFactorBrokerConfig config_{};
     std::vector<FactorVariableId> retained_variables_{};
     std::string chain_rejection_{};
+    std::string affine_rejection_{};
     std::string decision_rejection_{};
     ExactFactorBrokerRoute route_{ExactFactorBrokerRoute::VariableElimination};
     std::variant<
         std::monostate,
         ExactFactorChainPlan,
+        detail::ExactFactorBrokerAffineBinding,
         detail::ExactFactorBrokerDecisionBinding,
         ExactFactorPlan> plan_{};
 
@@ -449,6 +581,14 @@ private:
         return std::get<ExactFactorChainPlan>(plan_);
     }
 
+    [[nodiscard]] detail::ExactFactorBrokerAffineBinding& affine_plan() {
+        return std::get<detail::ExactFactorBrokerAffineBinding>(plan_);
+    }
+
+    [[nodiscard]] const detail::ExactFactorBrokerAffineBinding& affine_plan() const {
+        return std::get<detail::ExactFactorBrokerAffineBinding>(plan_);
+    }
+
     [[nodiscard]] detail::ExactFactorBrokerDecisionBinding& decision_plan() {
         return std::get<detail::ExactFactorBrokerDecisionBinding>(plan_);
     }
@@ -472,6 +612,17 @@ private:
         if (workspace == nullptr) {
             throw QStateError(
                 "Exact factor broker workspace route does not match ChainTransfer");
+        }
+        return *workspace;
+    }
+
+    [[nodiscard]] static detail::ExactFactorBrokerAffineWorkspace& affine_workspace_of(
+        ExactFactorBrokerWorkspace& workspace_value) {
+        auto* workspace = std::get_if<detail::ExactFactorBrokerAffineWorkspace>(
+            &workspace_value.workspace_);
+        if (workspace == nullptr) {
+            throw QStateError(
+                "Exact factor broker workspace route does not match AffineXOR");
         }
         return *workspace;
     }
