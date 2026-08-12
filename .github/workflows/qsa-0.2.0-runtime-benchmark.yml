@@ -54,6 +54,7 @@ jobs:
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_adjoint_scheduler.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_scheduler_test
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_tensor_adjoint_causal.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_causal_test
           c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/marginal_probability.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_marginal_probability_benchmark
+          c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_planner_scaling.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_planner_scaling_benchmark
           c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_rebind.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_rebind_benchmark
           c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_adjoint.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_benchmark
           c++ -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -Iinclude benchmarks/tensor_adjoint_batch.cpp build-runtime/libqstate_core.a -pthread -o build-runtime/qstate_tensor_adjoint_batch_benchmark
@@ -102,6 +103,10 @@ jobs:
         run: |
           set -o pipefail
           ./build-runtime/qstate_tensor_contraction_plan_benchmark | tee tensor-plan.txt
+      - name: Run tensor planner scaling benchmark
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_tensor_planner_scaling_benchmark | tee tensor-planner-scaling.txt
       - name: Run tensor expectation benchmark
         run: |
           set -o pipefail
@@ -179,6 +184,7 @@ jobs:
             stabilizer.txt
             marginal-probability.txt
             tensor-plan.txt
+            tensor-planner-scaling.txt
             tensor-expectation.txt
             tensor-rebind.txt
             tensor-adjoint.txt
