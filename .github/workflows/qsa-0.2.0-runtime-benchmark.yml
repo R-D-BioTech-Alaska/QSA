@@ -43,6 +43,7 @@ jobs:
           qstate_tensor_adjoint_causal_benchmark
           qstate_mps_benchmark
           qstate_phase_graph_benchmark
+          qstate_stabilizer_benchmark
       - name: Build structural runtime checks
         run: |
           c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_kron_operator.cpp -o build-runtime/qstate_kron_operator_test
@@ -89,6 +90,10 @@ jobs:
         run: |
           set -o pipefail
           ./build-runtime/qstate_phase_graph_benchmark | tee phase-graph.txt
+      - name: Run stabilizer benchmark
+        run: |
+          set -o pipefail
+          ./build-runtime/qstate_stabilizer_benchmark | tee stabilizer.txt
       - name: Run marginal probability benchmark
         run: |
           set -o pipefail
@@ -171,6 +176,7 @@ jobs:
             qsa-vs-numpy.txt
             mps.txt
             phase-graph.txt
+            stabilizer.txt
             marginal-probability.txt
             tensor-plan.txt
             tensor-expectation.txt
