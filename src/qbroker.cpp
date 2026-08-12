@@ -83,16 +83,18 @@ void validate_observable(std::size_t qubit_count, const PauliObservable& observa
                 }
                 break;
             case OperationCode::Cnot:
-            case OperationCode::Cz:
-                if (operation.first >= qubit_count || operation.second >= qubit_count) {
+            case OperationCode::Cz: {
+                const std::size_t first = static_cast<std::size_t>(operation.first);
+                const std::size_t second = static_cast<std::size_t>(operation.second);
+                if (first >= qubit_count || second >= qubit_count) {
                     return fail("MPS controlled gate qubit is out of range");
                 }
-                if (operation.first == operation.second ||
-                    (operation.first + 1U != operation.second &&
-                     operation.second + 1U != operation.first)) {
+                if (first == second ||
+                    (first + 1U != second && second + 1U != first)) {
                     return fail("MPS controlled gates require adjacent distinct qubits");
                 }
                 break;
+            }
             case OperationCode::Swap:
                 return fail("Persistent MPS route does not support SWAP");
             case OperationCode::BitFlipTrajectory:
@@ -493,7 +495,6 @@ ExactExpectationResult ExactExecutionBroker::expectation_from_zero(
             result.route = ExactExecutionRoute::PersistentMPS;
             return result;
         } catch (const QStateError& error) {
-            mps_reason = nullptr;
             result.fallback_reason += "; mps: ";
             result.fallback_reason += failure_message(error);
         }
@@ -516,13 +517,25 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
     validate_basis_width(qubit_count, basis_bits);
 
     ExactProbabilityResult result;
+    const char* uniform_reason = nullptr;
+    if (uniform_magnitude_eligible(qubit_count, operations, &uniform_reason)) {
+        result.value = uniform_probability(qubit_count);
+        result.route = ExactExecutionRoute::UniformMagnitude;
+        return result;
+    }
+
     try {
         TensorNetworkCircuit tensor(qubit_count, operations, config_.tensor);
         result.value = tensor.amplitude(basis_bits, &result.tensor_stats).norm2();
         result.route = ExactExecutionRoute::TensorNetwork;
         return result;
     } catch (const QStateError& error) {
-        result.fallback_reason = "tensor: " + failure_message(error);
+        result.fallback_reason = "uniform: ";
+        result.fallback_reason += uniform_reason != nullptr
+            ? uniform_reason
+            : "uniform-magnitude certificate failed";
+        result.fallback_reason += "; tensor: ";
+        result.fallback_reason += failure_message(error);
     }
 
     const char* mps_reason = nullptr;
@@ -541,17 +554,6 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         result.fallback_reason += "; mps: ";
         result.fallback_reason += mps_reason != nullptr ? mps_reason : "structural preflight failed";
     }
-
-    const char* uniform_reason = nullptr;
-    if (uniform_magnitude_eligible(qubit_count, operations, &uniform_reason)) {
-        result.value = uniform_probability(qubit_count);
-        result.route = ExactExecutionRoute::UniformMagnitude;
-        return result;
-    }
-    result.fallback_reason += "; uniform: ";
-    result.fallback_reason += uniform_reason != nullptr
-        ? uniform_reason
-        : "uniform-magnitude certificate failed";
 
     const char* phase_reason = nullptr;
     if (phase_graph_structure_eligible(qubit_count, operations, &phase_reason)) {
