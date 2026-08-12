@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "include/qubit/qfactor.hpp"
+      - "include/qubit/qfactor_affine.hpp"
       - "include/qubit/qfactor_chain.hpp"
       - "include/qubit/qfactor_decision.hpp"
       - "include/qubit/qfactor_broker.hpp"
