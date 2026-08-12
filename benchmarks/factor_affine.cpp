@@ -26,12 +26,24 @@ using qubit::ExactFactorAffinePlan;
 using qubit::ExactFactorConfig;
 using qubit::ExactFactorDecisionConfig;
 using qubit::ExactFactorDecisionPlan;
+using qubit::ExactFactorDecisionWorkspace;
 using qubit::ExactFactorGraph;
 using qubit::ExactFactorPlan;
+using qubit::ExactFactorWorkspace;
 using qubit::FactorSparseEntry;
 using qubit::FactorVariableId;
 using qubit::QComplex;
 using qubit::QStateError;
+
+#if defined(_MSC_VER)
+#define QSA_BENCH_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define QSA_BENCH_NOINLINE __attribute__((noinline))
+#else
+#define QSA_BENCH_NOINLINE
+#endif
+
+volatile double query_sink = 0.0;
 
 struct Equation {
     std::array<FactorVariableId, 3> variables{};
@@ -238,6 +250,36 @@ private:
     }
 };
 
+QSA_BENCH_NOINLINE void run_affine_query(
+    const ExactFactorAffinePlan& plan,
+    std::array<QComplex, 2>& output) {
+    plan.evaluate(output);
+    query_sink = output[0].re + output[1].re;
+}
+
+QSA_BENCH_NOINLINE void run_control_query(
+    const PackedGF2Control& plan,
+    std::array<QComplex, 2>& output) {
+    output = plan.marginal();
+    query_sink = output[0].re + output[1].re;
+}
+
+QSA_BENCH_NOINLINE void run_decision_query(
+    const ExactFactorDecisionPlan& plan,
+    ExactFactorDecisionWorkspace& workspace,
+    std::array<QComplex, 2>& output) {
+    plan.evaluate(output, workspace);
+    query_sink = output[0].re + output[1].re;
+}
+
+QSA_BENCH_NOINLINE void run_generic_query(
+    const ExactFactorPlan& plan,
+    ExactFactorWorkspace& workspace,
+    std::array<QComplex, 2>& output) {
+    plan.evaluate(output, workspace);
+    query_sink = output[0].re + output[1].re;
+}
+
 template <class Function>
 [[nodiscard]] double median_ms(
     Function&& function,
@@ -327,16 +369,16 @@ void matched_evidence() {
     auto decision_workspace = decision->workspace();
     auto generic_workspace = generic->workspace();
     const double affine_query_ms = median_ms([&] {
-        affine->evaluate(affine_output);
+        run_affine_query(*affine, affine_output);
     }, 11U, 100000U);
     const double control_query_ms = median_ms([&] {
-        control_output = control->marginal();
+        run_control_query(*control, control_output);
     }, 11U, 100000U);
     const double decision_query_ms = median_ms([&] {
-        decision->evaluate(decision_output, decision_workspace);
+        run_decision_query(*decision, decision_workspace, decision_output);
     }, 11U, 1000U);
     const double generic_query_ms = median_ms([&] {
-        generic->evaluate(generic_output, generic_workspace);
+        run_generic_query(*generic, generic_workspace, generic_output);
     }, 7U, 3U);
     const std::array<QComplex, 2> brute_output = brute_marginal(system, retained.front());
 
@@ -404,10 +446,10 @@ void capability_evidence() {
     std::array<QComplex, 2> affine_output{};
     std::array<QComplex, 2> control_output{};
     const double affine_query_ms = median_ms([&] {
-        affine->evaluate(affine_output);
+        run_affine_query(*affine, affine_output);
     }, 11U, 100000U);
     const double control_query_ms = median_ms([&] {
-        control_output = control->marginal();
+        run_control_query(*control, control_output);
     }, 11U, 100000U);
     const double control_error = max_error(affine_output, control_output);
     if (control_error > 2e-11 || affine->stats().rank != control->rank() ||
@@ -432,7 +474,7 @@ void capability_evidence() {
         auto workspace = decision.workspace();
         std::array<QComplex, 2> output{};
         decision_query_ms = median_ms([&] {
-            decision.evaluate(output, workspace);
+            run_decision_query(decision, workspace, output);
         }, 7U, 100U);
         if (max_error(output, affine_output) > 2e-11) {
             throw std::runtime_error("large DecisionDiagram result differs from AffineXOR");
@@ -456,7 +498,7 @@ void capability_evidence() {
         auto workspace = generic.workspace();
         std::array<QComplex, 2> output{};
         generic_query_ms = median_ms([&] {
-            generic.evaluate(output, workspace);
+            run_generic_query(generic, workspace, output);
         }, 3U);
         if (max_error(output, affine_output) > 2e-11) {
             throw std::runtime_error("large generic VE result differs from AffineXOR");
