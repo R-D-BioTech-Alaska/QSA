@@ -130,6 +130,83 @@ void QRegister::probabilities_one_into(std::span<double> output) const {
     }
 }
 
+double QRegister::marginal_probability(
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) const {
+    if (qubits.size() != bits.size()) {
+        throw QStateError("Marginal query qubit and bit counts do not match");
+    }
+    if (qubits.empty()) {
+        return 1.0;
+    }
+
+    std::vector<std::int8_t> requested(qubit_count_, -1);
+    for (std::size_t index = 0U; index < qubits.size(); ++index) {
+        const QubitId qubit = qubits[index];
+        if (static_cast<std::size_t>(qubit) >= qubit_count_) {
+            throw QStateError("Marginal query qubit is out of range");
+        }
+        if (bits[index] > 1U) {
+            throw QStateError("Marginal query bits must be zero or one");
+        }
+        if (requested[qubit] >= 0) {
+            throw QStateError("Marginal query contains duplicate qubits");
+        }
+        requested[qubit] = static_cast<std::int8_t>(bits[index]);
+    }
+
+    long double probability = 1.0L;
+    for (const StateComponent& component : components_) {
+        if (component.is_cell()) {
+            const QubitId qubit = component.qubits.front();
+            const std::int8_t bit = requested[qubit];
+            if (bit < 0) {
+                continue;
+            }
+            const double one = std::get<BlochCell>(component.state).probability_one();
+            probability *= static_cast<long double>(bit != 0 ? one : 1.0 - one);
+            continue;
+        }
+
+        BasisIndex mask = 0U;
+        BasisIndex expected = 0U;
+        for (std::size_t position = 0U; position < component.qubits.size(); ++position) {
+            const std::int8_t bit = requested[component.qubits[position]];
+            if (bit < 0) {
+                continue;
+            }
+            const BasisIndex local_bit = BasisIndex{1} << position;
+            mask |= local_bit;
+            if (bit != 0) {
+                expected |= local_bit;
+            }
+        }
+        if (mask == 0U) {
+            continue;
+        }
+
+        const AmplitudeStore& store = std::get<AmplitudeStore>(component.state);
+        long double local_probability = 0.0L;
+        if (store.mode_ == StorageMode::Sparse) {
+            for (const auto& [basis, amplitude] : store.sparse_) {
+                if ((basis & mask) == expected) {
+                    local_probability += static_cast<long double>(amplitude.norm2());
+                }
+            }
+        } else {
+            for (BasisIndex basis = 0U; basis < store.dimension_; ++basis) {
+                if ((basis & mask) == expected) {
+                    local_probability += static_cast<long double>(
+                        store.dense_[static_cast<std::size_t>(basis)].norm2());
+                }
+            }
+        }
+        probability *= std::clamp(local_probability, 0.0L, 1.0L);
+    }
+
+    return std::clamp(static_cast<double>(probability), 0.0, 1.0);
+}
+
 void QRegister::measure_all_into(
     std::uint64_t seed,
     std::span<int> output) {

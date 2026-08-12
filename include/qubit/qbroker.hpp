@@ -118,6 +118,11 @@ public:
         std::span<const Operation> operations,
         ExactExecutionBrokerConfig config = {});
 
+    [[nodiscard]] static ExactPreparedProbabilityPlan for_marginals(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        ExactExecutionBrokerConfig config = {});
+
     [[nodiscard]] ExactProbabilityResult probability(
         std::span<const std::uint8_t> basis_bits) const;
     [[nodiscard]] ExactProbabilityResult probability(BasisIndex basis) const;
@@ -129,6 +134,17 @@ public:
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
 
 private:
+    enum class QueryCapability : std::uint8_t {
+        FullBasis = 0,
+        Marginal = 1,
+    };
+
+    ExactPreparedProbabilityPlan(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        ExactExecutionBrokerConfig config,
+        QueryCapability capability);
+
     std::size_t qubit_count_{0};
     ExactExecutionBrokerConfig config_{};
     ExactExecutionRoute route_{ExactExecutionRoute::Register};

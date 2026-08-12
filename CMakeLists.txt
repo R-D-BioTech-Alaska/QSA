@@ -235,6 +235,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_execution_broker_tests PRIVATE qstate_core)
     add_test(NAME qstate_execution_broker_tests COMMAND qstate_execution_broker_tests)
 
+    add_executable(qstate_marginal_probability_tests tests/test_marginal_probability.cpp)
+    target_link_libraries(qstate_marginal_probability_tests PRIVATE qstate_core)
+    add_test(NAME qstate_marginal_probability_tests COMMAND qstate_marginal_probability_tests)
+
     add_executable(qstate_estimator_tests tests/test_estimator.cpp)
     target_link_libraries(qstate_estimator_tests PRIVATE qstate_core)
     add_test(NAME qstate_estimator_tests COMMAND qstate_estimator_tests)

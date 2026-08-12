@@ -18,8 +18,10 @@ using qubit::ExactExecutionBroker;
 using qubit::ExactExecutionBrokerConfig;
 using qubit::ExactExecutionRoute;
 using qubit::ExactPreparedProbabilityPlan;
+using qubit::MatrixProductState;
 using qubit::Operation;
 using qubit::OperationCode;
+using qubit::QRegister;
 using qubit::QubitId;
 
 template <class Function>
@@ -136,6 +138,45 @@ template <class Function>
     return operations;
 }
 
+[[nodiscard]] std::vector<Operation> low_bond_operations(std::size_t qubits) {
+    std::vector<Operation> operations;
+    operations.reserve(2U * qubits);
+    for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::Ry,
+            static_cast<QubitId>(qubit),
+            0U,
+            0.0005 * static_cast<double>((qubit % 23U) + 1U),
+            0.0,
+        });
+    }
+    for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::Cz,
+            static_cast<QubitId>(qubit),
+            static_cast<QubitId>(qubit + 1U),
+            0.0,
+            0.0,
+        });
+    }
+    return operations;
+}
+
+[[nodiscard]] MatrixProductState low_bond_reference(std::size_t qubits) {
+    MatrixProductState state = MatrixProductState::zero(qubits);
+    for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+        state.apply_unitary(
+            static_cast<QubitId>(qubit),
+            qubit::gates::ry(0.0005 * static_cast<double>((qubit % 23U) + 1U)));
+    }
+    for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+        state.apply_cz(
+            static_cast<QubitId>(qubit),
+            static_cast<QubitId>(qubit + 1U));
+    }
+    return state;
+}
+
 }  // namespace
 
 int main() {
@@ -161,7 +202,8 @@ int main() {
 
         std::optional<ExactPreparedProbabilityPlan> prepared;
         const double setup_ms = median_ms([&] {
-            prepared.emplace(qubits, operations, config);
+            prepared.emplace(ExactPreparedProbabilityPlan::for_marginals(
+                qubits, operations, config));
         }, 3);
         qubit::ExactProbabilityResult prepared_result;
         const double query_ms = median_ms([&] {
@@ -209,7 +251,8 @@ int main() {
 
         std::optional<ExactPreparedProbabilityPlan> prepared;
         const double setup_ms = median_ms([&] {
-            prepared.emplace(qubits, operations);
+            prepared.emplace(ExactPreparedProbabilityPlan::for_marginals(
+                qubits, operations));
         }, 3);
         qubit::ExactProbabilityResult prepared_result;
         const double query_ms = median_ms([&] {
@@ -239,6 +282,102 @@ int main() {
         std::cout << "basis_marginal_prepared_bytes=" << prepared->estimated_bytes() << '\n';
         std::cout << "basis_marginal_hit=" << prepared_result.value << '\n';
         std::cout << "basis_marginal_miss=" << miss.value << '\n';
+    }
+
+    {
+        constexpr std::size_t low_bond_qubits = 20'000U;
+        const std::vector<Operation> operations = low_bond_operations(low_bond_qubits);
+        const std::array<QubitId, 3> selected{{9'999U, 10'000U, 10'001U}};
+        const std::array<std::uint8_t, 3> selected_bits{{1U, 0U, 1U}};
+        ExactExecutionBroker broker;
+
+        std::optional<ExactPreparedProbabilityPlan> full;
+        const double full_setup_ms = median_ms([&] {
+            full.emplace(low_bond_qubits, operations);
+        }, 3);
+        if (full->prepared_route() != ExactExecutionRoute::TensorNetwork) {
+            std::cerr << "full-basis route-conflict certificate changed\n";
+            return 4;
+        }
+
+        MatrixProductState reference = low_bond_reference(low_bond_qubits);
+        const double expected = reference.marginal_probability(selected, selected_bits);
+
+        qubit::ExactProbabilityResult one_shot;
+        const double one_shot_ms = median_ms([&] {
+            one_shot = broker.marginal_probability_from_zero(
+                low_bond_qubits, operations, selected, selected_bits);
+        }, 3);
+
+        std::optional<ExactPreparedProbabilityPlan> prepared;
+        const double setup_ms = median_ms([&] {
+            prepared.emplace(ExactPreparedProbabilityPlan::for_marginals(
+                low_bond_qubits, operations));
+        }, 3);
+        qubit::ExactProbabilityResult prepared_result;
+        const double query_ms = median_ms([&] {
+            prepared_result = prepared->marginal_probability(selected, selected_bits);
+        }, 11, 1000);
+
+        if (one_shot.route != ExactExecutionRoute::PersistentMPS ||
+            prepared->prepared_route() != ExactExecutionRoute::PersistentMPS ||
+            prepared_result.route != ExactExecutionRoute::PersistentMPS ||
+            prepared_result.fallback_reason.find(
+                "tensor: route does not support marginal probability") == std::string::npos ||
+            std::abs(one_shot.value - expected) > 2e-11 ||
+            std::abs(prepared_result.value - expected) > 2e-11) {
+            std::cerr << "query-capability marginal route certificate failed\n";
+            return 5;
+        }
+
+        std::cout << "capability_marginal_qubits=" << low_bond_qubits << '\n';
+        std::cout << "capability_marginal_operations=" << operations.size() << '\n';
+        std::cout << "capability_full_basis_route=TensorNetwork\n";
+        std::cout << "capability_marginal_route=PersistentMPS\n";
+        std::cout << "capability_full_basis_setup_ms=" << full_setup_ms << '\n';
+        std::cout << "capability_full_basis_plan_bytes=" << full->estimated_bytes() << '\n';
+        std::cout << "capability_marginal_one_shot_ms=" << one_shot_ms << '\n';
+        std::cout << "capability_marginal_prepared_setup_ms=" << setup_ms << '\n';
+        std::cout << "capability_marginal_prepared_query_ms=" << query_ms << '\n';
+        std::cout << "capability_marginal_prepared_over_one_shot_speed="
+                  << one_shot_ms / query_ms << '\n';
+        std::cout << "capability_marginal_break_even_queries="
+                  << break_even_queries(setup_ms, one_shot_ms, query_ms) << '\n';
+        std::cout << "capability_marginal_prepared_bytes=" << prepared->estimated_bytes() << '\n';
+        std::cout << "capability_marginal_value_error="
+                  << std::abs(prepared_result.value - expected) << '\n';
+    }
+
+    {
+        const std::array<Operation, 3> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 0U, 5U, 0.0, 0.0},
+            {OperationCode::Ry, 0U, 0U, 0.19, 0.0},
+        }};
+        const std::array<QubitId, 2> selected{{0U, 5U}};
+        const std::array<std::uint8_t, 2> selected_bits{{1U, 1U}};
+        ExactExecutionBroker broker;
+        QRegister reference(6U);
+        qubit::OperationPlan plan(operations);
+        plan.execute(reference);
+        const double expected = reference.marginal_probability(selected, selected_bits);
+
+        const auto result = broker.marginal_probability_from_zero(
+            6U, operations, selected, selected_bits);
+        ExactPreparedProbabilityPlan prepared =
+            ExactPreparedProbabilityPlan::for_marginals(6U, operations);
+        const auto prepared_result = prepared.marginal_probability(selected, selected_bits);
+        if (result.route != ExactExecutionRoute::Register ||
+            prepared.prepared_route() != ExactExecutionRoute::Register ||
+            prepared_result.route != ExactExecutionRoute::Register ||
+            std::abs(result.value - expected) > 2e-11 ||
+            std::abs(prepared_result.value - expected) > 2e-11) {
+            std::cerr << "generic QRegister marginal fallback certificate failed\n";
+            return 6;
+        }
+        std::cout << "register_marginal_route=QRegister\n";
+        std::cout << "register_marginal_value_error="
+                  << std::abs(prepared_result.value - expected) << '\n';
     }
 
     return 0;

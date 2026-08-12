@@ -264,6 +264,9 @@ public:
 
     [[nodiscard]] double probability_one(QubitId qubit) const;
     [[nodiscard]] std::vector<double> probabilities_one() const;
+    [[nodiscard]] double marginal_probability(
+        std::span<const QubitId> qubits,
+        std::span<const std::uint8_t> bits) const;
     void probabilities_one_into(std::span<double> output) const;
     [[nodiscard]] int measure(QubitId qubit, double sample);
     [[nodiscard]] std::vector<int> measure_all(std::uint64_t seed);

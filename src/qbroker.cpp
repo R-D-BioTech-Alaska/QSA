@@ -27,7 +27,7 @@ void validate_broker_config(const ExactExecutionBrokerConfig& config) {
 }
 
 void validate_basis_width(std::size_t qubit_count, std::span<const std::uint8_t> basis_bits) {
-    validated_qubit_count(qubit_count);
+    static_cast<void>(validated_qubit_count(qubit_count));
     if (basis_bits.size() != qubit_count) {
         throw QStateError("Execution broker basis width does not match qubit count");
     }
@@ -42,7 +42,7 @@ void validate_marginal_query(
     std::size_t qubit_count,
     std::span<const QubitId> qubits,
     std::span<const std::uint8_t> bits) {
-    validated_qubit_count(qubit_count);
+    static_cast<void>(validated_qubit_count(qubit_count));
     if (qubits.size() != bits.size()) {
         throw QStateError("Marginal query qubit and bit counts do not match");
     }
@@ -743,7 +743,7 @@ ExactExpectationResult ExactExecutionBroker::expectation_from_zero(
     std::size_t qubit_count,
     std::span<const Operation> operations,
     const PauliObservable& observable) const {
-    validated_qubit_count(qubit_count);
+    static_cast<void>(validated_qubit_count(qubit_count));
     validate_observable(qubit_count, observable);
 
     QRegister input(qubit_count, config_.register_state);
@@ -906,7 +906,7 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
     std::size_t qubit_count,
     std::span<const Operation> operations,
     BasisIndex basis) const {
-    validated_qubit_count(qubit_count);
+    static_cast<void>(validated_qubit_count(qubit_count));
     if (qubit_count > std::numeric_limits<BasisIndex>::digits) {
         throw QStateError("Execution broker BasisIndex query is limited to 64 qubits");
     }
@@ -927,7 +927,9 @@ ExactProbabilityResult ExactExecutionBroker::marginal_probability_from_zero(
     std::span<const Operation> operations,
     std::span<const QubitId> qubits,
     std::span<const std::uint8_t> bits) const {
-    ExactPreparedProbabilityPlan prepared(qubit_count, operations, config_);
+    validate_marginal_query(qubit_count, qubits, bits);
+    ExactPreparedProbabilityPlan prepared = ExactPreparedProbabilityPlan::for_marginals(
+        qubit_count, operations, config_);
     return prepared.marginal_probability(qubits, bits);
 }
 
@@ -1035,6 +1037,28 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
     std::size_t qubit_count,
     std::span<const Operation> operations,
     ExactExecutionBrokerConfig config)
+    : ExactPreparedProbabilityPlan(
+          qubit_count,
+          operations,
+          config,
+          QueryCapability::FullBasis) {}
+
+ExactPreparedProbabilityPlan ExactPreparedProbabilityPlan::for_marginals(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    ExactExecutionBrokerConfig config) {
+    return ExactPreparedProbabilityPlan(
+        qubit_count,
+        operations,
+        config,
+        QueryCapability::Marginal);
+}
+
+ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    ExactExecutionBrokerConfig config,
+    QueryCapability capability)
     : qubit_count_(validated_qubit_count(qubit_count)),
       config_(config) {
     validate_broker_config(config_);
@@ -1077,26 +1101,33 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
             : "structural preflight failed";
     }
 
-    try {
-        TensorNetworkCircuit tensor(qubit_count_, operations, config_.tensor);
-        tensor_plan_.emplace(tensor.compile());
-        route_ = ExactExecutionRoute::TensorNetwork;
-        return;
-    } catch (const QStateError& error) {
-        fallback_reason_ = "basis_permutation: ";
-        fallback_reason_ += basis_reason != nullptr
-            ? basis_reason
-            : "basis-permutation certificate failed";
-        fallback_reason_ += "; uniform: ";
-        fallback_reason_ += uniform_reason != nullptr
-            ? uniform_reason
-            : "uniform-magnitude certificate failed";
-        fallback_reason_ += "; stabilizer: ";
-        fallback_reason_ += stabilizer_failure.empty()
-            ? "stabilizer execution failed"
-            : stabilizer_failure;
-        fallback_reason_ += "; tensor: ";
-        fallback_reason_ += failure_message(error);
+    std::string upstream_failure = "basis_permutation: ";
+    upstream_failure += basis_reason != nullptr
+        ? basis_reason
+        : "basis-permutation certificate failed";
+    upstream_failure += "; uniform: ";
+    upstream_failure += uniform_reason != nullptr
+        ? uniform_reason
+        : "uniform-magnitude certificate failed";
+    upstream_failure += "; stabilizer: ";
+    upstream_failure += stabilizer_failure.empty()
+        ? "stabilizer execution failed"
+        : stabilizer_failure;
+
+    if (capability == QueryCapability::FullBasis) {
+        try {
+            TensorNetworkCircuit tensor(qubit_count_, operations, config_.tensor);
+            tensor_plan_.emplace(tensor.compile());
+            route_ = ExactExecutionRoute::TensorNetwork;
+            return;
+        } catch (const QStateError& error) {
+            fallback_reason_ = std::move(upstream_failure);
+            fallback_reason_ += "; tensor: ";
+            fallback_reason_ += failure_message(error);
+        }
+    } else {
+        fallback_reason_ = std::move(upstream_failure);
+        fallback_reason_ += "; tensor: route does not support marginal probability";
     }
 
     const char* mps_reason = nullptr;
@@ -1120,22 +1151,26 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
         fallback_reason_ += mps_reason != nullptr ? mps_reason : "structural preflight failed";
     }
 
-    const char* phase_reason = nullptr;
-    if (phase_graph_structure_eligible(qubit_count_, operations, &phase_reason)) {
-        try {
-            phase_graph_state_.emplace(execute_phase_graph_from_zero(
-                qubit_count_,
-                operations,
-                config_.phase_graph));
-            route_ = ExactExecutionRoute::PhaseGraph;
-            return;
-        } catch (const QStateError& error) {
+    if (capability == QueryCapability::FullBasis) {
+        const char* phase_reason = nullptr;
+        if (phase_graph_structure_eligible(qubit_count_, operations, &phase_reason)) {
+            try {
+                phase_graph_state_.emplace(execute_phase_graph_from_zero(
+                    qubit_count_,
+                    operations,
+                    config_.phase_graph));
+                route_ = ExactExecutionRoute::PhaseGraph;
+                return;
+            } catch (const QStateError& error) {
+                fallback_reason_ += "; phase_graph: ";
+                fallback_reason_ += failure_message(error);
+            }
+        } else {
             fallback_reason_ += "; phase_graph: ";
-            fallback_reason_ += failure_message(error);
+            fallback_reason_ += phase_reason != nullptr ? phase_reason : "structural preflight failed";
         }
     } else {
-        fallback_reason_ += "; phase_graph: ";
-        fallback_reason_ += phase_reason != nullptr ? phase_reason : "structural preflight failed";
+        fallback_reason_ += "; phase_graph: route does not support marginal probability";
     }
 
     register_state_.emplace(qubit_count_, config_.register_state);
@@ -1265,11 +1300,16 @@ ExactProbabilityResult ExactPreparedProbabilityPlan::marginal_probability(
                 return result;
             }
             throw QStateError("Prepared MPS probability plan is missing its state");
+        case ExactExecutionRoute::Register:
+            if (!register_state_.has_value()) {
+                throw QStateError("Prepared register probability plan is missing its state");
+            }
+            result.value = register_state_->marginal_probability(qubits, bits);
+            return result;
         case ExactExecutionRoute::TensorNetwork:
         case ExactExecutionRoute::PhaseGraph:
-        case ExactExecutionRoute::Register:
             throw QStateError(
-                "Prepared marginal probability currently requires a BasisPermutation, UniformMagnitude, Stabilizer, or PersistentMPS route");
+                "Prepared marginal probability route does not support marginal queries");
         case ExactExecutionRoute::CausalPauli:
             throw QStateError("Prepared probability plan cannot use CausalPauli");
     }
