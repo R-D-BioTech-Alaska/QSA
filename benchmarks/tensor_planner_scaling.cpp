@@ -1,17 +1,24 @@
+#include "qubit/qbroker.hpp"
 #include "qubit/qplan.hpp"
 #include "qubit/qtensor.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using qubit::ExactExecutionBrokerConfig;
+using qubit::ExactExecutionRoute;
+using qubit::ExactPreparedProbabilityPlan;
 using qubit::Operation;
 using qubit::OperationCode;
 using qubit::QubitId;
@@ -52,6 +59,44 @@ using qubit::TensorNetworkConfig;
         static_cast<QubitId>(qubits / 2U),
         0U,
         0.19,
+        0.0,
+    });
+    return operations;
+}
+
+[[nodiscard]] std::vector<Operation> deferral_operations(std::size_t qubits) {
+    std::vector<Operation> operations;
+    operations.reserve(2U * qubits + 2U);
+    for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::Ry,
+            static_cast<QubitId>(qubit),
+            0U,
+            0.001,
+            0.0,
+        });
+    }
+    for (std::size_t qubit = 0U; qubit + 1U < qubits; ++qubit) {
+        operations.push_back({
+            OperationCode::Cz,
+            static_cast<QubitId>(qubit),
+            static_cast<QubitId>(qubit + 1U),
+            0.0,
+            0.0,
+        });
+    }
+    operations.push_back({
+        OperationCode::Rz,
+        static_cast<QubitId>(qubits / 2U),
+        0U,
+        0.37,
+        0.0,
+    });
+    operations.push_back({
+        OperationCode::Rz,
+        static_cast<QubitId>(qubits / 2U),
+        0U,
+        -0.19,
         0.0,
     });
     return operations;
@@ -103,6 +148,20 @@ struct Result {
            result.peak_entries == 16U;
 }
 
+template <typename Function>
+[[nodiscard]] double median_ms(Function&& function, std::size_t repetitions) {
+    std::vector<double> samples;
+    samples.reserve(repetitions);
+    for (std::size_t repetition = 0U; repetition < repetitions; ++repetition) {
+        const auto start = Clock::now();
+        function();
+        const auto stop = Clock::now();
+        samples.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
+    }
+    std::sort(samples.begin(), samples.end());
+    return samples[samples.size() / 2U];
+}
+
 void print(std::size_t qubits, const Result& result) {
     std::cout << "tensor_planner_qubits=" << qubits << '\n';
     std::cout << "tensor_planner_operations=" << result.operations << '\n';
@@ -134,5 +193,81 @@ int main() {
               << medium.compile_ms / small.compile_ms << '\n';
     std::cout << "tensor_planner_compile_growth_30k_over_5k="
               << large.compile_ms / medium.compile_ms << '\n';
+
+    constexpr std::size_t deferral_qubits = 30'000U;
+    const std::vector<Operation> operations = deferral_operations(deferral_qubits);
+    std::vector<std::uint8_t> zero(deferral_qubits, 0U);
+
+    ExactExecutionBrokerConfig tensor_config;
+    tensor_config.tensor.max_contraction_entries = 16U;
+    tensor_config.tensor.max_factors = 1'000'000U;
+    tensor_config.tensor_planning_defer_variables = 0U;
+    ExactExecutionBrokerConfig deferred_config = tensor_config;
+    deferred_config.tensor_planning_defer_variables = 65'536U;
+
+    const double tensor_setup_ms = median_ms([&] {
+        ExactPreparedProbabilityPlan candidate(deferral_qubits, operations, tensor_config);
+        if (candidate.prepared_route() != ExactExecutionRoute::TensorNetwork) {
+            throw std::runtime_error("disabled deferral did not retain TensorNetwork");
+        }
+    }, 5U);
+    const double deferred_setup_ms = median_ms([&] {
+        ExactPreparedProbabilityPlan candidate(deferral_qubits, operations, deferred_config);
+        if (candidate.prepared_route() != ExactExecutionRoute::PersistentMPS) {
+            throw std::runtime_error("large certified workload did not defer to PersistentMPS");
+        }
+    }, 5U);
+
+    ExactPreparedProbabilityPlan tensor_plan(deferral_qubits, operations, tensor_config);
+    ExactPreparedProbabilityPlan deferred_plan(deferral_qubits, operations, deferred_config);
+    qubit::ExactProbabilityResult tensor_result;
+    qubit::ExactProbabilityResult deferred_result;
+    const double tensor_query_ms = median_ms([&] {
+        tensor_result = tensor_plan.probability(zero);
+    }, 7U);
+    const double deferred_query_ms = median_ms([&] {
+        deferred_result = deferred_plan.probability(zero);
+    }, 7U);
+
+    long double analytic = 1.0L;
+    const long double one_qubit = std::cos(0.0005L) * std::cos(0.0005L);
+    for (std::size_t qubit = 0U; qubit < deferral_qubits; ++qubit) {
+        analytic *= one_qubit;
+    }
+    const double expected = static_cast<double>(analytic);
+    const double tensor_error = std::abs(tensor_result.value - expected);
+    const double deferred_error = std::abs(deferred_result.value - expected);
+    const double route_error = std::abs(tensor_result.value - deferred_result.value);
+    if (tensor_result.route != ExactExecutionRoute::TensorNetwork ||
+        deferred_result.route != ExactExecutionRoute::PersistentMPS ||
+        deferred_result.fallback_reason.find("tensor: planning deferred to certified MPS") ==
+            std::string::npos ||
+        tensor_error > 2e-9 || deferred_error > 2e-9 || route_error > 2e-9) {
+        std::cerr << "tensor planning deferral evidence failed exact controls\n";
+        return 1;
+    }
+
+    std::cout << "tensor_deferral_qubits=" << deferral_qubits << '\n';
+    std::cout << "tensor_deferral_operations=" << operations.size() << '\n';
+    std::cout << "tensor_deferral_planner_variables=120000\n";
+    std::cout << "tensor_deferral_threshold="
+              << deferred_config.tensor_planning_defer_variables << '\n';
+    std::cout << "tensor_deferral_baseline_route="
+              << qubit::exact_execution_route_name(tensor_plan.prepared_route()) << '\n';
+    std::cout << "tensor_deferral_selected_route="
+              << qubit::exact_execution_route_name(deferred_plan.prepared_route()) << '\n';
+    std::cout << "tensor_deferral_reason_visible=1\n";
+    std::cout << "tensor_deferral_tensor_setup_ms=" << tensor_setup_ms << '\n';
+    std::cout << "tensor_deferral_mps_setup_ms=" << deferred_setup_ms << '\n';
+    std::cout << "tensor_deferral_setup_speedup=" << tensor_setup_ms / deferred_setup_ms << '\n';
+    std::cout << "tensor_deferral_tensor_query_ms=" << tensor_query_ms << '\n';
+    std::cout << "tensor_deferral_mps_query_ms=" << deferred_query_ms << '\n';
+    std::cout << "tensor_deferral_query_speedup=" << tensor_query_ms / deferred_query_ms << '\n';
+    std::cout << "tensor_deferral_tensor_plan_bytes=" << tensor_plan.estimated_bytes() << '\n';
+    std::cout << "tensor_deferral_mps_plan_bytes=" << deferred_plan.estimated_bytes() << '\n';
+    std::cout << "tensor_deferral_expected_probability=" << expected << '\n';
+    std::cout << "tensor_deferral_tensor_error=" << tensor_error << '\n';
+    std::cout << "tensor_deferral_mps_error=" << deferred_error << '\n';
+    std::cout << "tensor_deferral_route_error=" << route_error << '\n';
     return 0;
 }

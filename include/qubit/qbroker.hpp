@@ -30,6 +30,7 @@ enum class ExactExecutionRoute : std::uint8_t {
 
 struct ExactExecutionBrokerConfig {
     TensorNetworkConfig tensor{};
+    std::size_t tensor_planning_defer_variables{65'536U};
     MPSConfig mps{};
     PhaseGraphConfig phase_graph{};
     QStateConfig register_state{};

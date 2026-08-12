@@ -132,6 +132,25 @@ void validate_observable(std::size_t qubit_count, const PauliObservable& observa
     return true;
 }
 
+[[nodiscard]] std::size_t tensor_planner_variable_count(
+    std::size_t qubit_count,
+    std::span<const Operation> operations) noexcept {
+    std::size_t variables = qubit_count;
+    for (const Operation& operation : operations) {
+        const std::size_t created =
+            operation.code == OperationCode::Cnot ||
+                    operation.code == OperationCode::Cz ||
+                    operation.code == OperationCode::Swap
+                ? 2U
+                : 1U;
+        if (variables > std::numeric_limits<std::size_t>::max() - created) {
+            return std::numeric_limits<std::size_t>::max();
+        }
+        variables += created;
+    }
+    return variables;
+}
+
 void execute_mps(MatrixProductState& state, std::span<const Operation> operations) {
     for (const Operation& operation : operations) {
         switch (operation.code) {
@@ -836,43 +855,75 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
             : "structural preflight failed";
     }
 
+    std::string upstream_failure = "basis_permutation: ";
+    upstream_failure += basis_reason != nullptr
+        ? basis_reason
+        : "basis-permutation certificate failed";
+    upstream_failure += "; uniform: ";
+    upstream_failure += uniform_reason != nullptr
+        ? uniform_reason
+        : "uniform-magnitude certificate failed";
+    upstream_failure += "; stabilizer: ";
+    upstream_failure += stabilizer_failure.empty()
+        ? "stabilizer execution failed"
+        : stabilizer_failure;
+
+    const char* mps_reason = nullptr;
+    const bool mps_eligible = mps_structure_eligible(qubit_count, operations, &mps_reason);
+    const bool defer_tensor =
+        mps_eligible &&
+        config_.tensor_planning_defer_variables != 0U &&
+        tensor_planner_variable_count(qubit_count, operations) >
+            config_.tensor_planning_defer_variables;
+    bool mps_attempted = false;
+    std::string mps_failure;
+    const auto attempt_mps = [&]() {
+        mps_attempted = true;
+        if (!mps_eligible) {
+            mps_failure = mps_reason != nullptr ? mps_reason : "structural preflight failed";
+            return false;
+        }
+        try {
+            MatrixProductState state = MatrixProductState::zero(qubit_count, config_.mps);
+            execute_mps(state, operations);
+            result.value = state.amplitude(basis_bits).norm2();
+            result.route = ExactExecutionRoute::PersistentMPS;
+            return true;
+        } catch (const QStateError& error) {
+            mps_failure = failure_message(error);
+            return false;
+        }
+    };
+
+    if (defer_tensor) {
+        result.fallback_reason = upstream_failure;
+        result.fallback_reason += "; tensor: planning deferred to certified MPS";
+        if (attempt_mps()) {
+            return result;
+        }
+        result.fallback_reason += "; mps: ";
+        result.fallback_reason += mps_failure;
+    }
+
     try {
         TensorNetworkCircuit tensor(qubit_count, operations, config_.tensor);
         result.value = tensor.amplitude(basis_bits, &result.tensor_stats).norm2();
         result.route = ExactExecutionRoute::TensorNetwork;
         return result;
     } catch (const QStateError& error) {
-        result.fallback_reason = "basis_permutation: ";
-        result.fallback_reason += basis_reason != nullptr
-            ? basis_reason
-            : "basis-permutation certificate failed";
-        result.fallback_reason += "; uniform: ";
-        result.fallback_reason += uniform_reason != nullptr
-            ? uniform_reason
-            : "uniform-magnitude certificate failed";
-        result.fallback_reason += "; stabilizer: ";
-        result.fallback_reason += stabilizer_failure.empty()
-            ? "stabilizer execution failed"
-            : stabilizer_failure;
+        if (result.fallback_reason.empty()) {
+            result.fallback_reason = upstream_failure;
+        }
         result.fallback_reason += "; tensor: ";
         result.fallback_reason += failure_message(error);
     }
 
-    const char* mps_reason = nullptr;
-    if (mps_structure_eligible(qubit_count, operations, &mps_reason)) {
-        try {
-            MatrixProductState state = MatrixProductState::zero(qubit_count, config_.mps);
-            execute_mps(state, operations);
-            result.value = state.amplitude(basis_bits).norm2();
-            result.route = ExactExecutionRoute::PersistentMPS;
+    if (!mps_attempted) {
+        if (attempt_mps()) {
             return result;
-        } catch (const QStateError& error) {
-            result.fallback_reason += "; mps: ";
-            result.fallback_reason += failure_message(error);
         }
-    } else {
         result.fallback_reason += "; mps: ";
-        result.fallback_reason += mps_reason != nullptr ? mps_reason : "structural preflight failed";
+        result.fallback_reason += mps_failure;
     }
 
     const char* phase_reason = nullptr;
@@ -1114,24 +1165,22 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
         ? "stabilizer execution failed"
         : stabilizer_failure;
 
-    if (capability == QueryCapability::FullBasis) {
-        try {
-            TensorNetworkCircuit tensor(qubit_count_, operations, config_.tensor);
-            tensor_plan_.emplace(tensor.compile());
-            route_ = ExactExecutionRoute::TensorNetwork;
-            return;
-        } catch (const QStateError& error) {
-            fallback_reason_ = std::move(upstream_failure);
-            fallback_reason_ += "; tensor: ";
-            fallback_reason_ += failure_message(error);
-        }
-    } else {
-        fallback_reason_ = std::move(upstream_failure);
-        fallback_reason_ += "; tensor: route does not support marginal probability";
-    }
-
     const char* mps_reason = nullptr;
-    if (mps_structure_eligible(qubit_count_, operations, &mps_reason)) {
+    const bool mps_eligible = mps_structure_eligible(qubit_count_, operations, &mps_reason);
+    const bool defer_tensor =
+        capability == QueryCapability::FullBasis &&
+        mps_eligible &&
+        config_.tensor_planning_defer_variables != 0U &&
+        tensor_planner_variable_count(qubit_count_, operations) >
+            config_.tensor_planning_defer_variables;
+    bool mps_attempted = false;
+    std::string mps_failure;
+    const auto prepare_mps = [&]() {
+        mps_attempted = true;
+        if (!mps_eligible) {
+            mps_failure = mps_reason != nullptr ? mps_reason : "structural preflight failed";
+            return false;
+        }
         try {
             MatrixProductState state = MatrixProductState::zero(qubit_count_, config_.mps);
             execute_mps(state, operations);
@@ -1141,14 +1190,47 @@ ExactPreparedProbabilityPlan::ExactPreparedProbabilityPlan(
                 mps_state_.emplace(std::move(state));
             }
             route_ = ExactExecutionRoute::PersistentMPS;
+            return true;
+        } catch (const QStateError& error) {
+            mps_failure = failure_message(error);
+            return false;
+        }
+    };
+
+    if (defer_tensor) {
+        fallback_reason_ = upstream_failure;
+        fallback_reason_ += "; tensor: planning deferred to certified MPS";
+        if (prepare_mps()) {
+            return;
+        }
+        fallback_reason_ += "; mps: ";
+        fallback_reason_ += mps_failure;
+    }
+
+    if (capability == QueryCapability::FullBasis) {
+        try {
+            TensorNetworkCircuit tensor(qubit_count_, operations, config_.tensor);
+            tensor_plan_.emplace(tensor.compile());
+            route_ = ExactExecutionRoute::TensorNetwork;
             return;
         } catch (const QStateError& error) {
-            fallback_reason_ += "; mps: ";
+            if (fallback_reason_.empty()) {
+                fallback_reason_ = upstream_failure;
+            }
+            fallback_reason_ += "; tensor: ";
             fallback_reason_ += failure_message(error);
         }
     } else {
+        fallback_reason_ = upstream_failure;
+        fallback_reason_ += "; tensor: route does not support marginal probability";
+    }
+
+    if (!mps_attempted) {
+        if (prepare_mps()) {
+            return;
+        }
         fallback_reason_ += "; mps: ";
-        fallback_reason_ += mps_reason != nullptr ? mps_reason : "structural preflight failed";
+        fallback_reason_ += mps_failure;
     }
 
     if (capability == QueryCapability::FullBasis) {
