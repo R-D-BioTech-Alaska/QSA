@@ -370,13 +370,45 @@ int main() {
         ExactPreparedProbabilityPlan prepared =
             ExactPreparedProbabilityPlan::for_marginals(6U, operations);
         const auto prepared_result = prepared.marginal_probability(selected, selected_bits);
+        if (result.route != ExactExecutionRoute::TreeTensor ||
+            prepared.prepared_route() != ExactExecutionRoute::TreeTensor ||
+            prepared_result.route != ExactExecutionRoute::TreeTensor ||
+            prepared_result.fallback_reason.find("mps:") == std::string::npos ||
+            std::abs(result.value - expected) > 2e-11 ||
+            std::abs(prepared_result.value - expected) > 2e-11) {
+            std::cerr << "TreeTensor marginal route certificate failed\n";
+            return 6;
+        }
+        std::cout << "tree_tensor_marginal_route=TreeTensor\n";
+        std::cout << "tree_tensor_marginal_value_error="
+                  << std::abs(prepared_result.value - expected) << '\n';
+    }
+
+    {
+        const std::array<Operation, 2> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::AmplitudeDampingTrajectory, 0U, 0U, 0.25, 0.1},
+        }};
+        const std::array<QubitId, 1> selected{{0U}};
+        const std::array<std::uint8_t, 1> selected_bits{{0U}};
+        ExactExecutionBroker broker;
+        QRegister reference(2U);
+        qubit::OperationPlan plan(operations);
+        plan.execute(reference);
+        const double expected = reference.marginal_probability(selected, selected_bits);
+
+        const auto result = broker.marginal_probability_from_zero(
+            2U, operations, selected, selected_bits);
+        ExactPreparedProbabilityPlan prepared =
+            ExactPreparedProbabilityPlan::for_marginals(2U, operations);
+        const auto prepared_result = prepared.marginal_probability(selected, selected_bits);
         if (result.route != ExactExecutionRoute::Register ||
             prepared.prepared_route() != ExactExecutionRoute::Register ||
             prepared_result.route != ExactExecutionRoute::Register ||
             std::abs(result.value - expected) > 2e-11 ||
             std::abs(prepared_result.value - expected) > 2e-11) {
             std::cerr << "generic QRegister marginal fallback certificate failed\n";
-            return 6;
+            return 7;
         }
         std::cout << "register_marginal_route=QRegister\n";
         std::cout << "register_marginal_value_error="
