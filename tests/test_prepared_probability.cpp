@@ -138,6 +138,58 @@ int main() {
     }
 
     {
+        const std::array<Operation, 3> operations{{
+            {OperationCode::H, 0U, 0U, 0.0, 0.0},
+            {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+            {OperationCode::Cnot, 1U, 2U, 0.0, 0.0},
+        }};
+        const std::array<std::uint8_t, 3> zero{{0U, 0U, 0U}};
+        const std::array<std::uint8_t, 3> one{{1U, 1U, 1U}};
+        const std::array<std::uint8_t, 3> miss{{0U, 1U, 0U}};
+
+        ExactExecutionBroker broker;
+        ExactPreparedProbabilityPlan prepared(3U, operations);
+        require(prepared.prepared_route() == ExactExecutionRoute::Stabilizer,
+                "prepared GHZ circuit did not select Stabilizer");
+        require_matches_one_shot(broker, prepared, operations, zero,
+                                 "prepared Stabilizer zero branch");
+        require_matches_one_shot(broker, prepared, operations, one,
+                                 "prepared Stabilizer one branch");
+        require_matches_one_shot(broker, prepared, operations, miss,
+                                 "prepared Stabilizer impossible branch");
+        require_close(prepared.probability(zero).value, 0.5,
+                      "prepared Stabilizer P(000) is wrong");
+        require_close(prepared.probability(one).value, 0.5,
+                      "prepared Stabilizer P(111) is wrong");
+        require(prepared.probability(miss).value == 0.0,
+                "prepared Stabilizer impossible basis state was nonzero");
+
+        const std::array<QubitId, 1> q0{{0U}};
+        const std::array<std::uint8_t, 1> q0_zero{{0U}};
+        const std::array<std::uint8_t, 1> q0_one{{1U}};
+        require_close(prepared.marginal_probability(q0, q0_zero).value, 0.5,
+                      "prepared Stabilizer marginal P(q0=0) is wrong");
+        require_close(prepared.marginal_probability(q0, q0_one).value, 0.5,
+                      "prepared Stabilizer marginal P(q0=1) is wrong");
+
+        const std::array<QubitId, 2> pair{{0U, 2U}};
+        const std::array<std::uint8_t, 2> pair_hit{{1U, 1U}};
+        const std::array<std::uint8_t, 2> pair_miss{{1U, 0U}};
+        const auto one_shot_pair = broker.marginal_probability_from_zero(
+            3U, operations, pair, pair_hit);
+        require(one_shot_pair.route == ExactExecutionRoute::Stabilizer,
+                "one-shot GHZ marginal did not select Stabilizer");
+        require_close(one_shot_pair.value, 0.5,
+                      "one-shot Stabilizer pair marginal is wrong");
+        require_close(prepared.marginal_probability(pair, pair_hit).value, 0.5,
+                      "prepared Stabilizer pair marginal is wrong");
+        require(prepared.marginal_probability(pair, pair_miss).value == 0.0,
+                "prepared Stabilizer inconsistent marginal was nonzero");
+        require(prepared.estimated_bytes() > 0U,
+                "prepared Stabilizer did not report retained memory");
+    }
+
+    {
         const std::array<Operation, 5> operations{{
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
@@ -170,10 +222,11 @@ int main() {
 
     {
         ExactExecutionBrokerConfig config;
-        config.tensor.max_contraction_entries = 8U;
-        const std::array<Operation, 2> operations{{
+        config.tensor.max_contraction_entries = 2U;
+        const std::array<Operation, 3> operations{{
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+            {OperationCode::Ry, 1U, 0U, 0.19, 0.0},
         }};
         const std::array<std::uint8_t, 2> bits{{0U, 0U}};
 
@@ -183,24 +236,26 @@ int main() {
                 "prepared tensor-collapse circuit did not select PersistentMPS");
         require_matches_one_shot(broker, prepared, operations, bits,
                                  "prepared PersistentMPS");
-        require(prepared.probability(bits).fallback_reason.find("tensor:") != std::string::npos,
-                "prepared PersistentMPS did not retain tensor rejection reason");
+        require(prepared.probability(bits).fallback_reason.find("stabilizer:") != std::string::npos &&
+                    prepared.probability(bits).fallback_reason.find("tensor:") != std::string::npos,
+                "prepared PersistentMPS did not retain upstream rejection reasons");
     }
 
     {
         ExactExecutionBrokerConfig config;
         config.tensor.max_contraction_entries = 2U;
         config.mps.max_bond_dimension = 1U;
-        const std::array<Operation, 2> operations{{
+        const std::array<Operation, 3> operations{{
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
+            {OperationCode::Ry, 0U, 0U, 0.19, 0.0},
         }};
         const std::array<std::uint8_t, 2> bits{{0U, 0U}};
 
         ExactExecutionBroker broker(config);
         ExactPreparedProbabilityPlan prepared(2U, operations, config);
         require(prepared.prepared_route() == ExactExecutionRoute::Register,
-                "prepared exhausted circuit did not select QRegister");
+                "prepared exhausted non-Clifford circuit did not select QRegister");
         require_matches_one_shot(broker, prepared, operations, bits,
                                  "prepared QRegister");
         const auto result = prepared.probability(BasisIndex{0});
@@ -209,7 +264,8 @@ int main() {
         require_close(result.value, broker.basis_probability_from_zero(
                                       2U, operations, BasisIndex{0}).value,
                       "prepared BasisIndex query differs from one-shot broker");
-        require(result.fallback_reason.find("phase_graph:") != std::string::npos,
+        require(result.fallback_reason.find("stabilizer:") != std::string::npos &&
+                    result.fallback_reason.find("phase_graph:") != std::string::npos,
                 "prepared QRegister did not retain specialized rejection reasons");
     }
 
