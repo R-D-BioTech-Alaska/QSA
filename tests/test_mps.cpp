@@ -14,6 +14,7 @@
 namespace {
 
 using qubit::MPSConfig;
+using qubit::MPSPauliPlan;
 using qubit::MPSSiteTensor;
 using qubit::MatrixProductState;
 using qubit::PauliAxis;
@@ -92,8 +93,12 @@ int main() {
             });
         const QComplex mps_value = mps.expectation(stabilizer);
         const QComplex reference_value = stabilizer.expectation(reference);
+        const MPSPauliPlan plan(MatrixProductState::cluster(qubits));
+        const QComplex plan_value = plan.expectation(stabilizer);
         require(qubit::almost_equal(mps_value, reference_value, 2e-11),
                 "cluster MPS Pauli expectation disagrees with QRegister");
+        require(qubit::almost_equal(plan_value, mps_value, 2e-11),
+                "compiled cluster MPS Pauli expectation disagrees with direct MPS");
         require(std::abs(mps_value.re - 1.0) <= 2e-11 && std::abs(mps_value.im) <= 2e-11,
                 "cluster stabilizer expectation is not one");
     }
@@ -107,9 +112,14 @@ int main() {
         for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
             factors.push_back({static_cast<QubitId>(qubit), PauliAxis::X});
         }
-        const QComplex value = mps.expectation(single_term(qubits, std::move(factors)));
+        const PauliObservable observable = single_term(qubits, std::move(factors));
+        const QComplex value = mps.expectation(observable);
+        const MPSPauliPlan plan(MatrixProductState::ghz(qubits, phase));
+        const QComplex plan_value = plan.expectation(observable);
         require(std::abs(value.re - std::cos(phase)) <= 2e-11 && std::abs(value.im) <= 2e-11,
                 "phased GHZ global-X expectation is incorrect");
+        require(qubit::almost_equal(plan_value, value, 2e-11),
+                "compiled global-span GHZ expectation disagrees with direct MPS");
     }
 
     {
@@ -124,7 +134,11 @@ int main() {
                         std::abs(dense[basis].im) <= 2e-12,
                     "W MPS amplitude is incorrect");
         }
-        const QComplex z = mps.expectation(single_term(qubits, {{0U, PauliAxis::Z}}));
+        const PauliObservable z0 = single_term(qubits, {{0U, PauliAxis::Z}});
+        const QComplex z = mps.expectation(z0);
+        const MPSPauliPlan plan(MatrixProductState::w(qubits));
+        require(qubit::almost_equal(plan.expectation(z0), z, 2e-12),
+                "compiled W local-Z expectation disagrees with direct MPS");
         require(std::abs(z.re - static_cast<double>(qubits - 2U) / static_cast<double>(qubits)) <=
                     2e-12,
                 "W MPS local-Z expectation is incorrect");
@@ -138,14 +152,21 @@ int main() {
         require(mps.scalar_count() == 239'992U, "large cluster MPS scalar count changed");
         require(std::abs(mps.norm2() - 1.0) <= 2e-9, "large cluster MPS norm drifted");
         const std::size_t center = qubits / 2U;
-        const QComplex stabilizer = mps.expectation(single_term(
+        const PauliObservable stabilizer = single_term(
             qubits,
             {
                 {static_cast<QubitId>(center - 1U), PauliAxis::Z},
                 {static_cast<QubitId>(center), PauliAxis::X},
                 {static_cast<QubitId>(center + 1U), PauliAxis::Z},
-            }));
-        require(std::abs(stabilizer.re - 1.0) <= 2e-9 && std::abs(stabilizer.im) <= 2e-9,
+            });
+        const QComplex direct = mps.expectation(stabilizer);
+        const MPSPauliPlan plan(MatrixProductState::cluster(qubits));
+        const QComplex compiled = plan.expectation(stabilizer);
+        require(plan.environment_scalar_count() == 239'996U,
+                "large cluster MPS environment cache size changed");
+        require(qubit::almost_equal(compiled, direct, 2e-9),
+                "large compiled local MPS expectation disagrees with direct MPS");
+        require(std::abs(direct.re - 1.0) <= 2e-9 && std::abs(direct.im) <= 2e-9,
                 "large cluster MPS stabilizer expectation is incorrect");
         require(mps.validate(), "large cluster MPS failed validation");
     }
@@ -199,6 +220,16 @@ int main() {
             rejected = true;
         }
         require(rejected, "MPS materialization width limit did not fail closed");
+    }
+
+    {
+        bool rejected = false;
+        try {
+            static_cast<void>(MPSPauliPlan(MatrixProductState::cluster(8U), 59U));
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "MPS Pauli environment limit did not fail closed");
     }
 
     {

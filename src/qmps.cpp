@@ -42,6 +42,102 @@ namespace {
     throw QStateError("invalid Pauli axis");
 }
 
+void transfer_left(
+    const MPSSiteTensor& site,
+    const QMatrix2& operation,
+    const std::vector<QComplex>& environment,
+    std::vector<QComplex>& next) {
+    next.assign(site.right_dimension * site.right_dimension, QComplex{});
+    for (std::size_t left_bra = 0U; left_bra < site.left_dimension; ++left_bra) {
+        for (std::size_t left_ket = 0U; left_ket < site.left_dimension; ++left_ket) {
+            const QComplex prefix =
+                environment[left_bra * site.left_dimension + left_ket];
+            if (zero(prefix)) {
+                continue;
+            }
+            for (std::uint8_t bra = 0U; bra < 2U; ++bra) {
+                const std::vector<QComplex>& bra_tensor = physical(site, bra);
+                for (std::uint8_t ket = 0U; ket < 2U; ++ket) {
+                    const QComplex local = operation(bra, ket);
+                    if (zero(local)) {
+                        continue;
+                    }
+                    const std::vector<QComplex>& ket_tensor = physical(site, ket);
+                    for (std::size_t right_bra = 0U;
+                         right_bra < site.right_dimension;
+                         ++right_bra) {
+                        const QComplex bra_value =
+                            bra_tensor[left_bra * site.right_dimension + right_bra];
+                        if (zero(bra_value)) {
+                            continue;
+                        }
+                        const QComplex weight = prefix * bra_value.conjugate() * local;
+                        for (std::size_t right_ket = 0U;
+                             right_ket < site.right_dimension;
+                             ++right_ket) {
+                            const QComplex ket_value =
+                                ket_tensor[left_ket * site.right_dimension + right_ket];
+                            if (!zero(ket_value)) {
+                                next[right_bra * site.right_dimension + right_ket] +=
+                                    weight * ket_value;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void transfer_right_identity(
+    const MPSSiteTensor& site,
+    const std::vector<QComplex>& environment,
+    std::vector<QComplex>& previous) {
+    previous.assign(site.left_dimension * site.left_dimension, QComplex{});
+    for (std::size_t left_bra = 0U; left_bra < site.left_dimension; ++left_bra) {
+        for (std::size_t left_ket = 0U; left_ket < site.left_dimension; ++left_ket) {
+            QComplex value{};
+            for (std::uint8_t bit = 0U; bit < 2U; ++bit) {
+                const std::vector<QComplex>& tensor = physical(site, bit);
+                for (std::size_t right_bra = 0U;
+                     right_bra < site.right_dimension;
+                     ++right_bra) {
+                    const QComplex bra_value =
+                        tensor[left_bra * site.right_dimension + right_bra];
+                    if (zero(bra_value)) {
+                        continue;
+                    }
+                    for (std::size_t right_ket = 0U;
+                         right_ket < site.right_dimension;
+                         ++right_ket) {
+                        const QComplex ket_value =
+                            tensor[left_ket * site.right_dimension + right_ket];
+                        const QComplex suffix =
+                            environment[right_bra * site.right_dimension + right_ket];
+                        if (!zero(ket_value) && !zero(suffix)) {
+                            value += bra_value.conjugate() * ket_value * suffix;
+                        }
+                    }
+                }
+            }
+            previous[left_bra * site.left_dimension + left_ket] = value;
+        }
+    }
+}
+
+[[nodiscard]] QComplex contract_cut(
+    const std::vector<QComplex>& left,
+    const std::vector<QComplex>& right) {
+    if (left.size() != right.size()) {
+        throw QStateError("MPS environment dimensions do not match");
+    }
+    QComplex value{};
+    for (std::size_t index = 0U; index < left.size(); ++index) {
+        value += left[index] * right[index];
+    }
+    return value;
+}
+
 }  // namespace
 
 MatrixProductState::MatrixProductState(
@@ -214,49 +310,11 @@ QComplex MatrixProductState::product_expectation(std::span<const PauliAxis> axes
     std::vector<QComplex> environment(1U, {1.0, 0.0});
     std::vector<QComplex> next;
     for (std::size_t qubit = 0U; qubit < sites_.size(); ++qubit) {
-        const MPSSiteTensor& site = sites_[qubit];
-        const QMatrix2 operation = pauli_matrix(axes.empty() ? PauliAxis::I : axes[qubit]);
-        next.assign(site.right_dimension * site.right_dimension, QComplex{});
-
-        for (std::size_t left_bra = 0U; left_bra < site.left_dimension; ++left_bra) {
-            for (std::size_t left_ket = 0U; left_ket < site.left_dimension; ++left_ket) {
-                const QComplex prefix =
-                    environment[left_bra * site.left_dimension + left_ket];
-                if (zero(prefix)) {
-                    continue;
-                }
-                for (std::uint8_t bra = 0U; bra < 2U; ++bra) {
-                    const std::vector<QComplex>& bra_tensor = physical(site, bra);
-                    for (std::uint8_t ket = 0U; ket < 2U; ++ket) {
-                        const QComplex local = operation(bra, ket);
-                        if (zero(local)) {
-                            continue;
-                        }
-                        const std::vector<QComplex>& ket_tensor = physical(site, ket);
-                        for (std::size_t right_bra = 0U;
-                             right_bra < site.right_dimension;
-                             ++right_bra) {
-                            const QComplex bra_value =
-                                bra_tensor[left_bra * site.right_dimension + right_bra];
-                            if (zero(bra_value)) {
-                                continue;
-                            }
-                            const QComplex weight = prefix * bra_value.conjugate() * local;
-                            for (std::size_t right_ket = 0U;
-                                 right_ket < site.right_dimension;
-                                 ++right_ket) {
-                                const QComplex ket_value =
-                                    ket_tensor[left_ket * site.right_dimension + right_ket];
-                                if (!zero(ket_value)) {
-                                    next[right_bra * site.right_dimension + right_ket] +=
-                                        weight * ket_value;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        transfer_left(
+            sites_[qubit],
+            pauli_matrix(axes.empty() ? PauliAxis::I : axes[qubit]),
+            environment,
+            next);
         environment.swap(next);
     }
     return environment.front();
@@ -393,6 +451,120 @@ bool MatrixProductState::validate(std::string* reason) const {
         return false;
     }
     return true;
+}
+
+MPSPauliPlan::MPSPauliPlan(
+    MatrixProductState state,
+    std::size_t max_environment_scalars)
+    : state_(std::move(state)),
+      max_environment_scalars_(max_environment_scalars) {
+    if (max_environment_scalars_ == 0U) {
+        throw QStateError("MPS Pauli plan environment limit must be positive");
+    }
+
+    const std::vector<MPSSiteTensor>& sites = state_.sites();
+    std::size_t required = 0U;
+    for (std::size_t cut = 0U; cut <= sites.size(); ++cut) {
+        const std::size_t dimension =
+            cut == 0U ? sites.front().left_dimension : sites[cut - 1U].right_dimension;
+        if (dimension > std::numeric_limits<std::size_t>::max() / dimension) {
+            throw QStateError("MPS Pauli environment dimension overflows size_t");
+        }
+        const std::size_t area = dimension * dimension;
+        if (required > max_environment_scalars_ ||
+            area > (max_environment_scalars_ - required) / 2U) {
+            throw QStateError("MPS Pauli environment cache exceeds configured limit");
+        }
+        required += area * 2U;
+    }
+    environment_scalar_count_ = required;
+
+    left_identity_.resize(sites.size() + 1U);
+    right_identity_.resize(sites.size() + 1U);
+    left_identity_.front() = {{1.0, 0.0}};
+    std::vector<QComplex> next;
+    for (std::size_t qubit = 0U; qubit < sites.size(); ++qubit) {
+        transfer_left(
+            sites[qubit],
+            gates::identity(),
+            left_identity_[qubit],
+            next);
+        left_identity_[qubit + 1U] = next;
+    }
+
+    right_identity_.back() = {{1.0, 0.0}};
+    std::vector<QComplex> previous;
+    for (std::size_t qubit = sites.size(); qubit-- > 0U;) {
+        transfer_right_identity(sites[qubit], right_identity_[qubit + 1U], previous);
+        right_identity_[qubit] = previous;
+    }
+
+    const QComplex cached_norm = left_identity_.back().front();
+    if (!finite(cached_norm) ||
+        std::abs(cached_norm.im) > state_.config().normalization_tolerance ||
+        std::abs(cached_norm.re - 1.0) > state_.config().normalization_tolerance) {
+        throw QStateError("MPS Pauli plan cached normalization is invalid");
+    }
+}
+
+std::size_t MPSPauliPlan::estimated_bytes() const noexcept {
+    std::size_t bytes = sizeof(*this) + state_.estimated_bytes();
+    bytes += left_identity_.capacity() * sizeof(std::vector<QComplex>);
+    bytes += right_identity_.capacity() * sizeof(std::vector<QComplex>);
+    for (const std::vector<QComplex>& environment : left_identity_) {
+        bytes += environment.capacity() * sizeof(QComplex);
+    }
+    for (const std::vector<QComplex>& environment : right_identity_) {
+        bytes += environment.capacity() * sizeof(QComplex);
+    }
+    return bytes;
+}
+
+QComplex MPSPauliPlan::term_expectation(std::span<const PauliFactor> factors) const {
+    if (factors.empty()) {
+        return left_identity_.back().front();
+    }
+
+    std::size_t first = state_.qubit_count();
+    std::size_t last = 0U;
+    for (const PauliFactor& factor : factors) {
+        const std::size_t qubit = static_cast<std::size_t>(factor.qubit);
+        if (qubit >= state_.qubit_count()) {
+            throw QStateError("MPS Pauli factor qubit is out of range");
+        }
+        first = std::min(first, qubit);
+        last = std::max(last, qubit);
+    }
+
+    std::vector<PauliAxis> axes(last - first + 1U, PauliAxis::I);
+    for (const PauliFactor& factor : factors) {
+        axes[static_cast<std::size_t>(factor.qubit) - first] = factor.axis;
+    }
+
+    std::vector<QComplex> environment = left_identity_[first];
+    std::vector<QComplex> next;
+    const std::vector<MPSSiteTensor>& sites = state_.sites();
+    for (std::size_t qubit = first; qubit <= last; ++qubit) {
+        transfer_left(sites[qubit], pauli_matrix(axes[qubit - first]), environment, next);
+        environment.swap(next);
+    }
+    return contract_cut(environment, right_identity_[last + 1U]);
+}
+
+QComplex MPSPauliPlan::expectation(const PauliObservable& observable) const {
+    if (observable.qubit_count() != state_.qubit_count()) {
+        throw QStateError("MPS Pauli plan observable width does not match state width");
+    }
+    std::string reason;
+    if (!observable.validate(&reason)) {
+        throw QStateError("invalid MPS Pauli plan observable: " + reason);
+    }
+
+    QComplex result{};
+    for (const PauliTerm& term : observable.terms()) {
+        result += term.coefficient * term_expectation(term.factors);
+    }
+    return result;
 }
 
 std::size_t required_schmidt_rank_cross_cut_bell_pairs(std::size_t pair_count) {

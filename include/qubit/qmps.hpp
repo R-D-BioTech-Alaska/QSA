@@ -63,6 +63,28 @@ private:
     [[nodiscard]] QComplex product_expectation(std::span<const PauliAxis> axes) const;
 };
 
+class MPSPauliPlan {
+public:
+    explicit MPSPauliPlan(
+        MatrixProductState state,
+        std::size_t max_environment_scalars = 4'000'000);
+
+    [[nodiscard]] const MatrixProductState& state() const noexcept { return state_; }
+    [[nodiscard]] std::size_t environment_scalar_count() const noexcept {
+        return environment_scalar_count_;
+    }
+    [[nodiscard]] std::size_t estimated_bytes() const noexcept;
+    [[nodiscard]] QComplex term_expectation(std::span<const PauliFactor> factors) const;
+    [[nodiscard]] QComplex expectation(const PauliObservable& observable) const;
+
+private:
+    MatrixProductState state_;
+    std::size_t max_environment_scalars_{0};
+    std::size_t environment_scalar_count_{0};
+    std::vector<std::vector<QComplex>> left_identity_{};
+    std::vector<std::vector<QComplex>> right_identity_{};
+};
+
 [[nodiscard]] std::size_t required_schmidt_rank_cross_cut_bell_pairs(
     std::size_t pair_count);
 [[nodiscard]] bool bond_dimension_accepts_cross_cut_bell_pairs(
