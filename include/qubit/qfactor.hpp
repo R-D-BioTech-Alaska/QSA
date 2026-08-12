@@ -53,6 +53,7 @@ struct ExactFactorStats {
 
 class ExactFactorPlan;
 class ExactFactorWorkspace;
+class ExactFactorChainPlan;
 
 class ExactFactorGraph {
 public:
@@ -105,6 +106,7 @@ private:
     [[nodiscard]] const Factor& factor(FactorId factor) const;
 
     friend class ExactFactorPlan;
+    friend class ExactFactorChainPlan;
 };
 
 class ExactFactorWorkspace {
