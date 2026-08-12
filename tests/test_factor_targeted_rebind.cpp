@@ -106,6 +106,7 @@ int main() {
 
     ExactFactorConfig reused_config;
     reused_config.max_factor_entries = 64U;
+    reused_config.reuse_workspace_slots = true;
     ExactFactorGraph reused_chain = make_chain(reused_config);
     const std::array<FactorVariableId, 2> chain_retained{{6U, 7U}};
     auto reused_plan = reused_chain.compile(chain_retained);
