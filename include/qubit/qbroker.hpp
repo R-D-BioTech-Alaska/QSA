@@ -22,6 +22,7 @@ enum class ExactExecutionRoute : std::uint8_t {
     PersistentMPS = 3,
     PhaseGraph = 4,
     UniformMagnitude = 5,
+    BasisPermutation = 6,
 };
 
 struct ExactExecutionBrokerConfig {
