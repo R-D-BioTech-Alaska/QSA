@@ -1,5 +1,6 @@
 #include "qubit/qbroker.hpp"
 
+#include <cmath>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -44,6 +45,66 @@ void validate_observable(std::size_t qubit_count, const PauliObservable& observa
     if (!observable.validate()) {
         throw QStateError("Execution broker Pauli observable failed validation");
     }
+}
+
+[[nodiscard]] bool mps_structure_eligible(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    const char** reason) noexcept {
+    const auto fail = [&](const char* message) {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return false;
+    };
+
+    for (const Operation& operation : operations) {
+        switch (operation.code) {
+            case OperationCode::X:
+            case OperationCode::Y:
+            case OperationCode::Z:
+            case OperationCode::H:
+            case OperationCode::S:
+            case OperationCode::Sdg:
+            case OperationCode::T:
+            case OperationCode::Tdg:
+                if (operation.first >= qubit_count) {
+                    return fail("MPS single-qubit target is out of range");
+                }
+                break;
+            case OperationCode::Rx:
+            case OperationCode::Ry:
+            case OperationCode::Rz:
+                if (operation.first >= qubit_count) {
+                    return fail("MPS single-qubit target is out of range");
+                }
+                if (!std::isfinite(operation.parameter)) {
+                    return fail("MPS single-qubit operation is not unitary");
+                }
+                break;
+            case OperationCode::Cnot:
+            case OperationCode::Cz:
+                if (operation.first >= qubit_count || operation.second >= qubit_count) {
+                    return fail("MPS controlled gate qubit is out of range");
+                }
+                if (operation.first == operation.second ||
+                    (operation.first + 1U != operation.second &&
+                     operation.second + 1U != operation.first)) {
+                    return fail("MPS controlled gates require adjacent distinct qubits");
+                }
+                break;
+            case OperationCode::Swap:
+                return fail("Persistent MPS route does not support SWAP");
+            case OperationCode::BitFlipTrajectory:
+            case OperationCode::PhaseFlipTrajectory:
+            case OperationCode::DepolarizingTrajectory:
+            case OperationCode::AmplitudeDampingTrajectory:
+                return fail("Persistent MPS route supports unitary operations only");
+            default:
+                return fail("Persistent MPS route received an unknown opcode");
+        }
+    }
+    return true;
 }
 
 void execute_mps(MatrixProductState& state, std::span<const Operation> operations) {
@@ -101,29 +162,199 @@ void execute_mps(MatrixProductState& state, std::span<const Operation> operation
     }
 }
 
-[[nodiscard]] PhaseGraphState execute_phase_graph_from_zero(
+[[nodiscard]] bool monomial_operation(
+    std::size_t qubit_count,
+    const Operation& operation,
+    const char** reason) noexcept {
+    const auto fail = [&](const char* message) {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return false;
+    };
+
+    switch (operation.code) {
+        case OperationCode::X:
+        case OperationCode::Y:
+        case OperationCode::Z:
+        case OperationCode::S:
+        case OperationCode::Sdg:
+        case OperationCode::T:
+        case OperationCode::Tdg:
+            if (operation.first >= qubit_count) {
+                return fail("UniformMagnitude route single-qubit target is out of range");
+            }
+            return true;
+        case OperationCode::Rz:
+            if (operation.first >= qubit_count) {
+                return fail("UniformMagnitude route single-qubit target is out of range");
+            }
+            if (!std::isfinite(operation.parameter)) {
+                return fail("UniformMagnitude route Rz angle must be finite");
+            }
+            return true;
+        case OperationCode::Cnot:
+        case OperationCode::Cz:
+        case OperationCode::Swap:
+            if (operation.first >= qubit_count || operation.second >= qubit_count) {
+                return fail("UniformMagnitude route two-qubit target is out of range");
+            }
+            if (operation.first == operation.second) {
+                return fail("UniformMagnitude route two-qubit operation requires distinct qubits");
+            }
+            return true;
+        case OperationCode::H:
+            return fail("UniformMagnitude route allows H only in one complete layer");
+        case OperationCode::Rx:
+        case OperationCode::Ry:
+            return fail("UniformMagnitude route supports monomial rotations only");
+        case OperationCode::BitFlipTrajectory:
+        case OperationCode::PhaseFlipTrajectory:
+        case OperationCode::DepolarizingTrajectory:
+        case OperationCode::AmplitudeDampingTrajectory:
+            return fail("UniformMagnitude route supports unitary operations only");
+        default:
+            return fail("UniformMagnitude route received an unknown opcode");
+    }
+}
+
+[[nodiscard]] bool uniform_magnitude_eligible(
     std::size_t qubit_count,
     std::span<const Operation> operations,
-    PhaseGraphConfig config) {
-    if (operations.size() < qubit_count) {
-        throw QStateError("PhaseGraph route requires a complete leading H layer");
+    const char** reason) {
+    const auto fail = [&](const char* message) {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return false;
+    };
+
+    std::size_t h_begin = 0U;
+    while (h_begin < operations.size() && operations[h_begin].code != OperationCode::H) {
+        if (!monomial_operation(qubit_count, operations[h_begin], reason)) {
+            return false;
+        }
+        ++h_begin;
+    }
+    if (h_begin == operations.size() || operations.size() - h_begin < qubit_count) {
+        return fail("UniformMagnitude route requires one complete H layer");
     }
 
     std::vector<std::uint8_t> seen(qubit_count, 0U);
-    for (std::size_t index = 0; index < qubit_count; ++index) {
-        const Operation& operation = operations[index];
+    for (std::size_t offset = 0U; offset < qubit_count; ++offset) {
+        const Operation& operation = operations[h_begin + offset];
         if (operation.code != OperationCode::H) {
-            throw QStateError("PhaseGraph route requires a complete leading H layer");
+            return fail("UniformMagnitude route requires one complete contiguous H layer");
         }
         if (operation.first >= qubit_count) {
-            throw QStateError("PhaseGraph route leading H qubit is out of range");
+            return fail("UniformMagnitude route H-layer qubit is out of range");
         }
         if (seen[operation.first] != 0U) {
-            throw QStateError("PhaseGraph route leading H layer contains duplicate qubits");
+            return fail("UniformMagnitude route H layer contains duplicate qubits");
         }
         seen[operation.first] = 1U;
     }
 
+    for (std::size_t index = h_begin + qubit_count; index < operations.size(); ++index) {
+        if (!monomial_operation(qubit_count, operations[index], reason)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] double uniform_probability(std::size_t qubit_count) noexcept {
+    if (qubit_count > 1074U) {
+        return 0.0;
+    }
+    return std::ldexp(1.0, -static_cast<int>(qubit_count));
+}
+
+[[nodiscard]] bool phase_graph_structure_eligible(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    const char** reason) {
+    const auto fail = [&](const char* message) {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return false;
+    };
+
+    if (operations.size() < qubit_count) {
+        return fail("PhaseGraph route requires a complete leading H layer");
+    }
+    std::vector<std::uint8_t> seen(qubit_count, 0U);
+    for (std::size_t index = 0U; index < qubit_count; ++index) {
+        const Operation& operation = operations[index];
+        if (operation.code != OperationCode::H) {
+            return fail("PhaseGraph route requires a complete leading H layer");
+        }
+        if (operation.first >= qubit_count) {
+            return fail("PhaseGraph route leading H qubit is out of range");
+        }
+        if (seen[operation.first] != 0U) {
+            return fail("PhaseGraph route leading H layer contains duplicate qubits");
+        }
+        seen[operation.first] = 1U;
+    }
+
+    for (std::size_t index = qubit_count; index < operations.size(); ++index) {
+        const Operation& operation = operations[index];
+        switch (operation.code) {
+            case OperationCode::X:
+            case OperationCode::Y:
+            case OperationCode::Z:
+            case OperationCode::S:
+            case OperationCode::Sdg:
+            case OperationCode::T:
+            case OperationCode::Tdg:
+                if (operation.first >= qubit_count) {
+                    return fail("Phase-graph qubit index is out of range");
+                }
+                break;
+            case OperationCode::Rz:
+                if (operation.first >= qubit_count) {
+                    return fail("Phase-graph qubit index is out of range");
+                }
+                if (!std::isfinite(operation.parameter)) {
+                    return fail("Phase-graph Rz angle must be finite");
+                }
+                break;
+            case OperationCode::Cz:
+            case OperationCode::Swap:
+                if (operation.first >= qubit_count || operation.second >= qubit_count) {
+                    return fail("Phase-graph qubit index is out of range");
+                }
+                if (operation.first == operation.second) {
+                    return fail(operation.code == OperationCode::Cz
+                        ? "Phase-graph controlled phase requires distinct qubits"
+                        : "Phase-graph SWAP requires distinct qubits");
+                }
+                break;
+            case OperationCode::H:
+                return fail("PhaseGraph route does not support H after the leading layer");
+            case OperationCode::Rx:
+            case OperationCode::Ry:
+                return fail("PhaseGraph route supports phase-preserving rotations only");
+            case OperationCode::Cnot:
+                return fail("PhaseGraph route does not support CNOT");
+            case OperationCode::BitFlipTrajectory:
+            case OperationCode::PhaseFlipTrajectory:
+            case OperationCode::DepolarizingTrajectory:
+            case OperationCode::AmplitudeDampingTrajectory:
+                return fail("PhaseGraph route supports unitary phase-graph operations only");
+            default:
+                return fail("PhaseGraph route received an unknown opcode");
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] PhaseGraphState execute_phase_graph_from_zero(
+    std::size_t qubit_count,
+    std::span<const Operation> operations,
+    PhaseGraphConfig config) {
     PhaseGraphState state(qubit_count, config);
     for (std::size_t index = qubit_count; index < operations.size(); ++index) {
         const Operation& operation = operations[index];
@@ -158,20 +389,8 @@ void execute_mps(MatrixProductState& state, std::span<const Operation> operation
             case OperationCode::Swap:
                 state.apply_swap(operation.first, operation.second);
                 break;
-            case OperationCode::H:
-                throw QStateError("PhaseGraph route does not support H after the leading layer");
-            case OperationCode::Rx:
-            case OperationCode::Ry:
-                throw QStateError("PhaseGraph route supports phase-preserving rotations only");
-            case OperationCode::Cnot:
-                throw QStateError("PhaseGraph route does not support CNOT");
-            case OperationCode::BitFlipTrajectory:
-            case OperationCode::PhaseFlipTrajectory:
-            case OperationCode::DepolarizingTrajectory:
-            case OperationCode::AmplitudeDampingTrajectory:
-                throw QStateError("PhaseGraph route supports unitary phase-graph operations only");
             default:
-                throw QStateError("PhaseGraph route received an unknown opcode");
+                throw QStateError("PhaseGraph route execution violated structural preflight");
         }
     }
     return state;
@@ -200,6 +419,8 @@ const char* exact_execution_route_name(ExactExecutionRoute route) noexcept {
             return "PersistentMPS";
         case ExactExecutionRoute::PhaseGraph:
             return "PhaseGraph";
+        case ExactExecutionRoute::UniformMagnitude:
+            return "UniformMagnitude";
     }
     return "unknown";
 }
@@ -263,15 +484,22 @@ ExactExpectationResult ExactExecutionBroker::expectation_from_zero(
         result.fallback_reason = "causal: " + failure_message(error);
     }
 
-    try {
-        MatrixProductState state = MatrixProductState::zero(qubit_count, config_.mps);
-        execute_mps(state, operations);
-        result.value = state.expectation(observable);
-        result.route = ExactExecutionRoute::PersistentMPS;
-        return result;
-    } catch (const QStateError& error) {
+    const char* mps_reason = nullptr;
+    if (mps_structure_eligible(qubit_count, operations, &mps_reason)) {
+        try {
+            MatrixProductState state = MatrixProductState::zero(qubit_count, config_.mps);
+            execute_mps(state, operations);
+            result.value = state.expectation(observable);
+            result.route = ExactExecutionRoute::PersistentMPS;
+            return result;
+        } catch (const QStateError& error) {
+            mps_reason = nullptr;
+            result.fallback_reason += "; mps: ";
+            result.fallback_reason += failure_message(error);
+        }
+    } else {
         result.fallback_reason += "; mps: ";
-        result.fallback_reason += failure_message(error);
+        result.fallback_reason += mps_reason != nullptr ? mps_reason : "structural preflight failed";
     }
 
     OperationPlan plan(operations);
@@ -297,28 +525,51 @@ ExactProbabilityResult ExactExecutionBroker::basis_probability_from_zero(
         result.fallback_reason = "tensor: " + failure_message(error);
     }
 
-    try {
-        MatrixProductState state = MatrixProductState::zero(qubit_count, config_.mps);
-        execute_mps(state, operations);
-        result.value = state.amplitude(basis_bits).norm2();
-        result.route = ExactExecutionRoute::PersistentMPS;
-        return result;
-    } catch (const QStateError& error) {
+    const char* mps_reason = nullptr;
+    if (mps_structure_eligible(qubit_count, operations, &mps_reason)) {
+        try {
+            MatrixProductState state = MatrixProductState::zero(qubit_count, config_.mps);
+            execute_mps(state, operations);
+            result.value = state.amplitude(basis_bits).norm2();
+            result.route = ExactExecutionRoute::PersistentMPS;
+            return result;
+        } catch (const QStateError& error) {
+            result.fallback_reason += "; mps: ";
+            result.fallback_reason += failure_message(error);
+        }
+    } else {
         result.fallback_reason += "; mps: ";
-        result.fallback_reason += failure_message(error);
+        result.fallback_reason += mps_reason != nullptr ? mps_reason : "structural preflight failed";
     }
 
-    try {
-        PhaseGraphState state = execute_phase_graph_from_zero(
-            qubit_count,
-            operations,
-            config_.phase_graph);
-        result.value = state.amplitude_bits(basis_bits).norm2();
-        result.route = ExactExecutionRoute::PhaseGraph;
+    const char* uniform_reason = nullptr;
+    if (uniform_magnitude_eligible(qubit_count, operations, &uniform_reason)) {
+        result.value = uniform_probability(qubit_count);
+        result.route = ExactExecutionRoute::UniformMagnitude;
         return result;
-    } catch (const QStateError& error) {
+    }
+    result.fallback_reason += "; uniform: ";
+    result.fallback_reason += uniform_reason != nullptr
+        ? uniform_reason
+        : "uniform-magnitude certificate failed";
+
+    const char* phase_reason = nullptr;
+    if (phase_graph_structure_eligible(qubit_count, operations, &phase_reason)) {
+        try {
+            PhaseGraphState state = execute_phase_graph_from_zero(
+                qubit_count,
+                operations,
+                config_.phase_graph);
+            result.value = state.amplitude_bits(basis_bits).norm2();
+            result.route = ExactExecutionRoute::PhaseGraph;
+            return result;
+        } catch (const QStateError& error) {
+            result.fallback_reason += "; phase_graph: ";
+            result.fallback_reason += failure_message(error);
+        }
+    } else {
         result.fallback_reason += "; phase_graph: ";
-        result.fallback_reason += failure_message(error);
+        result.fallback_reason += phase_reason != nullptr ? phase_reason : "structural preflight failed";
     }
 
     QRegister state(qubit_count, config_.register_state);
@@ -364,12 +615,20 @@ ExactPreparedExpectationPlan::ExactPreparedExpectationPlan(
         causal_preparation_reason_ = failure_message(error);
     }
 
-    try {
-        MatrixProductState state = MatrixProductState::zero(qubit_count_, config_.mps);
-        execute_mps(state, operations);
-        mps_plan_.emplace(std::move(state));
-    } catch (const QStateError& error) {
-        mps_preparation_reason_ = failure_message(error);
+    const char* mps_reason = nullptr;
+    if (mps_structure_eligible(qubit_count_, operations, &mps_reason)) {
+        try {
+            MatrixProductState state = MatrixProductState::zero(qubit_count_, config_.mps);
+            execute_mps(state, operations);
+            mps_plan_.emplace(std::move(state));
+        } catch (const QStateError& error) {
+            mps_preparation_reason_ = failure_message(error);
+        }
+    } else {
+        mps_preparation_reason_ = mps_reason != nullptr ? mps_reason : "structural preflight failed";
+    }
+
+    if (!mps_plan_.has_value()) {
         register_state_.emplace(qubit_count_, config_.register_state);
         OperationPlan plan(operations);
         plan.execute(*register_state_);
