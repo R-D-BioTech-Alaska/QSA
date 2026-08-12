@@ -61,7 +61,7 @@ jobs:
       - name: Build
         run: cmake --build tensor-planning-build --config Release --parallel 2 --target tensor_planning_tests
       - name: Run
-        run: ctest --test-dir tensor-planning-build -C Release --output-on-failure
+        run: ctest --test-dir tensor-planning-build -C Release -R '^tensor_planning_tests$' --output-on-failure
 
   tensor-planning-sanitizers:
     runs-on: ubuntu-24.04
@@ -97,7 +97,7 @@ jobs:
       - name: Run ASan/UBSan
         run: >-
           env ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1
-          ctest --test-dir tensor-planning-sanitize --output-on-failure
+          ctest --test-dir tensor-planning-sanitize -R '^tensor_planning_tests$' --output-on-failure
 
   exact-tensor-network:
     runs-on: ubuntu-24.04
