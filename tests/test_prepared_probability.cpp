@@ -239,6 +239,25 @@ int main() {
         require(prepared.probability(bits).fallback_reason.find("stabilizer:") != std::string::npos &&
                     prepared.probability(bits).fallback_reason.find("tensor:") != std::string::npos,
                 "prepared PersistentMPS did not retain upstream rejection reasons");
+
+        const std::array<QubitId, 1> q0{{0U}};
+        const std::array<std::uint8_t, 1> q0_zero{{0U}};
+        const auto one_shot_marginal = broker.marginal_probability_from_zero(
+            2U, operations, q0, q0_zero);
+        const auto prepared_marginal = prepared.marginal_probability(q0, q0_zero);
+        require(one_shot_marginal.route == ExactExecutionRoute::PersistentMPS &&
+                    prepared_marginal.route == ExactExecutionRoute::PersistentMPS,
+                "PersistentMPS marginal query changed route");
+        require_close(one_shot_marginal.value, 0.5,
+                      "PersistentMPS one-shot marginal is wrong");
+        require_close(prepared_marginal.value, 0.5,
+                      "PersistentMPS prepared marginal is wrong");
+
+        const std::array<QubitId, 2> pair{{0U, 1U}};
+        const std::array<std::uint8_t, 2> pair_zero{{0U, 0U}};
+        const double expected_pair = 0.5 * std::pow(std::cos(0.19 / 2.0), 2.0);
+        require_close(prepared.marginal_probability(pair, pair_zero).value, expected_pair,
+                      "PersistentMPS joint marginal is wrong");
     }
 
     {
