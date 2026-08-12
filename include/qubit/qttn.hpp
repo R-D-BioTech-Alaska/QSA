@@ -117,26 +117,59 @@ public:
     }
 
     void apply(const Operation& operation) {
-        if (operation.kind == OperationKind::Trajectory) {
-            throw QStateError("Tree tensor state does not support trajectory operations");
-        }
-        if (operation.kind == OperationKind::Single) {
-            apply_unitary(operation.first, operation.single);
-            return;
-        }
-        if (operation.kind == OperationKind::Two) {
-            if (operation.code == OperationCode::Cnot) {
+        QMatrix2 matrix{};
+        switch (operation.code) {
+            case OperationCode::X:
+                matrix = gates::x();
+                break;
+            case OperationCode::Y:
+                matrix = gates::y();
+                break;
+            case OperationCode::Z:
+                matrix = gates::z();
+                break;
+            case OperationCode::H:
+                matrix = gates::h();
+                break;
+            case OperationCode::S:
+                matrix = gates::s();
+                break;
+            case OperationCode::Sdg:
+                matrix = gates::sdg();
+                break;
+            case OperationCode::T:
+                matrix = gates::t();
+                break;
+            case OperationCode::Tdg:
+                matrix = gates::tdg();
+                break;
+            case OperationCode::Rx:
+                matrix = gates::rx(operation.parameter);
+                break;
+            case OperationCode::Ry:
+                matrix = gates::ry(operation.parameter);
+                break;
+            case OperationCode::Rz:
+                matrix = gates::rz(operation.parameter);
+                break;
+            case OperationCode::Cnot:
                 apply_cnot(operation.first, operation.second);
                 return;
-            }
-            if (operation.code == OperationCode::Cz) {
+            case OperationCode::Cz:
                 apply_cz(operation.first, operation.second);
                 return;
-            }
-            throw QStateError(
-                "Tree tensor state currently supports only CNOT/CZ two-qubit operations");
+            case OperationCode::Swap:
+                throw QStateError(
+                    "Tree tensor state currently supports only CNOT/CZ two-qubit operations");
+            case OperationCode::BitFlipTrajectory:
+            case OperationCode::PhaseFlipTrajectory:
+            case OperationCode::DepolarizingTrajectory:
+            case OperationCode::AmplitudeDampingTrajectory:
+                throw QStateError("Tree tensor state does not support trajectory operations");
+            default:
+                throw QStateError("Tree tensor operation code is invalid");
         }
-        throw QStateError("Tree tensor operation kind is invalid");
+        apply_unitary(operation.first, matrix);
     }
 
     void apply_unitary(QubitId qubit, const QMatrix2& matrix) {
