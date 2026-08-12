@@ -213,18 +213,26 @@ int main() {
         qubit::ExactExecutionBrokerConfig probability_config;
         probability_config.tensor.max_contraction_entries = 8U;
         ExactExecutionBroker probability_broker(probability_config);
+        std::vector<Operation> probability_operations = broker_operations;
+        probability_operations.push_back({
+            OperationCode::Ry,
+            static_cast<QubitId>(qubits / 2U),
+            0U,
+            0.19,
+            0.0,
+        });
         const std::vector<std::uint8_t> probability_bits(qubits, 0U);
         qubit::ExactProbabilityResult probability_result;
         const double probability_ms = median_ms([&] {
             probability_result = probability_broker.basis_probability_from_zero(
                 qubits,
-                broker_operations,
+                probability_operations,
                 probability_bits);
         });
         double probability_reference_value = 0.0;
         const double probability_qregister_ms = median_ms([&] {
             QRegister next(qubits);
-            qubit::OperationPlan operation_plan(broker_operations);
+            qubit::OperationPlan operation_plan(probability_operations);
             operation_plan.execute(next);
             probability_reference_value = next.amplitude_bits(probability_bits).norm2();
         });
