@@ -34,6 +34,7 @@ struct ExactFactorConfig {
     std::size_t max_factors{1'000'000U};
     std::size_t max_variables{1'000'000U};
     std::size_t max_compiled_index_entries{1U << 20U};
+    bool reuse_workspace_slots{true};
 };
 
 struct ExactFactorStats {
@@ -47,6 +48,7 @@ struct ExactFactorStats {
     std::size_t peak_factor_entries{0U};
     std::size_t output_entries{0U};
     std::size_t compiled_index_entries{0U};
+    std::size_t workspace_slots{0U};
 };
 
 class ExactFactorPlan;
@@ -243,6 +245,7 @@ private:
         std::size_t selected_position{0U};
         std::size_t selected_dimension{0U};
         std::size_t output_entries{0U};
+        std::size_t workspace_slot{0U};
     };
 
     struct TerminalMap {
@@ -259,6 +262,7 @@ private:
     std::vector<SourceFactor> sources_{};
     std::vector<Step> steps_{};
     std::vector<TerminalMap> terminals_{};
+    std::vector<std::size_t> workspace_slot_sizes_{};
     ExactFactorStats stats_{};
     std::size_t graph_factor_count_{0U};
     std::size_t rebind_count_{0U};
