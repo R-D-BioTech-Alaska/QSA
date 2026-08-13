@@ -186,6 +186,13 @@ void fixed_qubits_and_scale() {
         "single-H fixed-qubit scale accounting mismatch");
 }
 
+void stable_log_probability() {
+    qubit::ExactSingleHPathAmplitude value;
+    value.mantissa = {std::exp2(-768.0), 0.0};
+    require(std::abs(value.log2_probability() + 1536.0) < 1e-12,
+        "single-H log probability underflowed after squaring a representable amplitude");
+}
+
 void fail_closed() {
     using qubit::ExactSingleHPathAmplitudePlan;
     using qubit::Operation;
@@ -244,6 +251,7 @@ void fail_closed() {
 int main() {
     dense_equivalence();
     fixed_qubits_and_scale();
+    stable_log_probability();
     fail_closed();
     return 0;
 }

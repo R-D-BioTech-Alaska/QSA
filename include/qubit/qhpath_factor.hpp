@@ -40,14 +40,21 @@ struct ExactSingleHPathAmplitude {
     }
 
     [[nodiscard]] double log2_probability() const {
-        const double value = mantissa.norm2();
-        if (!std::isfinite(value)) {
+        const double real = std::abs(mantissa.re);
+        const double imaginary = std::abs(mantissa.im);
+        const double maximum = std::max(real, imaginary);
+        if (!std::isfinite(maximum)) {
             throw QStateError("Single-H path probability became non-finite");
         }
-        if (value == 0.0) {
+        if (maximum == 0.0) {
             return -std::numeric_limits<double>::infinity();
         }
-        return std::log2(value) + 2.0 * log2_scale;
+        const double scaled_real = mantissa.re / maximum;
+        const double scaled_imaginary = mantissa.im / maximum;
+        const double scaled_norm2 =
+            scaled_real * scaled_real + scaled_imaginary * scaled_imaginary;
+        return 2.0 * std::log2(maximum) + std::log2(scaled_norm2) +
+            2.0 * log2_scale;
     }
 };
 
