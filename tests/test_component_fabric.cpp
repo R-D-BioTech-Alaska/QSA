@@ -147,12 +147,38 @@ void typed_dependency_contract() {
     const std::vector<std::uint8_t> bits{0U, 0U, 0U};
     const ExactPreparedProbabilityPlan global = ExactPreparedProbabilityPlan::for_marginals(
         6U, operations);
-    require(close(
-                fabric.marginal_probability(query, bits).value,
-                global.marginal_probability(query, bits).value),
+    const ExactRepresentationProbabilityResult initial = fabric.marginal_probability(query, bits);
+    require(close(initial.value, global.marginal_probability(query, bits).value),
             "typed dependency fabricated numerical coupling");
     require(fabric.stats().active_components == 1U,
             "typed dependency did not preserve one conservative island closure");
+
+    const std::vector<ExactRepresentationComponentReceipt> before = fabric.component_receipts();
+    require(before.size() == 1U, "typed dependency component receipt count mismatch");
+    const std::array<QubitId, 2> metadata_support{0U, 2U};
+    fabric.declare_dependency(74U, metadata_support);
+    const std::vector<ExactRepresentationComponentReceipt> after = fabric.component_receipts();
+    require(after.size() == 1U && after[0].generation == before[0].generation + 1U,
+            "structural dependency did not advance component generation");
+    require(after[0].numerical_generation == before[0].numerical_generation,
+            "metadata-only dependency changed numerical generation");
+
+    const ExactRepresentationProbabilityResult metadata_only =
+        fabric.marginal_probability(query, bits);
+    require(close(metadata_only.value, initial.value),
+            "metadata-only dependency changed numerical state");
+    require(metadata_only.receipt.cache_hits == 1U &&
+            metadata_only.islands.size() == 1U &&
+            metadata_only.islands[0].transition.kind == ExactRepresentationTransitionKind::None,
+            "metadata-only dependency forced numerical replay");
+    require(metadata_only.islands[0].generation == after[0].generation &&
+            metadata_only.islands[0].numerical_generation == after[0].numerical_generation,
+            "query receipt lost structural/numerical generation identity");
+
+    const std::vector<ExactRepresentationDependencyReceipt> updated_receipts =
+        fabric.dependency_receipts();
+    require(updated_receipts.size() == 2U && updated_receipts[1].type == 74U,
+            "second typed dependency receipt was not preserved");
 
     ExactRepresentationFabricConfig config;
     config.max_dependency_width = 2U;
