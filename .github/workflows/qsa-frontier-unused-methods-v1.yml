@@ -9,6 +9,9 @@ on:
       - "include/qubit/qgaussian.hpp"
       - "src/qgaussian.cpp"
       - "tests/test_gaussian_frontier.cpp"
+      - "include/qubit/qphase_graph.hpp"
+      - "src/qphase_graph.cpp"
+      - "tests/test_phase_graph.cpp"
       - ".github/workflows/qsa-frontier-unused-methods-v1.yml"
   workflow_dispatch:
 
@@ -62,6 +65,12 @@ jobs:
             tests/test_gaussian_frontier.cpp \
             -o qgaussian-frontier-test
           ./qgaussian-frontier-test
+
+      - name: Build native low-H PhaseGraph candidate
+        run: |
+          cmake -S . -B build-frontier -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-frontier --target qstate_phase_graph_tests --parallel 2
+          ./build-frontier/qstate_phase_graph_tests
 
       - name: Run Gaussian bosonic assay
         run: |
@@ -118,6 +127,9 @@ jobs:
             include/qubit/qgaussian.hpp \
             src/qgaussian.cpp \
             tests/test_gaussian_frontier.cpp \
+            include/qubit/qphase_graph.hpp \
+            src/qphase_graph.cpp \
+            tests/test_phase_graph.cpp \
             .github/workflows/qsa-frontier-unused-methods-v1.yml \
             > qsa-frontier-unused-methods-v1.sha256
 
