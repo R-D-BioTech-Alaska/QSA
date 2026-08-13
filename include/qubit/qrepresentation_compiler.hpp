@@ -66,6 +66,7 @@ struct ExactRepresentationFabricStats {
 struct ExactRepresentationComponentReceipt {
     std::size_t component{0U};
     std::size_t generation{0U};
+    std::size_t numerical_generation{0U};
     std::size_t qubits{0U};
     std::size_t operations{0U};
     std::size_t declared_dependencies{0U};
@@ -78,6 +79,7 @@ struct ExactRepresentationComponentReceipt {
 struct ExactRepresentationDependencyReceipt {
     std::size_t component{0U};
     std::size_t generation{0U};
+    std::size_t numerical_generation{0U};
     ExactRepresentationDependencyType type{0U};
     std::vector<QubitId> support{};
 };
@@ -88,12 +90,15 @@ struct ExactRepresentationTransitionReceipt {
     ExactRepresentationExecutionKind to{ExactRepresentationExecutionKind::LocalDense};
     std::size_t from_generation{0U};
     std::size_t to_generation{0U};
+    std::size_t from_numerical_generation{0U};
+    std::size_t to_numerical_generation{0U};
     bool exact_replay{false};
 };
 
 struct ExactRepresentationIslandExecutionReceipt {
     std::size_t component{0U};
     std::size_t generation{0U};
+    std::size_t numerical_generation{0U};
     std::size_t component_qubits{0U};
     std::size_t component_operations{0U};
     std::size_t query_qubits{0U};
@@ -279,6 +284,7 @@ public:
             ExactRepresentationIslandExecutionReceipt island;
             island.component = component_id;
             island.generation = component.generation;
+            island.numerical_generation = component.numerical_generation;
             island.component_qubits = component.qubits.size();
             island.component_operations = component.operations.size();
             island.query_qubits = local_qubits.size();
@@ -381,6 +387,7 @@ public:
             result.push_back(ExactRepresentationComponentReceipt{
                 index,
                 component.generation,
+                component.numerical_generation,
                 component.qubits.size(),
                 component.operations.size(),
                 component.dependencies,
@@ -405,6 +412,7 @@ public:
                 result.push_back(ExactRepresentationDependencyReceipt{
                     index,
                     component.generation,
+                    component.numerical_generation,
                     dependency.type,
                     dependency.support,
                 });
@@ -433,7 +441,7 @@ private:
     };
 
     struct DenseCacheEntry {
-        std::size_t generation{0U};
+        std::size_t numerical_generation{0U};
         std::vector<QubitId> query_qubits{};
         std::vector<QubitId> local_query_qubits{};
         std::size_t state_scalars{0U};
@@ -449,6 +457,7 @@ private:
         bool active{false};
         bool qubits_sorted{true};
         std::size_t generation{1U};
+        std::size_t numerical_generation{1U};
         std::size_t dependencies{0U};
         std::vector<QubitId> qubits{};
         std::vector<Operation> operations{};
@@ -459,6 +468,7 @@ private:
         bool has_last_execution{false};
         ExactRepresentationExecutionKind last_execution{ExactRepresentationExecutionKind::LocalDense};
         std::size_t last_execution_generation{0U};
+        std::size_t last_execution_numerical_generation{0U};
     };
 
     std::size_t qubit_count_{0U};
@@ -574,7 +584,7 @@ private:
                 throw QStateError("Representation fabric component growth exceeds configured cap");
             }
             if (operation != nullptr || !additions.empty()) {
-                invalidate(component);
+                invalidate_numerical(component);
             } else if (dependency) {
                 increment_generation(component);
             }
@@ -602,11 +612,14 @@ private:
         std::size_t operation_count = operation != nullptr ? 1U : 0U;
         std::size_t dependencies = dependency ? 1U : 0U;
         std::size_t generation = 1U;
+        std::size_t numerical_generation = 1U;
         for (const std::size_t id : ids) {
             combined.insert(combined.end(), components_[id].qubits.begin(), components_[id].qubits.end());
             operation_count = checked_sum(operation_count, components_[id].operations.size());
             dependencies = checked_sum(dependencies, components_[id].dependencies);
             generation = std::max(generation, components_[id].generation);
+            numerical_generation = std::max(
+                numerical_generation, components_[id].numerical_generation);
         }
         std::sort(combined.begin(), combined.end());
         combined.erase(std::unique(combined.begin(), combined.end()), combined.end());
@@ -631,7 +644,8 @@ private:
         if (dependency) {
             dependency_records.push_back(DependencyRecord{dependency_type, support});
         }
-        if (generation == std::numeric_limits<std::size_t>::max()) {
+        if (generation == std::numeric_limits<std::size_t>::max() ||
+            numerical_generation == std::numeric_limits<std::size_t>::max()) {
             throw QStateError("Representation fabric generation counter overflowed");
         }
 
@@ -645,6 +659,7 @@ private:
         target.active = true;
         target.qubits_sorted = true;
         target.generation = generation + 1U;
+        target.numerical_generation = numerical_generation + 1U;
         target.dependencies = dependencies;
         target.qubits = std::move(combined);
         target.operations = std::move(operations);
@@ -664,7 +679,7 @@ private:
         update_maxima(target);
     }
 
-    void invalidate(Component& component) {
+    void invalidate_numerical(Component& component) {
         if (component.program || !component.dense_cache.empty()) {
             ++stats_.component_invalidations;
         }
@@ -672,6 +687,7 @@ private:
         component.dense_cache.clear();
         component.dense_cached_scalars = 0U;
         increment_generation(component);
+        increment_numerical_generation(component);
     }
 
     static void increment_generation(Component& component) {
@@ -679,6 +695,13 @@ private:
             throw QStateError("Representation fabric generation counter overflowed");
         }
         ++component.generation;
+    }
+
+    static void increment_numerical_generation(Component& component) {
+        if (component.numerical_generation == std::numeric_limits<std::size_t>::max()) {
+            throw QStateError("Representation fabric numerical generation counter overflowed");
+        }
+        ++component.numerical_generation;
     }
 
     static void ensure_qubit_order(Component& component) {
@@ -745,7 +768,7 @@ private:
         Component& component,
         std::span<const QubitId> query_qubits) noexcept {
         for (DenseCacheEntry& entry : component.dense_cache) {
-            if (entry.generation != component.generation ||
+            if (entry.numerical_generation != component.numerical_generation ||
                 entry.query_qubits.size() != query_qubits.size()) {
                 continue;
             }
@@ -780,7 +803,7 @@ private:
             throw QStateError("Representation fabric local dense cache changed after certification");
         }
         DenseCacheEntry entry;
-        entry.generation = component.generation;
+        entry.numerical_generation = component.numerical_generation;
         entry.query_qubits.assign(query_qubits.begin(), query_qubits.end());
         entry.local_query_qubits = slice.local_query_qubits;
         entry.state_scalars = certificate.state_scalars;
@@ -797,10 +820,12 @@ private:
         ExactRepresentationTransitionReceipt result;
         result.to = execution;
         result.to_generation = component.generation;
+        result.to_numerical_generation = component.numerical_generation;
         if (component.has_last_execution) {
             result.from = component.last_execution;
             result.from_generation = component.last_execution_generation;
-            if (component.last_execution_generation != component.generation) {
+            result.from_numerical_generation = component.last_execution_numerical_generation;
+            if (component.last_execution_numerical_generation != component.numerical_generation) {
                 result.kind = ExactRepresentationTransitionKind::GenerationReplay;
                 result.exact_replay = true;
             } else if (component.last_execution != execution) {
@@ -811,6 +836,7 @@ private:
         component.has_last_execution = true;
         component.last_execution = execution;
         component.last_execution_generation = component.generation;
+        component.last_execution_numerical_generation = component.numerical_generation;
         return result;
     }
 
