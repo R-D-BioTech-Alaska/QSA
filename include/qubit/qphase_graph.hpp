@@ -24,6 +24,9 @@ public:
     [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
     [[nodiscard]] std::size_t edge_count() const noexcept { return edge_phases_.size(); }
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
+    [[nodiscard]] double log2_uniform_amplitude_scale() const noexcept {
+        return -0.5 * static_cast<double>(qubit_count_);
+    }
 
     void apply_x(QubitId qubit);
     void apply_y(QubitId qubit);
@@ -38,6 +41,8 @@ public:
     void apply_swap(QubitId first, QubitId second);
 
     [[nodiscard]] double probability_one(QubitId qubit) const;
+    [[nodiscard]] QComplex unit_phase(BasisIndex basis) const;
+    [[nodiscard]] QComplex unit_phase_bits(std::span<const std::uint8_t> bits) const;
     [[nodiscard]] QComplex amplitude(BasisIndex basis) const;
     [[nodiscard]] QComplex amplitude_bits(std::span<const std::uint8_t> bits) const;
     [[nodiscard]] std::vector<QComplex> materialize(std::size_t max_qubits = 24) const;

@@ -1,0 +1,146 @@
+name: QSA Exact Fixed Excitation Sector
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qsector.hpp"
+      - "tests/test_fixed_excitation.cpp"
+      - "benchmarks/fixed_excitation.cpp"
+      - ".github/workflows/qsa-fixed-excitation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sector-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sector driver
+        shell: bash
+        run: |
+          mkdir -p sector-driver
+          cat > sector-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactFixedExcitationCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(fixed_excitation_tests ../tests/test_fixed_excitation.cpp)
+          target_link_libraries(fixed_excitation_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(fixed_excitation_tests PRIVATE /W4)
+          else()
+              target_compile_options(fixed_excitation_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME fixed_excitation_tests COMMAND fixed_excitation_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S sector-driver -B sector-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build sector-build --config Release --target fixed_excitation_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir sector-build -C Release --output-on-failure
+
+  sector-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p sector-driver
+          cat > sector-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactFixedExcitationSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(fixed_excitation_tests ../tests/test_fixed_excitation.cpp)
+          target_link_libraries(fixed_excitation_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S sector-driver -B sector-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build sector-sanitize-build --target fixed_excitation_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./sector-sanitize-build/fixed_excitation_tests
+
+  sector-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p sector-driver
+          cat > sector-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactFixedExcitationEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(fixed_excitation_benchmark ../benchmarks/fixed_excitation.cpp)
+          target_link_libraries(fixed_excitation_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S sector-driver -B sector-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build sector-evidence-build --target fixed_excitation_benchmark --parallel 2
+      - name: Run sector carrier
+        run: |
+          set -o pipefail
+          ./sector-evidence-build/fixed_excitation_benchmark | tee fixed-excitation-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("fixed-excitation-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          for n in (6, 8, 10, 12, 14, 16, 18):
+              assert int(values[f"case_{n}_sector_dimension"]) == n * (n - 1) // 2
+              assert int(values[f"case_{n}_dense_amplitudes"]) == 1 << n
+              assert float(values[f"case_{n}_absolute_error"]) < 1e-12
+              assert float(values[f"case_{n}_sector_seconds"]) > 0.0
+              assert float(values[f"case_{n}_dense_seconds"]) > 0.0
+          assert float(values["maximum_dense_error"]) < 1e-12
+          assert float(values["n18_speedup"]) > 5.0
+          assert int(values["large_modes"]) == 1024
+          assert int(values["large_excitations"]) == 2
+          assert int(values["large_sector_dimension"]) == 523776
+          assert float(values["large_dense_to_sector_ratio_log2"]) > 1004.0
+          assert int(values["large_estimated_bytes"]) > 0
+          assert abs(float(values["large_norm"]) - 1.0) < 1e-10
+          assert int(values["large_dense_state_materialized"]) == 0
+          assert int(values["number_changing_x_rejected"]) == 1
+          PY
+      - name: Hash evidence
+        run: sha256sum fixed-excitation-evidence.txt | tee fixed-excitation-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-fixed-excitation-evidence
+          path: |
+            fixed-excitation-evidence.txt
+            fixed-excitation-evidence.sha256

@@ -1,0 +1,154 @@
+name: QSA Exact Amplitude Representation Advisor
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qamplitude_advisor.hpp"
+      - "tests/test_amplitude_advisor.cpp"
+      - "benchmarks/amplitude_advisor.cpp"
+      - ".github/workflows/qsa-amplitude-advisor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  amplitude-advisor-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build advisor driver
+        shell: bash
+        run: |
+          mkdir -p amplitude-advisor-driver
+          cat > amplitude-advisor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactAmplitudeAdvisorCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(amplitude_advisor_tests ../tests/test_amplitude_advisor.cpp)
+          target_link_libraries(amplitude_advisor_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(amplitude_advisor_tests PRIVATE /W4)
+          else()
+              target_compile_options(amplitude_advisor_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME amplitude_advisor_tests COMMAND amplitude_advisor_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S amplitude-advisor-driver -B amplitude-advisor-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build amplitude-advisor-build --config Release --target amplitude_advisor_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir amplitude-advisor-build -C Release --output-on-failure
+
+  amplitude-advisor-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p amplitude-advisor-driver
+          cat > amplitude-advisor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactAmplitudeAdvisorSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(amplitude_advisor_tests ../tests/test_amplitude_advisor.cpp)
+          target_link_libraries(amplitude_advisor_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S amplitude-advisor-driver -B amplitude-advisor-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build amplitude-advisor-sanitize-build --target amplitude_advisor_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./amplitude-advisor-sanitize-build/amplitude_advisor_tests
+
+  amplitude-advisor-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p amplitude-advisor-driver
+          cat > amplitude-advisor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactAmplitudeAdvisorEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(amplitude_advisor_benchmark ../benchmarks/amplitude_advisor.cpp)
+          target_link_libraries(amplitude_advisor_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S amplitude-advisor-driver -B amplitude-advisor-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build amplitude-advisor-evidence-build --target amplitude_advisor_benchmark --parallel 2
+      - name: Run advisor carrier
+        run: |
+          set -o pipefail
+          ./amplitude-advisor-evidence-build/amplitude_advisor_benchmark | tee amplitude-advisor-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("amplitude-advisor-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["advisor_large_qubits"]) == 1024
+          assert int(values["advisor_large_rounds"]) == 8
+          assert int(values["advisor_large_phase_h_defects"]) == 8192
+          assert int(values["advisor_large_phase_branch_fits_size_t"]) == 0
+          assert int(values["advisor_large_phase_eligible"]) == 0
+          assert int(values["advisor_large_hpath_eligible"]) == 1
+          assert int(values["advisor_large_hpath_events"]) == 8192
+          assert int(values["advisor_large_peak_union_variables"]) <= 12
+          assert int(values["advisor_large_peak_factor_entries"]) <= 4096
+          assert 0 < int(values["advisor_large_workspace_slots"]) <= 10000
+          assert 0 < int(values["advisor_large_graph_bytes"]) < 128 * 1024 * 1024
+          assert 0 < int(values["advisor_large_plan_bytes"]) < 512 * 1024 * 1024
+          assert int(values["advisor_large_route"]) == 2
+          assert 0.0 < float(values["advisor_large_analysis_ms"]) < 5000.0
+          assert int(values["advisor_compare_qubits"]) == 12
+          assert int(values["advisor_compare_phase_h_defects"]) == 12
+          assert int(values["advisor_compare_phase_branches"]) == 4096
+          assert int(values["advisor_compare_phase_eligible"]) == 1
+          assert int(values["advisor_compare_hpath_eligible"]) == 1
+          assert int(values["advisor_compare_peak_factor_entries"]) <= 16
+          assert int(values["advisor_compare_structural_log2_margin"]) >= 8
+          assert int(values["advisor_compare_route"]) == 2
+          assert int(values["state_expansion_materialized"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum amplitude-advisor-evidence.txt | tee amplitude-advisor-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-amplitude-advisor-evidence
+          path: |
+            amplitude-advisor-evidence.txt
+            amplitude-advisor-evidence.sha256

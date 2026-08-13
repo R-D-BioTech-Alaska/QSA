@@ -1,0 +1,100 @@
+name: QSA Bounded Coherent Superposition
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qcoherent.hpp"
+      - "tests/test_bounded_coherent.cpp"
+      - "benchmarks/bounded_coherent.cpp"
+      - ".github/workflows/qsa-coherent-superposition.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coherent-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build coherent test
+        shell: bash
+        run: |
+          mkdir -p coherent-driver
+          cat > coherent-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSACoherentCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          add_executable(coherent_tests ../tests/test_bounded_coherent.cpp)
+          target_include_directories(coherent_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(coherent_tests PRIVATE /W4)
+          else()
+              target_compile_options(coherent_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          CMAKE
+      - name: Configure
+        run: cmake -S coherent-driver -B coherent-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build coherent-build --config Release --parallel 2
+      - name: Run
+        shell: bash
+        run: |
+          if [ -x coherent-build/coherent_tests ]; then coherent-build/coherent_tests; else coherent-build/Release/coherent_tests.exe; fi
+
+  coherent-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_bounded_coherent.cpp -o coherent-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./coherent-sanitize
+
+  coherent-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/bounded_coherent.cpp -o coherent-benchmark
+      - name: Run bounded coherent carrier
+        run: |
+          set -o pipefail
+          ./coherent-benchmark | tee coherent-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("coherent-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["coherent_modes"]) == 10000
+          assert int(values["coherent_terms"]) == 2
+          assert int(values["coherent_stored_complex_entries"]) == 20002
+          assert int(values["coherent_comparison_fock_cutoff"]) == 4
+          assert float(values["coherent_explicit_fock_log2_entries"]) == 20000.0
+          assert float(values["coherent_log2_entry_gap"]) > 19985.0
+          assert abs(float(values["coherent_norm_squared"]) - 1.0) < 1e-9
+          assert float(values["coherent_setup_ms"]) < 10000.0
+          assert float(values["coherent_query_ms"]) < 10000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum coherent-evidence.txt | tee coherent-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-coherent-superposition-evidence
+          path: |
+            coherent-evidence.txt
+            coherent-evidence.sha256

@@ -1,0 +1,167 @@
+name: QSA Causal Computational Basis Born
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qlightcone.hpp"
+      - "include/qubit/qcausal_basis_born.hpp"
+      - "include/qubit/qhpath_basis_born.hpp"
+      - "include/qubit/qfactor.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_causal_basis_born.cpp"
+      - "benchmarks/causal_basis_born.cpp"
+      - ".github/workflows/qsa-causal-basis-born.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  causal-basis-born-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build causal basis Born driver
+        shell: bash
+        run: |
+          mkdir -p causal-basis-born-driver
+          cat > causal-basis-born-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSACausalBasisBornCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(causal_basis_born_tests ../tests/test_causal_basis_born.cpp)
+          target_link_libraries(causal_basis_born_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(causal_basis_born_tests PRIVATE /W4)
+          else()
+              target_compile_options(causal_basis_born_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME causal_basis_born_tests COMMAND causal_basis_born_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S causal-basis-born-driver -B causal-basis-born-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build causal-basis-born-build --config Release --target causal_basis_born_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir causal-basis-born-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  causal-basis-born-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p causal-basis-born-driver
+          cat > causal-basis-born-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSACausalBasisBornSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(causal_basis_born_tests ../tests/test_causal_basis_born.cpp)
+          target_link_libraries(causal_basis_born_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S causal-basis-born-driver -B causal-basis-born-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build causal-basis-born-sanitize-build --target causal_basis_born_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./causal-basis-born-sanitize-build/causal_basis_born_tests
+
+  causal-basis-born-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p causal-basis-born-driver
+          cat > causal-basis-born-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSACausalBasisBornEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(causal_basis_born_benchmark ../benchmarks/causal_basis_born.cpp)
+          target_link_libraries(causal_basis_born_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S causal-basis-born-driver -B causal-basis-born-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build causal-basis-born-evidence-build --target causal_basis_born_benchmark --parallel 2
+      - name: Run causal basis Born carrier
+        run: |
+          set -o pipefail
+          ./causal-basis-born-evidence-build/causal_basis_born_benchmark | tee causal-basis-born-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("causal-basis-born-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["causal_born_full_qubits"]) == 10000
+          assert int(values["causal_born_full_operations"]) == 112500
+          assert int(values["causal_born_island_count"]) == 2500
+          assert int(values["causal_born_active_qubits"]) == 4
+          assert int(values["causal_born_active_operations"]) == 45
+          assert int(values["causal_born_pruned_qubits"]) == 9996
+          assert int(values["causal_born_pruned_operations"]) == 112455
+          assert float(values["causal_born_qubit_reduction_ratio"]) == 2500.0
+          assert float(values["causal_born_operation_reduction_ratio"]) == 2500.0
+          assert 0 < int(values["causal_born_light_cone_bytes"]) < 16 * 1024 * 1024
+          assert 0 < int(values["causal_born_compact_input_bytes"]) <= 64
+          assert int(values["causal_born_h_events"]) == 12
+          assert int(values["causal_born_hidden_variables_per_side"]) == 8
+          assert int(values["causal_born_total_variables"]) == 20
+          assert int(values["causal_born_factor_count"]) > 0
+          assert int(values["causal_born_peak_union_variables"]) <= 12
+          assert int(values["causal_born_peak_factor_entries"]) <= 4096
+          assert 0 < int(values["causal_born_plan_bytes"]) < 64 * 1024 * 1024
+          assert 0 < int(values["causal_born_workspace_bytes"]) < 64 * 1024 * 1024
+          assert int(values["causal_born_output_entries"]) == 16
+          total = float(values["causal_born_probability_sum"])
+          assert math.isfinite(total) and abs(total - 1.0) <= 1e-9
+          assert float(values["causal_born_max_abs_imaginary"]) <= 1e-9
+          assert float(values["causal_born_max_compact_error"]) <= 1e-12
+          assert 0.0 < float(values["causal_born_setup_ms"]) < 10000.0
+          assert 0.0 < float(values["causal_born_query_ms"]) < 10000.0
+          assert int(values["dense_state_materialized"]) == 0
+          assert int(values["full_born_graph_materialized"]) == 0
+          assert int(values["explicit_output_enumeration_performed"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum causal-basis-born-evidence.txt | tee causal-basis-born-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-causal-basis-born-evidence
+          path: |
+            causal-basis-born-evidence.txt
+            causal-basis-born-evidence.sha256

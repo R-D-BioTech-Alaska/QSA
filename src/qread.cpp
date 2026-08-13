@@ -130,6 +130,105 @@ void QRegister::probabilities_one_into(std::span<double> output) const {
     }
 }
 
+double QRegister::marginal_probability(
+    std::span<const QubitId> qubits,
+    std::span<const std::uint8_t> bits) const {
+    if (qubits.size() != bits.size()) {
+        throw QStateError("Marginal query qubit and bit counts do not match");
+    }
+    if (qubits.empty()) {
+        return 1.0;
+    }
+
+    struct Constraint {
+        std::size_t component{0U};
+        QubitId qubit{0U};
+        std::uint8_t bit{0U};
+    };
+
+    std::vector<Constraint> constraints;
+    constraints.reserve(qubits.size());
+    for (std::size_t index = 0U; index < qubits.size(); ++index) {
+        const QubitId qubit = qubits[index];
+        if (static_cast<std::size_t>(qubit) >= qubit_count_) {
+            throw QStateError("Marginal query qubit is out of range");
+        }
+        if (bits[index] > 1U) {
+            throw QStateError("Marginal query bits must be zero or one");
+        }
+        constraints.push_back({component_index(qubit), qubit, bits[index]});
+    }
+
+    std::sort(constraints.begin(), constraints.end(), [](const Constraint& first, const Constraint& second) {
+        return first.qubit < second.qubit;
+    });
+    for (std::size_t index = 1U; index < constraints.size(); ++index) {
+        if (constraints[index - 1U].qubit == constraints[index].qubit) {
+            throw QStateError("Marginal query contains duplicate qubits");
+        }
+    }
+    std::sort(constraints.begin(), constraints.end(), [](const Constraint& first, const Constraint& second) {
+        if (first.component != second.component) {
+            return first.component < second.component;
+        }
+        return first.qubit < second.qubit;
+    });
+
+    long double probability = 1.0L;
+    std::size_t begin = 0U;
+    while (begin < constraints.size()) {
+        const std::size_t component_index_value = constraints[begin].component;
+        std::size_t end = begin + 1U;
+        while (end < constraints.size() &&
+               constraints[end].component == component_index_value) {
+            ++end;
+        }
+
+        const StateComponent& component = components_[component_index_value];
+        if (component.is_cell()) {
+            const double one = std::get<BlochCell>(component.state).probability_one();
+            probability *= static_cast<long double>(
+                constraints[begin].bit != 0U ? one : 1.0 - one);
+            begin = end;
+            continue;
+        }
+
+        BasisIndex mask = 0U;
+        BasisIndex expected = 0U;
+        for (std::size_t index = begin; index < end; ++index) {
+            const std::size_t position = local_position(component, constraints[index].qubit);
+            const BasisIndex local_bit = BasisIndex{1} << position;
+            mask |= local_bit;
+            if (constraints[index].bit != 0U) {
+                expected |= local_bit;
+            }
+        }
+
+        const AmplitudeStore& store = std::get<AmplitudeStore>(component.state);
+        long double local_probability = 0.0L;
+        if (mask == store.dimension_ - 1U) {
+            local_probability = static_cast<long double>(store.at(expected).norm2());
+        } else if (store.mode_ == StorageMode::Sparse) {
+            for (const auto& [basis, amplitude] : store.sparse_) {
+                if ((basis & mask) == expected) {
+                    local_probability += static_cast<long double>(amplitude.norm2());
+                }
+            }
+        } else {
+            for (BasisIndex basis = 0U; basis < store.dimension_; ++basis) {
+                if ((basis & mask) == expected) {
+                    local_probability += static_cast<long double>(
+                        store.dense_[static_cast<std::size_t>(basis)].norm2());
+                }
+            }
+        }
+        probability *= std::clamp(local_probability, 0.0L, 1.0L);
+        begin = end;
+    }
+
+    return std::clamp(static_cast<double>(probability), 0.0, 1.0);
+}
+
 void QRegister::measure_all_into(
     std::uint64_t seed,
     std::span<int> output) {

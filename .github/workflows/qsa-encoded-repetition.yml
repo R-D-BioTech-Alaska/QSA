@@ -1,0 +1,146 @@
+name: QSA Exact Encoded Repetition
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qencoded.hpp"
+      - "tests/test_encoded_repetition.cpp"
+      - "benchmarks/encoded_repetition.cpp"
+      - ".github/workflows/qsa-encoded-repetition.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  encoded-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build encoded driver
+        shell: bash
+        run: |
+          mkdir -p encoded-driver
+          cat > encoded-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactEncodedRepetitionCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(encoded_repetition_tests ../tests/test_encoded_repetition.cpp)
+          target_link_libraries(encoded_repetition_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(encoded_repetition_tests PRIVATE /W4)
+          else()
+              target_compile_options(encoded_repetition_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME encoded_repetition_tests COMMAND encoded_repetition_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S encoded-driver -B encoded-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build encoded-build --config Release --target encoded_repetition_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir encoded-build -C Release --output-on-failure
+
+  encoded-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p encoded-driver
+          cat > encoded-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactEncodedRepetitionSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(encoded_repetition_tests ../tests/test_encoded_repetition.cpp)
+          target_link_libraries(encoded_repetition_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S encoded-driver -B encoded-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build encoded-sanitize-build --target encoded_repetition_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./encoded-sanitize-build/encoded_repetition_tests
+
+  encoded-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p encoded-driver
+          cat > encoded-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactEncodedRepetitionEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(encoded_repetition_benchmark ../benchmarks/encoded_repetition.cpp)
+          target_link_libraries(encoded_repetition_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S encoded-driver -B encoded-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build encoded-evidence-build --target encoded_repetition_benchmark --parallel 2
+      - name: Run encoded carrier
+        run: |
+          set -o pipefail
+          ./encoded-evidence-build/encoded_repetition_benchmark | tee encoded-repetition-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("encoded-repetition-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          for block in range(1, 7):
+              assert int(values[f"dense_block_{block}_physical_qubits"]) == 3 * block
+              assert float(values[f"dense_block_{block}_absolute_error"]) < 1e-12
+              assert float(values[f"dense_block_{block}_encoded_seconds"]) > 0.0
+              assert float(values[f"dense_block_{block}_physical_seconds"]) > 0.0
+          assert float(values["maximum_dense_error"]) < 1e-12
+          assert float(values["block6_speedup"]) > 5.0
+          assert int(values["large_logical_qubits"]) == 12
+          assert int(values["large_block_size"]) == 10000
+          assert int(values["large_physical_qubits"]) == 120000
+          assert int(values["large_logical_amplitudes"]) == 4096
+          assert int(values["large_physical_to_logical_dimension_ratio_log2"]) == 119988
+          assert int(values["large_estimated_bytes"]) > 0
+          assert abs(float(values["large_norm"]) - 1.0) < 1e-10
+          assert int(values["large_physical_state_materialized"]) == 0
+          assert int(values["single_physical_x_leakage_rejected"]) == 1
+          PY
+      - name: Hash evidence
+        run: sha256sum encoded-repetition-evidence.txt | tee encoded-repetition-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-encoded-repetition-evidence
+          path: |
+            encoded-repetition-evidence.txt
+            encoded-repetition-evidence.sha256

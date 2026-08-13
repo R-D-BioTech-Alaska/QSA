@@ -1,0 +1,157 @@
+name: QSA Exact Adaptive Amplitude
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qadaptive_amplitude.hpp"
+      - "include/qubit/qamplitude_advisor.hpp"
+      - "include/qubit/qhpath_factor.hpp"
+      - "include/qubit/qphase_sum.hpp"
+      - "tests/test_adaptive_amplitude.cpp"
+      - "benchmarks/adaptive_amplitude.cpp"
+      - ".github/workflows/qsa-adaptive-amplitude.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adaptive-amplitude-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build adaptive amplitude driver
+        shell: bash
+        run: |
+          mkdir -p adaptive-amplitude-driver
+          cat > adaptive-amplitude-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactAdaptiveAmplitudeCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(adaptive_amplitude_tests ../tests/test_adaptive_amplitude.cpp)
+          target_link_libraries(adaptive_amplitude_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(adaptive_amplitude_tests PRIVATE /W4)
+          else()
+              target_compile_options(adaptive_amplitude_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME adaptive_amplitude_tests COMMAND adaptive_amplitude_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S adaptive-amplitude-driver -B adaptive-amplitude-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build adaptive-amplitude-build --config Release --target adaptive_amplitude_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir adaptive-amplitude-build -C Release --output-on-failure
+
+  adaptive-amplitude-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p adaptive-amplitude-driver
+          cat > adaptive-amplitude-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactAdaptiveAmplitudeSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(adaptive_amplitude_tests ../tests/test_adaptive_amplitude.cpp)
+          target_link_libraries(adaptive_amplitude_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S adaptive-amplitude-driver -B adaptive-amplitude-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build adaptive-amplitude-sanitize-build --target adaptive_amplitude_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./adaptive-amplitude-sanitize-build/adaptive_amplitude_tests
+
+  adaptive-amplitude-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p adaptive-amplitude-driver
+          cat > adaptive-amplitude-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactAdaptiveAmplitudeEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(adaptive_amplitude_benchmark ../benchmarks/adaptive_amplitude.cpp)
+          target_link_libraries(adaptive_amplitude_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S adaptive-amplitude-driver -B adaptive-amplitude-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build adaptive-amplitude-evidence-build --target adaptive_amplitude_benchmark --parallel 2
+      - name: Run adaptive carrier
+        run: |
+          set -o pipefail
+          ./adaptive-amplitude-evidence-build/adaptive_amplitude_benchmark | tee adaptive-amplitude-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("adaptive-amplitude-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["adaptive_large_qubits"]) == 1024
+          assert int(values["adaptive_large_rounds"]) == 8
+          assert int(values["adaptive_large_h_events"]) == 8192
+          assert int(values["adaptive_large_phase_eligible"]) == 0
+          assert int(values["adaptive_large_hpath_eligible"]) == 1
+          assert int(values["adaptive_large_peak_union_variables"]) <= 12
+          assert int(values["adaptive_large_peak_factor_entries"]) <= 4096
+          assert int(values["adaptive_large_route"]) == 2
+          large_logp = float(values["adaptive_large_log2_probability_probe"])
+          assert math.isfinite(large_logp) and large_logp <= 1e-9
+          assert 0.0 < float(values["adaptive_large_prepare_ms"]) < 10000.0
+          assert 0.0 < float(values["adaptive_large_query_ms"]) < 30000.0
+          assert int(values["adaptive_compare_qubits"]) == 12
+          assert int(values["adaptive_compare_phase_eligible"]) == 1
+          assert int(values["adaptive_compare_hpath_eligible"]) == 1
+          assert int(values["adaptive_compare_phase_branches"]) == 4096
+          assert int(values["adaptive_compare_peak_factor_entries"]) <= 16
+          assert int(values["adaptive_compare_structural_log2_margin"]) >= 8
+          assert int(values["adaptive_compare_route"]) == 2
+          assert float(values["adaptive_compare_hpath_error"]) <= 1e-11
+          assert float(values["adaptive_compare_phase_error"]) <= 1e-11
+          assert int(values["state_expansion_materialized"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum adaptive-amplitude-evidence.txt | tee adaptive-amplitude-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-adaptive-amplitude-evidence
+          path: |
+            adaptive-amplitude-evidence.txt
+            adaptive-amplitude-evidence.sha256

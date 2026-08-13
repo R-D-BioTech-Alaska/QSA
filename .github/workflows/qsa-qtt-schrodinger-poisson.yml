@@ -1,0 +1,115 @@
+name: QSA Exact QTT Schrodinger Poisson
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qqtt.hpp"
+      - "include/qubit/qqtt_poisson.hpp"
+      - "include/qubit/qqtt_schrodinger_poisson.hpp"
+      - "include/qubit/qqtt_sp_invariants.hpp"
+      - "tests/test_exact_qtt_schrodinger_poisson.cpp"
+      - "benchmarks/qtt_schrodinger_poisson.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-qtt-schrodinger-poisson.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qtt-sp-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact QTT Schrodinger-Poisson test
+        shell: bash
+        run: |
+          mkdir -p qtt-sp-driver
+          cat > qtt-sp-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAQTTSchrodingerPoissonCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(qtt_sp_tests ../tests/test_exact_qtt_schrodinger_poisson.cpp)
+          target_include_directories(qtt_sp_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(qtt_sp_tests PRIVATE /W4)
+          else()
+              target_compile_options(qtt_sp_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME qtt_sp_tests COMMAND qtt_sp_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S qtt-sp-driver -B qtt-sp-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build qtt-sp-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir qtt-sp-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  qtt-sp-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_exact_qtt_schrodinger_poisson.cpp -o qtt-sp-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./qtt-sp-sanitize
+
+  qtt-sp-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/qtt_schrodinger_poisson.cpp -o qtt-sp-benchmark
+      - name: Run exact structured carrier
+        run: |
+          set -o pipefail
+          ./qtt-sp-benchmark | tee qtt-sp-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("qtt-sp-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          def number(name):
+              return float(values[name])
+          assert int(values["qtt_sp_bits"]) == 4096
+          assert int(values["qtt_sp_logical_domain_exponent"]) == 4096
+          assert int(values["qtt_sp_wave_terms"]) == 3
+          assert int(values["qtt_sp_density_terms"]) <= 4
+          assert int(values["qtt_sp_potential_terms"]) <= 4
+          assert int(values["qtt_sp_hamiltonian_terms"]) <= 4
+          assert int(values["qtt_sp_rhs_qtt_rank"]) <= 4
+          assert int(values["qtt_sp_rhs_qtt_descriptor_scalars"]) < 600000
+          assert number("qtt_sp_wave_mean_norm_squared") > 0.0
+          assert abs(number("qtt_sp_hamiltonian_expectation_imag")) <= 1e-10
+          assert abs(number("qtt_sp_norm_rate")) <= 1e-10
+          assert number("qtt_sp_poisson_residual_max") <= 1e-11
+          assert number("qtt_sp_selected_error") <= 1e-9
+          assert number("qtt_sp_solve_ms") < 10000.0
+          assert number("qtt_sp_compile_ms") < 10000.0
+          assert number("qtt_sp_query_ms") < 10000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum qtt-sp-evidence.txt | tee qtt-sp-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-qtt-schrodinger-poisson-evidence
+          path: |
+            qtt-sp-evidence.txt
+            qtt-sp-evidence.sha256

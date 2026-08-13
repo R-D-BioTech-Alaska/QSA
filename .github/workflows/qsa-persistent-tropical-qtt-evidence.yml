@@ -1,0 +1,66 @@
+name: QSA Persistent Tropical QTT Evidence
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qtropical_qtt.hpp"
+      - "include/qubit/qpersistent_tropical_qtt.hpp"
+      - "tests/test_persistent_tropical_qtt.cpp"
+      - "benchmarks/persistent_tropical_qtt.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-persistent-tropical-qtt.yml"
+      - ".github/workflows/qsa-persistent-tropical-qtt-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  persistent-tropical-qtt-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/persistent_tropical_qtt.cpp -o persistent-tropical-qtt-benchmark
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run persistent update controls
+        run: |
+          set -o pipefail
+          ./persistent-tropical-qtt-benchmark | tee persistent-tropical-qtt-evidence.txt
+      - name: Enforce evidence thresholds
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("persistent-tropical-qtt-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          def number(name):
+              return float(values[name])
+          assert int(values["persistent_tropical_bits"]) == 4096
+          assert int(values["persistent_tropical_rank"]) == 8
+          assert int(values["persistent_tropical_tree_nodes"]) == 8191
+          assert int(values["persistent_tropical_tree_depth"]) == 12
+          assert int(values["persistent_tropical_transfer_entries"]) == 522817
+          assert int(values["persistent_tropical_update_nodes_created"]) == 13
+          assert int(values["persistent_tropical_update_transfer_entries_created"]) == 713
+          assert number("persistent_tropical_update_energy_error") == 0.0
+          assert number("persistent_tropical_reconstructed_energy_error") == 0.0
+          assert number("persistent_tropical_update_speedup") > 2.0
+          assert number("persistent_tropical_selected_over_all_bits_speedup") > 2.0
+          assert number("persistent_tropical_build_ms") < 5000.0
+          assert number("persistent_tropical_update_ms") < 1000.0
+          assert number("persistent_tropical_root_query_ms") < 1000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum persistent-tropical-qtt-evidence.txt | tee persistent-tropical-qtt-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-persistent-tropical-qtt-evidence
+          path: |
+            persistent-tropical-qtt-evidence.txt
+            persistent-tropical-qtt-evidence.sha256

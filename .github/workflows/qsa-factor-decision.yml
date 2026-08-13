@@ -1,0 +1,89 @@
+name: QSA Exact Factor Decision
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qfactor.hpp"
+      - "include/qubit/qfactor_decision.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_exact_factor_decision.cpp"
+      - "benchmarks/factor_decision.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-factor-decision.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  decision-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create standalone decision build
+        shell: bash
+        run: |
+          mkdir -p decision-driver
+          cat > decision-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAFactorDecisionCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(decision_tests ../tests/test_exact_factor_decision.cpp ../src/qfactor.cpp)
+          target_include_directories(decision_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(decision_tests PRIVATE /W4)
+          else()
+              target_compile_options(decision_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME decision_tests COMMAND decision_tests)
+          EOF
+      - name: Configure
+        run: cmake -S decision-driver -B decision-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build decision-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir decision-build -C Release --output-on-failure
+
+  decision-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_exact_factor_decision.cpp src/qfactor.cpp -o factor-decision-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./factor-decision-sanitize
+
+  decision-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build benchmark
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/factor_decision.cpp src/qfactor.cpp -o factor-decision-benchmark
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run matched controls
+        run: |
+          set -o pipefail
+          ./factor-decision-benchmark | tee factor-decision-evidence.txt
+      - name: Hash evidence
+        run: sha256sum factor-decision-evidence.txt | tee factor-decision-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-factor-decision-evidence
+          path: |
+            factor-decision-evidence.txt
+            factor-decision-evidence.sha256
