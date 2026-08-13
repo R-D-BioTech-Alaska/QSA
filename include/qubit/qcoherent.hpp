@@ -227,13 +227,17 @@ private:
         }
     }
 
+    [[nodiscard]] static bool finite_complex(const QComplex& value) noexcept {
+        return std::isfinite(value.re) && std::isfinite(value.im);
+    }
+
     void require_finite() const {
         for (const CoherentTerm& term : terms_) {
-            if (!finite(term.coefficient)) {
+            if (!finite_complex(term.coefficient)) {
                 throw QStateError("Coherent superposition coefficient is non-finite");
             }
             for (const QComplex& amplitude : term.amplitudes) {
-                if (!finite(amplitude)) {
+                if (!finite_complex(amplitude)) {
                     throw QStateError("Coherent superposition amplitude is non-finite");
                 }
             }
@@ -249,7 +253,7 @@ private:
     }
 
     [[nodiscard]] static double require_real(const QComplex& value, const char* message) {
-        if (!finite(value)) {
+        if (!finite_complex(value)) {
             throw QStateError(message);
         }
         const double scale = 1.0 + std::abs(value.re);
