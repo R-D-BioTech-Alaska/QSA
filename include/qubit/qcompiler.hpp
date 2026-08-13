@@ -265,11 +265,13 @@ private:
             case OperationCode::Rx:
             case OperationCode::Ry:
             case OperationCode::Rz:
+                return false;
             case OperationCode::BitFlipTrajectory:
             case OperationCode::PhaseFlipTrajectory:
             case OperationCode::DepolarizingTrajectory:
             case OperationCode::AmplitudeDampingTrajectory:
-                return false;
+                throw QStateError(
+                    "Marginal compiler causal pruning does not accept trajectory operations");
             default:
                 throw QStateError("Marginal compiler received an unknown opcode");
         }
