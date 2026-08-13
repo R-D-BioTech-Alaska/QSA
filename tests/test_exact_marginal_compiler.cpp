@@ -79,6 +79,36 @@ void exact_small_global_control() {
             "marginal compiler did not prepare its causal component");
 }
 
+void indexed_compiler_matches_one_shot() {
+    constexpr std::size_t qubits = 24U;
+    const std::vector<Operation> operations = layered_chain(qubits, 6U, true);
+    ExactCausalOperationIndex index(qubits, operations);
+    const std::vector<std::uint8_t> zero{0U};
+    const std::vector<std::uint8_t> one{1U};
+
+    for (const QubitId qubit : std::vector<QubitId>{0U, 3U, 11U}) {
+        const std::vector<QubitId> query{qubit};
+        ExactMarginalCompilerPlan one_shot(qubits, operations, query);
+        ExactIndexedMarginalCompilerPlan indexed(index, query);
+        require(indexed.stats().causal_qubits == one_shot.stats().causal_qubits,
+                "indexed marginal compiler causal qubit count differs from one-shot compiler");
+        require(indexed.stats().causal_operations == one_shot.stats().causal_operations,
+                "indexed marginal compiler causal operation count differs from one-shot compiler");
+        require(indexed.causal_global_qubits() == one_shot.causal_global_qubits(),
+                "indexed marginal compiler causal support differs from one-shot compiler");
+        require(close(indexed.probability(zero), one_shot.probability(zero)),
+                "indexed marginal compiler zero probability differs from one-shot compiler");
+        require(close(indexed.probability(one), one_shot.probability(one)),
+                "indexed marginal compiler one probability differs from one-shot compiler");
+    }
+
+    const std::vector<QubitId> empty{};
+    const std::vector<std::uint8_t> empty_bits{};
+    ExactIndexedMarginalCompilerPlan identity(index, empty);
+    require(close(identity.probability(empty_bits), 1.0),
+            "indexed marginal compiler empty query must equal one");
+}
+
 void temporal_cone_beats_static_connectivity() {
     constexpr std::size_t qubits = 32U;
     constexpr std::size_t layers = 5U;
@@ -179,6 +209,20 @@ void rejection_cases() {
 
     rejected = false;
     try {
+        const std::vector<Operation> operations = layered_chain(8U, 3U, false);
+        ExactCausalOperationIndex index(8U, operations);
+        const std::vector<QubitId> query{0U};
+        ExactMarginalCompilerConfig config;
+        config.max_causal_operations = 2U;
+        ExactIndexedMarginalCompilerPlan invalid(index, query, config);
+        (void)invalid;
+    } catch (const QStateError&) {
+        rejected = true;
+    }
+    require(rejected, "indexed marginal compiler ignored its causal operation cap");
+
+    rejected = false;
+    try {
         const std::vector<Operation> operations{
             {OperationCode::H, 0U},
             {OperationCode::AmplitudeDampingTrajectory, 1U, 0U, 0.1, 0.25},
@@ -197,6 +241,7 @@ void rejection_cases() {
 
 int main() {
     exact_small_global_control();
+    indexed_compiler_matches_one_shot();
     temporal_cone_beats_static_connectivity();
     empty_query_identity();
     rejection_cases();
