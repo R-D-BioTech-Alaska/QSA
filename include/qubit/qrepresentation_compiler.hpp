@@ -38,13 +38,41 @@ struct ExactRepresentationFabricStats {
     std::size_t largest_component_operations{0U};
 };
 
+struct ExactRepresentationComponentReceipt {
+    std::size_t component{0U};
+    std::size_t generation{0U};
+    std::size_t qubits{0U};
+    std::size_t operations{0U};
+    std::size_t declared_dependencies{0U};
+    bool program_ready{false};
+    std::size_t cached_plans{0U};
+};
+
+struct ExactRepresentationIslandExecutionReceipt {
+    std::size_t component{0U};
+    std::size_t generation{0U};
+    std::size_t component_qubits{0U};
+    std::size_t component_operations{0U};
+    std::size_t query_qubits{0U};
+    std::size_t causal_qubits{0U};
+    std::size_t causal_operations{0U};
+    std::size_t executor_components{0U};
+    std::size_t estimated_executor_bytes{0U};
+    std::size_t cache_hits{0U};
+    std::size_t cache_misses{0U};
+    std::array<std::size_t, 9> route_counts{};
+};
+
 struct ExactRepresentationQueryReceipt {
+    std::size_t global_qubits{0U};
     std::size_t query_qubits{0U};
     std::size_t untouched_query_qubits{0U};
     std::size_t fabric_components{0U};
     std::size_t executor_components{0U};
     std::size_t causal_qubits{0U};
     std::size_t causal_operations{0U};
+    std::size_t noncausal_qubits{0U};
+    std::size_t estimated_executor_bytes{0U};
     std::size_t cache_hits{0U};
     std::size_t cache_misses{0U};
     std::array<std::size_t, 9> route_counts{};
@@ -53,6 +81,7 @@ struct ExactRepresentationQueryReceipt {
 struct ExactRepresentationProbabilityResult {
     double value{0.0};
     ExactRepresentationQueryReceipt receipt{};
+    std::vector<ExactRepresentationIslandExecutionReceipt> islands{};
 };
 
 class ExactRepresentationFabric {
@@ -101,6 +130,7 @@ public:
         validate_query(qubits, bits);
         ExactRepresentationProbabilityResult result;
         result.value = 1.0;
+        result.receipt.global_qubits = qubit_count_;
         result.receipt.query_qubits = qubits.size();
         ++stats_.queries;
 
@@ -118,6 +148,7 @@ public:
                 ++result.receipt.untouched_query_qubits;
                 if (bits[index] != 0U) {
                     result.value = 0.0;
+                    result.receipt.noncausal_qubits = qubit_count_;
                     return result;
                 }
                 continue;
@@ -158,14 +189,31 @@ public:
             const ExactCompiledMarginalProgramStats after = program.stats();
             const std::size_t hits = after.cache_hits - before.cache_hits;
             const std::size_t misses = after.cache_misses - before.cache_misses;
+            ExactRepresentationIslandExecutionReceipt island;
+            island.component = component_id;
+            island.generation = component.generation;
+            island.component_qubits = component.qubits.size();
+            island.component_operations = component.operations.size();
+            island.query_qubits = local_qubits.size();
+            island.causal_qubits = plan.stats().causal_qubits;
+            island.causal_operations = plan.stats().causal_operations;
+            island.executor_components = plan.stats().components;
+            island.estimated_executor_bytes = plan.stats().estimated_bytes;
+            island.cache_hits = hits;
+            island.cache_misses = misses;
+
             result.receipt.cache_hits += hits;
             result.receipt.cache_misses += misses;
             stats_.cache_hits += hits;
             stats_.cache_misses += misses;
             ++result.receipt.fabric_components;
             result.receipt.executor_components += plan.stats().components;
-            result.receipt.causal_qubits += plan.stats().causal_qubits;
-            result.receipt.causal_operations += plan.stats().causal_operations;
+            result.receipt.causal_qubits = checked_sum(
+                result.receipt.causal_qubits, plan.stats().causal_qubits);
+            result.receipt.causal_operations = checked_sum(
+                result.receipt.causal_operations, plan.stats().causal_operations);
+            result.receipt.estimated_executor_bytes = checked_sum(
+                result.receipt.estimated_executor_bytes, plan.stats().estimated_bytes);
             for (const ExactComponentReceipt& receipt : plan.component_receipts()) {
                 if (!receipt.prepared) {
                     continue;
@@ -175,12 +223,39 @@ public:
                     throw QStateError("Representation fabric received an unknown execution route");
                 }
                 ++result.receipt.route_counts[route];
+                ++island.route_counts[route];
             }
+            result.islands.push_back(std::move(island));
             result.value *= plan.probability(local_bits);
             if (result.value == 0.0) {
-                return result;
+                break;
             }
             cursor = end;
+        }
+        if (result.receipt.causal_qubits > qubit_count_) {
+            throw QStateError("Representation fabric causal receipt exceeds global qubit count");
+        }
+        result.receipt.noncausal_qubits = qubit_count_ - result.receipt.causal_qubits;
+        return result;
+    }
+
+    [[nodiscard]] std::vector<ExactRepresentationComponentReceipt> component_receipts() const {
+        std::vector<ExactRepresentationComponentReceipt> result;
+        result.reserve(stats_.active_components);
+        for (std::size_t index = 0U; index < components_.size(); ++index) {
+            const Component& component = components_[index];
+            if (!component.active) {
+                continue;
+            }
+            result.push_back(ExactRepresentationComponentReceipt{
+                index,
+                component.generation,
+                component.qubits.size(),
+                component.operations.size(),
+                component.dependencies,
+                component.program != nullptr,
+                component.program ? component.program->stats().cached_plans : 0U,
+            });
         }
         return result;
     }
@@ -199,6 +274,7 @@ public:
 private:
     struct Component {
         bool active{false};
+        std::size_t generation{1U};
         std::size_t dependencies{0U};
         std::vector<QubitId> qubits{};
         std::vector<Operation> operations{};
@@ -304,8 +380,9 @@ private:
                     additions.push_back(qubit);
                 }
             }
-            const std::size_t next_qubits = component.qubits.size() + additions.size();
-            const std::size_t next_operations = component.operations.size() + (operation != nullptr ? 1U : 0U);
+            const std::size_t next_qubits = checked_sum(component.qubits.size(), additions.size());
+            const std::size_t next_operations = checked_sum(
+                component.operations.size(), operation != nullptr ? 1U : 0U);
             if (next_qubits > config_.max_component_qubits ||
                 next_operations > config_.max_component_operations) {
                 throw QStateError("Representation fabric component growth exceeds configured cap");
@@ -314,6 +391,8 @@ private:
             component.operations.reserve(next_operations);
             if (operation != nullptr || !additions.empty()) {
                 invalidate(component);
+            } else if (dependency) {
+                increment_generation(component);
             }
             component.qubits.insert(component.qubits.end(), additions.begin(), additions.end());
             std::sort(component.qubits.begin(), component.qubits.end());
@@ -333,9 +412,13 @@ private:
         std::vector<QubitId> combined = support;
         std::vector<Operation> operations;
         std::size_t operation_count = operation != nullptr ? 1U : 0U;
+        std::size_t dependencies = dependency ? 1U : 0U;
+        std::size_t generation = 1U;
         for (const std::size_t id : ids) {
             combined.insert(combined.end(), components_[id].qubits.begin(), components_[id].qubits.end());
-            operation_count += components_[id].operations.size();
+            operation_count = checked_sum(operation_count, components_[id].operations.size());
+            dependencies = checked_sum(dependencies, components_[id].dependencies);
+            generation = std::max(generation, components_[id].generation);
         }
         std::sort(combined.begin(), combined.end());
         combined.erase(std::unique(combined.begin(), combined.end()), combined.end());
@@ -344,14 +427,15 @@ private:
             throw QStateError("Representation fabric merge exceeds configured cap");
         }
         operations.reserve(operation_count);
-        std::size_t dependencies = dependency ? 1U : 0U;
         for (const std::size_t id : ids) {
             operations.insert(
                 operations.end(), components_[id].operations.begin(), components_[id].operations.end());
-            dependencies += components_[id].dependencies;
         }
         if (operation != nullptr) {
             operations.push_back(*operation);
+        }
+        if (generation == std::numeric_limits<std::size_t>::max()) {
+            throw QStateError("Representation fabric generation counter overflowed");
         }
 
         const std::size_t target_id = ids.front();
@@ -362,6 +446,7 @@ private:
         }
         Component& target = components_[target_id];
         target.active = true;
+        target.generation = generation + 1U;
         target.dependencies = dependencies;
         target.qubits = std::move(combined);
         target.operations = std::move(operations);
@@ -372,16 +457,24 @@ private:
         for (const QubitId qubit : target.qubits) {
             component_of_[static_cast<std::size_t>(qubit)] = target_id;
         }
-        stats_.component_merges += ids.size() - 1U;
+        stats_.component_merges = checked_sum(stats_.component_merges, ids.size() - 1U);
         stats_.active_components -= ids.size() - 1U;
         update_maxima(target);
     }
 
-    void invalidate(Component& component) noexcept {
+    void invalidate(Component& component) {
         if (component.program) {
             component.program.reset();
             ++stats_.component_invalidations;
         }
+        increment_generation(component);
+    }
+
+    static void increment_generation(Component& component) {
+        if (component.generation == std::numeric_limits<std::size_t>::max()) {
+            throw QStateError("Representation fabric generation counter overflowed");
+        }
+        ++component.generation;
     }
 
     void ensure_program(Component& component) {
@@ -441,6 +534,13 @@ private:
             default:
                 throw QStateError("Representation fabric supports unitary circuit operations only");
         }
+    }
+
+    [[nodiscard]] static std::size_t checked_sum(std::size_t left, std::size_t right) {
+        if (right > std::numeric_limits<std::size_t>::max() - left) {
+            throw QStateError("Representation fabric resource accounting overflowed");
+        }
+        return left + right;
     }
 
     [[nodiscard]] static constexpr std::size_t npos() noexcept {
