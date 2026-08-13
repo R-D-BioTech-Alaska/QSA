@@ -23,7 +23,7 @@ struct DenseReference {
     DenseReference(std::span<const std::uint8_t> input_bits)
         : qubits(input_bits.size()) {
         const std::size_t dimension = std::size_t{1U} << qubits;
-        amplitudes.assign(dimension, {});
+        amplitudes.assign(dimension, qubit::QComplex{});
         std::size_t basis = 0U;
         for (std::size_t qubit = 0U; qubit < qubits; ++qubit) {
             basis |= static_cast<std::size_t>(input_bits[qubit]) << qubit;
@@ -75,7 +75,7 @@ struct DenseReference {
 
     std::vector<qubit::QComplex> marginal(std::span<const std::size_t> retained) const {
         const std::size_t entries = std::size_t{1U} << retained.size();
-        std::vector<qubit::QComplex> result(entries, {});
+        std::vector<qubit::QComplex> result(entries, qubit::QComplex{});
         for (std::size_t basis = 0U; basis < amplitudes.size(); ++basis) {
             std::size_t index = 0U;
             for (std::size_t position = 0U; position < retained.size(); ++position) {
