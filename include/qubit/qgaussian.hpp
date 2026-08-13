@@ -121,16 +121,17 @@ public:
         const std::size_t second_local = local_index(*component, second);
         const double c = std::sqrt(transmissivity);
         const double s = std::sqrt(1.0 - transmissivity);
-        apply_selected(
-            *component,
-            {2U * first_local, 2U * first_local + 1U,
-             2U * second_local, 2U * second_local + 1U},
-            {
-                c, 0.0, s, 0.0,
-                0.0, c, 0.0, s,
-                -s, 0.0, c, 0.0,
-                0.0, -s, 0.0, c,
-            });
+        const std::array<std::size_t, 4> selected{
+            2U * first_local, 2U * first_local + 1U,
+            2U * second_local, 2U * second_local + 1U,
+        };
+        const std::array<double, 16> transform{
+            c, 0.0, s, 0.0,
+            0.0, c, 0.0, s,
+            -s, 0.0, c, 0.0,
+            0.0, -s, 0.0, c,
+        };
+        apply_selected(*component, selected, transform);
         require_finite(*component);
         refresh_stats();
     }
@@ -277,10 +278,8 @@ private:
 
     void apply_single(std::size_t mode, const std::array<double, 4>& matrix) {
         auto [component, local] = locate(mode);
-        apply_selected(
-            *component,
-            {2U * local, 2U * local + 1U},
-            {matrix[0], matrix[1], matrix[2], matrix[3]});
+        const std::array<std::size_t, 2> selected{2U * local, 2U * local + 1U};
+        apply_selected(*component, selected, matrix);
         require_finite(*component);
     }
 
