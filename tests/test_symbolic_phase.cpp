@@ -31,27 +31,63 @@ void require_close(
     }
 }
 
-qubit::QMatrix4 controlled_phase(double angle) {
-    qubit::QMatrix4 matrix{};
-    matrix.values[0] = {1.0, 0.0};
-    matrix.values[5] = {1.0, 0.0};
-    matrix.values[10] = {1.0, 0.0};
-    matrix.values[15] = qubit::QComplex::from_polar(1.0, angle);
-    return matrix;
-}
+struct DenseReference {
+    std::size_t qubits{0U};
+    std::vector<qubit::QComplex> amplitudes{};
 
-qubit::QRegister plus_state(std::size_t qubits) {
-    const std::size_t dimension = std::size_t{1U} << qubits;
-    const double amplitude = std::exp2(-0.5 * static_cast<double>(qubits));
-    std::vector<qubit::QComplex> values(
-        dimension, qubit::QComplex{amplitude, 0.0});
-    return qubit::QRegister::from_amplitudes(std::move(values));
-}
+    explicit DenseReference(std::size_t count) : qubits(count) {
+        const std::size_t dimension = std::size_t{1U} << qubits;
+        const double amplitude = std::exp2(-0.5 * static_cast<double>(qubits));
+        amplitudes.assign(dimension, qubit::QComplex{amplitude, 0.0});
+    }
+
+    void apply_single(qubit::QubitId qubit, const qubit::QMatrix2& matrix) {
+        const std::size_t mask = std::size_t{1U} << qubit;
+        for (std::size_t basis = 0U; basis < amplitudes.size(); ++basis) {
+            if ((basis & mask) != 0U) {
+                continue;
+            }
+            const std::size_t one = basis | mask;
+            const qubit::QComplex zero_value = amplitudes[basis];
+            const qubit::QComplex one_value = amplitudes[one];
+            amplitudes[basis] = matrix(0U, 0U) * zero_value + matrix(0U, 1U) * one_value;
+            amplitudes[one] = matrix(1U, 0U) * zero_value + matrix(1U, 1U) * one_value;
+        }
+    }
+
+    void apply_controlled_phase(
+        qubit::QubitId first,
+        qubit::QubitId second,
+        double angle) {
+        const std::size_t mask =
+            (std::size_t{1U} << first) | (std::size_t{1U} << second);
+        const qubit::QComplex phase = qubit::QComplex::from_polar(1.0, angle);
+        for (std::size_t basis = 0U; basis < amplitudes.size(); ++basis) {
+            if ((basis & mask) == mask) {
+                amplitudes[basis] *= phase;
+            }
+        }
+    }
+
+    void apply_cz(qubit::QubitId first, qubit::QubitId second) {
+        apply_controlled_phase(first, second, 3.141592653589793238462643383279502884);
+    }
+
+    void apply_swap(qubit::QubitId first, qubit::QubitId second) {
+        const std::size_t first_mask = std::size_t{1U} << first;
+        const std::size_t second_mask = std::size_t{1U} << second;
+        const std::size_t both = first_mask | second_mask;
+        for (std::size_t basis = 0U; basis < amplitudes.size(); ++basis) {
+            if ((basis & first_mask) == 0U && (basis & second_mask) != 0U) {
+                std::swap(amplitudes[basis], amplitudes[basis ^ both]);
+            }
+        }
+    }
+};
 
 void dense_equivalence() {
     using qubit::ExactSymbolicPhaseConfig;
     using qubit::ExactSymbolicPhaseGraphSum;
-    using qubit::QRegister;
 
     constexpr std::array<double, 6> angles{
         0.173, -0.411, 0.927, -1.217, 1.733, -2.119,
@@ -69,43 +105,43 @@ void dense_equivalence() {
             compact.bind_symbol(
                 static_cast<qubit::SymbolicPhaseId>(symbol), angles[symbol]);
         }
-        QRegister dense = plus_state(qubits);
+        DenseReference dense(qubits);
 
         for (std::size_t step = 0U; step < 4U; ++step) {
             const auto target = static_cast<qubit::QubitId>(step % qubits);
             const auto symbol = static_cast<qubit::SymbolicPhaseId>(step);
             compact.apply_h(target);
-            dense.apply_h(target);
+            dense.apply_single(target, qubit::gates::h());
 
             if ((step & 1U) == 0U) {
                 compact.apply_rz_symbol(target, symbol);
-                dense.apply_rz(target, angles[step]);
+                dense.apply_single(target, qubit::gates::rz(angles[step]));
                 compact.apply_rz_symbol(target, symbol, -1);
-                dense.apply_rz(target, -angles[step]);
+                dense.apply_single(target, qubit::gates::rz(-angles[step]));
             } else {
                 const auto other = static_cast<qubit::QubitId>((step + 1U) % qubits);
                 if (other != target) {
                     compact.apply_controlled_phase_symbol(target, other, symbol);
-                    dense.apply_two(target, other, controlled_phase(angles[step]));
+                    dense.apply_controlled_phase(target, other, angles[step]);
                     compact.apply_controlled_phase_symbol(target, other, symbol, -1);
-                    dense.apply_two(target, other, controlled_phase(-angles[step]));
+                    dense.apply_controlled_phase(target, other, -angles[step]);
                 }
             }
 
             compact.apply_h(target);
-            dense.apply_h(target);
+            dense.apply_single(target, qubit::gates::h());
             compact.apply_t(target);
-            dense.apply_t(target);
+            dense.apply_single(target, qubit::gates::t());
             compact.apply_sdg(target);
-            dense.apply_sdg(target);
+            dense.apply_single(target, qubit::gates::sdg());
         }
 
         compact.apply_h(0U);
-        dense.apply_h(0U);
+        dense.apply_single(0U, qubit::gates::h());
         compact.apply_rz_symbol(0U, 4U);
-        dense.apply_rz(0U, angles[4]);
+        dense.apply_single(0U, qubit::gates::rz(angles[4]));
         compact.apply_h(0U);
-        dense.apply_h(0U);
+        dense.apply_single(0U, qubit::gates::h());
 
         if (qubits > 2U) {
             compact.apply_cz(0U, 2U);
@@ -115,11 +151,10 @@ void dense_equivalence() {
         }
 
         const auto observed = compact.materialize(6U);
-        const auto expected = dense.materialize(6U);
-        require(observed.size() == expected.size(), "symbolic dense size mismatch");
+        require(observed.size() == dense.amplitudes.size(), "symbolic dense size mismatch");
         for (std::size_t index = 0U; index < observed.size(); ++index) {
             require_close(
-                observed[index], expected[index], 8e-12,
+                observed[index], dense.amplitudes[index], 8e-12,
                 "symbolic arbitrary-angle amplitude mismatch");
         }
     }
