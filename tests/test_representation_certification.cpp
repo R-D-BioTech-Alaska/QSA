@@ -1,14 +1,19 @@
+#include "qubit/qrepresentation_compiler.hpp"
 #include "qubit/qrouter.hpp"
+#include "qubit/qsemantic_tripair.hpp"
 
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
 using qubit::Operation;
 using qubit::OperationCode;
 using qubit::QRegister;
+using qubit::QubitId;
 using qubit::RepresentationAdvisor;
 using qubit::RepresentationKind;
 
@@ -16,6 +21,216 @@ void require(bool condition, const char* message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+void require_close(double left, double right, const char* message) {
+    require(std::abs(left - right) <= 2e-11, message);
+}
+
+void append(
+    qubit::ExactRepresentationFabric& fabric,
+    std::vector<Operation>& operations,
+    const Operation& operation) {
+    fabric.append(operation);
+    operations.push_back(operation);
+}
+
+void exact_representation_fabric() {
+    qubit::ExactRepresentationFabric fabric(12U);
+    std::vector<Operation> operations;
+    append(fabric, operations, {OperationCode::H, 0U});
+    append(fabric, operations, {OperationCode::Cnot, 0U, 1U});
+    append(fabric, operations, {OperationCode::Ry, 2U, 0U, 0.37});
+    append(fabric, operations, {OperationCode::Cnot, 2U, 3U});
+    append(fabric, operations, {OperationCode::H, 4U});
+
+    const std::vector<QubitId> query{0U, 2U, 4U};
+    const std::vector<std::uint8_t> zero(3U, 0U);
+    const auto first = fabric.marginal_probability(query, zero);
+    const auto control = qubit::ExactPreparedProbabilityPlan::for_marginals(12U, operations);
+    require_close(
+        first.value,
+        control.marginal_probability(query, zero).value,
+        "representation fabric differs from exact global control");
+    require(fabric.stats().active_components == 3U,
+            "representation fabric did not preserve independent islands");
+    require(first.receipt.fabric_components == 3U,
+            "representation fabric queried excess islands");
+    require(first.receipt.local_dense_islands == 3U &&
+            first.receipt.broker_islands == 0U,
+            "bounded causal islands did not select certified local dense execution");
+
+    const auto warm = fabric.marginal_probability(query, zero);
+    require(warm.receipt.cache_hits == 3U && warm.receipt.cache_misses == 0U,
+            "representation fabric did not reuse unchanged island programs");
+
+    append(fabric, operations, {OperationCode::Cnot, 1U, 2U});
+    require(fabric.stats().active_components == 2U &&
+            fabric.stats().component_merges == 1U,
+            "representation fabric did not merge only the crossed closure");
+    const auto merged = fabric.marginal_probability(query, zero);
+    const auto merged_control = qubit::ExactPreparedProbabilityPlan::for_marginals(12U, operations);
+    require_close(
+        merged.value,
+        merged_control.marginal_probability(query, zero).value,
+        "representation fabric cross-island merge changed the exact result");
+    require(merged.receipt.cache_hits >= 1U && merged.receipt.cache_misses >= 1U,
+            "representation fabric failed to preserve the untouched island cache");
+
+    const std::array<QubitId, 3> declared{0U, 4U, 5U};
+    fabric.declare_dependency(declared);
+    const std::vector<QubitId> declared_query{0U, 2U, 4U, 5U};
+    const std::vector<std::uint8_t> declared_zero(4U, 0U);
+    const auto declared_result = fabric.marginal_probability(declared_query, declared_zero);
+    require_close(
+        declared_result.value,
+        merged_control.marginal_probability(declared_query, declared_zero).value,
+        "structural hyperedge fabricated numerical coupling");
+    require(fabric.stats().active_components == 1U &&
+            fabric.stats().declared_dependencies == 1U,
+            "declared hyperedge did not form one conservative dependency island");
+
+    qubit::ExactRepresentationFabricConfig bounded_config;
+    bounded_config.max_component_qubits = 2U;
+    qubit::ExactRepresentationFabric bounded(4U, bounded_config);
+    bounded.append({OperationCode::H, 0U});
+    bounded.append({OperationCode::Cnot, 0U, 1U});
+    bool rejected = false;
+    try {
+        bounded.append({OperationCode::Cnot, 1U, 2U});
+    } catch (const qubit::QStateError&) {
+        rejected = true;
+    }
+    require(rejected && bounded.stats().operations == 2U,
+            "representation fabric did not fail closed on component growth");
+
+    fabric.reset();
+    const std::array<QubitId, 1> untouched{0U};
+    const std::array<std::uint8_t, 1> one{1U};
+    require(fabric.marginal_probability(untouched, one).value == 0.0,
+            "representation fabric reset did not restore exact zero state");
+}
+
+void representation_transition_contract() {
+    qubit::ExactRepresentationFabricConfig config;
+    config.max_local_dense_qubits = 2U;
+    config.max_local_dense_state_scalars = 4U;
+    config.max_local_dense_scalar_sweep_units = 128U;
+    qubit::ExactRepresentationFabric fabric(3U, config);
+    std::vector<Operation> operations;
+    append(fabric, operations, {OperationCode::Ry, 0U, 0U, 0.31});
+    append(fabric, operations, {OperationCode::Cnot, 0U, 1U});
+    append(fabric, operations, {OperationCode::Cnot, 1U, 2U});
+
+    const std::array<QubitId, 1> left_query{0U};
+    const std::array<QubitId, 1> right_query{2U};
+    const std::array<std::uint8_t, 1> zero{0U};
+    const auto global = qubit::ExactPreparedProbabilityPlan::for_marginals(3U, operations);
+
+    const auto local = fabric.marginal_probability(left_query, zero);
+    require(local.islands.size() == 1U &&
+            local.islands[0].execution == qubit::ExactRepresentationExecutionKind::LocalDense,
+            "small causal slice did not select local dense execution");
+    require(local.islands[0].local_dense_eligible &&
+            local.islands[0].local_dense_state_scalars == 4U &&
+            local.islands[0].local_dense_payload_bytes == 4U * sizeof(qubit::QComplex),
+            "local dense resource certificate is incorrect");
+    require_close(
+        local.value,
+        global.marginal_probability(left_query, zero).value,
+        "local dense route differs from exact global control");
+
+    const auto wide = fabric.marginal_probability(right_query, zero);
+    require(wide.islands.size() == 1U &&
+            wide.islands[0].execution == qubit::ExactRepresentationExecutionKind::Broker,
+            "wide causal slice did not fall through to exact broker");
+    require(!wide.islands[0].local_dense_eligible &&
+            wide.islands[0].transition.kind ==
+                qubit::ExactRepresentationTransitionKind::SameGenerationReplay &&
+            wide.islands[0].transition.exact_replay,
+            "same-generation representation transition was not certified");
+    require_close(
+        wide.value,
+        global.marginal_probability(right_query, zero).value,
+        "broker route differs from exact global control after representation transition");
+
+    const auto local_again = fabric.marginal_probability(left_query, zero);
+    require(local_again.islands[0].execution ==
+                qubit::ExactRepresentationExecutionKind::LocalDense &&
+            local_again.islands[0].cache_hits == 1U &&
+            local_again.islands[0].transition.kind ==
+                qubit::ExactRepresentationTransitionKind::SameGenerationReplay,
+            "return transition did not reuse the certified local dense state");
+    require_close(local_again.value, local.value,
+            "representation replay changed the exact local result");
+
+    append(fabric, operations, {OperationCode::Rz, 0U, 0U, 0.19});
+    const auto rebuilt = fabric.marginal_probability(left_query, zero);
+    const auto rebuilt_global = qubit::ExactPreparedProbabilityPlan::for_marginals(3U, operations);
+    require(rebuilt.islands[0].transition.kind ==
+                qubit::ExactRepresentationTransitionKind::GenerationReplay &&
+            rebuilt.islands[0].transition.exact_replay,
+            "numerical generation change did not require exact replay");
+    require_close(
+        rebuilt.value,
+        rebuilt_global.marginal_probability(left_query, zero).value,
+        "generation replay differs from exact global control");
+}
+
+void semantic_tripair_fabric_contract() {
+    qubit::ExactRepresentationFabric fabric(6U);
+    std::vector<Operation> operations;
+    const qubit::SemanticTripairInput first{{0.41, 0.73, 0.29}, {0.17, -0.31, 0.43}};
+    const qubit::SemanticTripairInput second{{0.52, 0.21, 0.66}, {-0.27, 0.38, 0.11}};
+    const qubit::SemanticTripairProgram semantic;
+    const auto first_state = semantic.evaluate(first);
+    const auto second_state = semantic.evaluate(second);
+
+    const auto add_tripair = [&](QubitId base, const qubit::SemanticTripairInput& input) {
+        for (std::size_t local = 0U; local < 3U; ++local) {
+            append(fabric, operations, {
+                OperationCode::Ry,
+                static_cast<QubitId>(base + local),
+                0U,
+                input.theta[local],
+            });
+            append(fabric, operations, {
+                OperationCode::Rz,
+                static_cast<QubitId>(base + local),
+                0U,
+                input.phase[local],
+            });
+        }
+        append(fabric, operations, {OperationCode::Cnot, base, static_cast<QubitId>(base + 1U)});
+        append(fabric, operations, {
+            OperationCode::Cnot,
+            static_cast<QubitId>(base + 1U),
+            static_cast<QubitId>(base + 2U),
+        });
+        append(fabric, operations, {OperationCode::Cnot, static_cast<QubitId>(base + 2U), base});
+    };
+
+    add_tripair(0U, first);
+    add_tripair(3U, second);
+    const std::vector<QubitId> all{0U, 1U, 2U, 3U, 4U, 5U};
+    const std::vector<std::uint8_t> zero(6U, 0U);
+    const auto independent = fabric.marginal_probability(all, zero);
+    require_close(
+        independent.value,
+        first_state.amplitudes[0].norm2() * second_state.amplitudes[0].norm2(),
+        "representation fabric did not preserve independent Semantic Tripair states");
+    require(independent.receipt.fabric_components == 2U,
+            "semantic consumer contract did not remain component local");
+
+    append(fabric, operations, {OperationCode::Cnot, 2U, 3U});
+    const auto coupled = fabric.marginal_probability(all, zero);
+    const auto global = qubit::ExactPreparedProbabilityPlan::for_marginals(6U, operations);
+    require_close(
+        coupled.value,
+        global.marginal_probability(all, zero).value,
+        "semantic consumer cross-island operation changed exact state semantics");
+    require(fabric.stats().active_components == 1U,
+            "semantic consumer cross-island operation did not merge its exact closure");
 }
 
 }  // namespace
@@ -33,10 +248,8 @@ int main() {
             {OperationCode::X, 3U, 0U, 0.0, 0.0},
             {OperationCode::Swap, 3U, 4U, 0.0, 0.0},
         }};
-        const auto features = RepresentationAdvisor::inspect_operations(
-            state, operations, 100'000U);
-        require(features.clifford_only,
-                "Clifford operation list was not certified");
+        const auto features = RepresentationAdvisor::inspect_operations(state, operations, 100'000U);
+        require(features.clifford_only, "Clifford operation list was not certified");
         require(features.stabilizer_input_certified,
                 "computational-basis product input was not certified as stabilizer");
         require(!features.uniform_phase_graph,
@@ -72,10 +285,8 @@ int main() {
             {OperationCode::H, 1U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 1U, 2U, 0.0, 0.0},
         }};
-        const auto features = RepresentationAdvisor::inspect_operations(
-            magic, operations, 100'000U);
-        require(features.clifford_only,
-                "future Clifford circuit was not recognized");
+        const auto features = RepresentationAdvisor::inspect_operations(magic, operations, 100'000U);
+        require(features.clifford_only, "future Clifford circuit was not recognized");
         require(!features.stabilizer_input_certified,
                 "magic input was incorrectly certified as a stabilizer state");
         require(advisor.recommend(features).kind == RepresentationKind::Register,
@@ -104,10 +315,8 @@ int main() {
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::T, 0U, 0U, 0.0, 0.0},
         }};
-        const auto features = RepresentationAdvisor::inspect_operations(
-            state, operations, 100'000U);
-        require(!features.clifford_only,
-                "T gate was incorrectly certified as Clifford");
+        const auto features = RepresentationAdvisor::inspect_operations(state, operations, 100'000U);
+        require(!features.clifford_only, "T gate was incorrectly certified as Clifford");
         require(!features.stabilizer_input_certified,
                 "non-Clifford workload retained stabilizer eligibility");
         require(advisor.recommend(features).kind == RepresentationKind::Register,
@@ -118,8 +327,7 @@ int main() {
         const std::array<Operation, 1> operations{{
             {OperationCode::AmplitudeDampingTrajectory, 0U, 0U, 0.2, 0.5},
         }};
-        const auto features = RepresentationAdvisor::inspect_operations(
-            state, operations, 100'000U);
+        const auto features = RepresentationAdvisor::inspect_operations(state, operations, 100'000U);
         require(!features.clifford_only,
                 "trajectory noise was incorrectly certified as Clifford");
         require(!features.stabilizer_input_certified,
@@ -130,14 +338,16 @@ int main() {
 
     {
         const std::array<Operation, 0> operations{};
-        const auto features = RepresentationAdvisor::inspect_operations(
-            state, operations, 1U);
+        const auto features = RepresentationAdvisor::inspect_operations(state, operations, 1U);
         require(features.clifford_only,
                 "empty operation list should be Clifford compatible");
         require(features.stabilizer_input_certified,
                 "computational-basis product was not certified for an empty circuit");
     }
 
+    exact_representation_fabric();
+    representation_transition_contract();
+    semantic_tripair_fabric_contract();
     std::cout << "representation certification tests passed\n";
     return 0;
 }
