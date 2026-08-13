@@ -1,0 +1,154 @@
+name: QSA Exact Compiled Marginal Program
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qprogram.hpp"
+      - "include/qubit/qcompiler.hpp"
+      - "include/qubit/qcausal_index.hpp"
+      - "include/qubit/qfabric.hpp"
+      - "tests/test_compiled_marginal_program.cpp"
+      - "benchmarks/compiled_marginal_program.cpp"
+      - ".github/workflows/qsa-compiled-marginal-program.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  program-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compiled-program driver
+        shell: bash
+        run: |
+          mkdir -p program-driver
+          cat > program-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactCompiledMarginalProgramCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(compiled_program_tests ../tests/test_compiled_marginal_program.cpp)
+          target_link_libraries(compiled_program_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(compiled_program_tests PRIVATE /W4)
+          else()
+              target_compile_options(compiled_program_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME compiled_program_tests COMMAND compiled_program_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S program-driver -B program-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build program-build --config Release --target compiled_program_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir program-build -C Release --output-on-failure
+
+  program-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p program-driver
+          cat > program-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactCompiledMarginalProgramSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(compiled_program_tests ../tests/test_compiled_marginal_program.cpp)
+          target_link_libraries(compiled_program_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S program-driver -B program-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build program-sanitize-build --target compiled_program_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./program-sanitize-build/compiled_program_tests
+
+  program-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p program-driver
+          cat > program-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactCompiledMarginalProgramEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(compiled_program_benchmark ../benchmarks/compiled_marginal_program.cpp)
+          target_link_libraries(compiled_program_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S program-driver -B program-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build program-evidence-build --target compiled_program_benchmark --parallel 2
+      - name: Run compiled-program carrier
+        run: |
+          set -o pipefail
+          ./program-evidence-build/compiled_program_benchmark | tee compiled-program-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("compiled-program-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["program_qubits"]) == 10000
+          assert int(values["program_operations"]) == 99998
+          assert int(values["program_index_estimated_bytes"]) > 0
+          assert float(values["program_build_ms"]) > 0.0
+          assert int(values["warm_causal_qubits"]) == 11
+          assert int(values["warm_causal_operations"]) == 63
+          assert int(values["warm_stabilizer_routes"]) == 1
+          assert abs(float(values["warm_probability"]) - 1.0) < 1e-12
+          assert abs(float(values["cached_probability"]) - float(values["one_shot_probability"])) < 1e-12
+          assert float(values["cached_query_us"]) > 0.0
+          assert float(values["one_shot_compile_query_us"]) > 0.0
+          assert float(values["cached_over_one_shot_speedup"]) > 20.0
+          assert float(values["unique_indexed_ms"]) > 0.0
+          assert float(values["unique_one_shot_ms"]) > 0.0
+          assert float(values["unique_indexed_over_one_shot_speedup"]) > 1.0
+          assert float(values["unique_probability_sum_error"]) < 1e-12
+          assert int(values["cached_plans"]) == 32
+          assert int(values["cached_bytes"]) > 0
+          assert int(values["compile_count"]) == 32
+          assert int(values["cache_misses"]) == 32
+          assert int(values["cache_hits"]) >= 5002
+          PY
+      - name: Hash evidence
+        run: sha256sum compiled-program-evidence.txt | tee compiled-program-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-compiled-marginal-program-evidence
+          path: |
+            compiled-program-evidence.txt
+            compiled-program-evidence.sha256
