@@ -1,0 +1,19 @@
+name: QSA Exact Structured Overlap
+
+on:
+  pull_request:
+    paths:
+      - include/qubit/qoverlap.hpp
+      - .github/workflows/qsa-structured-overlap.yml
+  workflow_dispatch:
+
+jobs:
+  structured-overlap-compile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile public header
+        shell: bash
+        run: |
+          printf '#include "qubit/qoverlap.hpp"\nint main(){return 0;}\n' > /tmp/qsa_overlap_compile.cpp
+          c++ -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude -c /tmp/qsa_overlap_compile.cpp -o /tmp/qsa_overlap_compile.o
