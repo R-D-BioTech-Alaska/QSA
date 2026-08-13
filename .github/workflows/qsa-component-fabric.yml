@@ -1,0 +1,142 @@
+name: QSA Exact Component Fabric
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qfabric.hpp"
+      - "tests/test_component_fabric.cpp"
+      - "benchmarks/component_fabric.cpp"
+      - ".github/workflows/qsa-component-fabric.yml"
+      - "include/qubit/qbroker.hpp"
+      - "src/qbroker.cpp"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  component-fabric-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build component fabric driver
+        shell: bash
+        run: |
+          mkdir -p component-fabric-driver
+          cat > component-fabric-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAComponentFabricCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(component_fabric_tests ../tests/test_component_fabric.cpp)
+          target_link_libraries(component_fabric_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(component_fabric_tests PRIVATE /W4)
+          else()
+              target_compile_options(component_fabric_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME component_fabric_tests COMMAND component_fabric_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S component-fabric-driver -B component-fabric-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build component-fabric-build --config Release --target component_fabric_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir component-fabric-build -C Release --output-on-failure
+
+  component-fabric-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p component-fabric-driver
+          cat > component-fabric-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAComponentFabricSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(component_fabric_tests ../tests/test_component_fabric.cpp)
+          target_link_libraries(component_fabric_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S component-fabric-driver -B component-fabric-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build component-fabric-sanitize-build --target component_fabric_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./component-fabric-sanitize-build/component_fabric_tests
+
+  component-fabric-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p component-fabric-driver
+          cat > component-fabric-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAComponentFabricEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(component_fabric_benchmark ../benchmarks/component_fabric.cpp)
+          target_link_libraries(component_fabric_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S component-fabric-driver -B component-fabric-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build component-fabric-evidence-build --target component_fabric_benchmark --parallel 2
+      - name: Run component fabric carrier
+        run: |
+          set -o pipefail
+          ./component-fabric-evidence-build/component_fabric_benchmark | tee component-fabric-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("component-fabric-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["fabric_qubits"]) == 4096
+          assert int(values["fabric_global_dense_log2_amplitudes"]) == 4096
+          assert int(values["fabric_operations"]) == 4096
+          assert int(values["fabric_components"]) == 1024
+          assert int(values["fabric_largest_component_qubits"]) == 4
+          assert int(values["fabric_prepared_components"]) == 1024
+          assert abs(float(values["fabric_selected_probability"]) - 0.25) < 1e-12
+          assert int(values["fabric_estimated_bytes"]) > 0
+          assert float(values["fabric_setup_ms"]) < 10000.0
+          assert float(values["fabric_query_ms"]) < 1000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum component-fabric-evidence.txt | tee component-fabric-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-component-fabric-evidence
+          path: |
+            component-fabric-evidence.txt
+            component-fabric-evidence.sha256
