@@ -1,0 +1,151 @@
+name: QSA Exact Single-H Path Factor
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qhpath_factor.hpp"
+      - "tests/test_hpath_factor.cpp"
+      - "benchmarks/hpath_factor.cpp"
+      - ".github/workflows/qsa-hpath-factor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hpath-factor-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build path-factor driver
+        shell: bash
+        run: |
+          mkdir -p hpath-factor-driver
+          cat > hpath-factor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactSingleHPathCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(hpath_factor_tests ../tests/test_hpath_factor.cpp)
+          target_link_libraries(hpath_factor_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(hpath_factor_tests PRIVATE /W4)
+          else()
+              target_compile_options(hpath_factor_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME hpath_factor_tests COMMAND hpath_factor_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S hpath-factor-driver -B hpath-factor-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build hpath-factor-build --config Release --target hpath_factor_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir hpath-factor-build -C Release --output-on-failure
+
+  hpath-factor-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p hpath-factor-driver
+          cat > hpath-factor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactSingleHPathSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(hpath_factor_tests ../tests/test_hpath_factor.cpp)
+          target_link_libraries(hpath_factor_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S hpath-factor-driver -B hpath-factor-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build hpath-factor-sanitize-build --target hpath_factor_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./hpath-factor-sanitize-build/hpath_factor_tests
+
+  hpath-factor-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p hpath-factor-driver
+          cat > hpath-factor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactSingleHPathEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(hpath_factor_benchmark ../benchmarks/hpath_factor.cpp)
+          target_link_libraries(hpath_factor_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S hpath-factor-driver -B hpath-factor-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build hpath-factor-evidence-build --target hpath_factor_benchmark --parallel 2
+      - name: Run path-factor carrier
+        run: |
+          set -o pipefail
+          ./hpath-factor-evidence-build/hpath_factor_benchmark | tee hpath-factor-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("hpath-factor-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["carrier_qubits"]) == 1536
+          assert int(values["carrier_h_defects"]) == 1536
+          assert int(values["carrier_raw_branch_count_log2"]) == 1536
+          assert int(values["carrier_factor_variables"]) == 1536
+          assert int(values["carrier_factor_count"]) == 3071
+          assert int(values["carrier_peak_union_variables"]) <= 2
+          assert int(values["carrier_peak_factor_entries"]) <= 4
+          assert int(values["carrier_workspace_slots"]) <= 4
+          assert 0 < int(values["carrier_graph_estimated_bytes"]) < 16 * 1024 * 1024
+          assert 0 < int(values["carrier_plan_estimated_bytes"]) < 64 * 1024 * 1024
+          assert float(values["carrier_dense_to_peak_factor_ratio_log2"]) > 1533.0
+          assert abs(float(values["carrier_log2_probability_zero"]) + 1536.0) < 1e-9
+          assert 0.0 < float(values["carrier_compile_us"]) < 1_000_000.0
+          assert 0.0 < float(values["carrier_query_ms"]) < 10000.0
+          assert int(values["hard_qubits"]) == 32
+          assert int(values["hard_cz_edges"]) == 496
+          assert int(values["hard_factor_entry_cap"]) == 1024
+          assert int(values["hard_dense_width_rejected"]) == 1
+          assert 0.0 <= float(values["hard_rejection_ms"]) < 1000.0
+          assert int(values["dense_state_materialized"]) == 0
+          assert int(values["explicit_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum hpath-factor-evidence.txt | tee hpath-factor-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-hpath-factor-evidence
+          path: |
+            hpath-factor-evidence.txt
+            hpath-factor-evidence.sha256
