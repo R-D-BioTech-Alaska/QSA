@@ -1,5 +1,7 @@
 #include "qubit/qfabric.hpp"
+#include "qubit/qrepresentation_compiler.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -115,6 +117,63 @@ void large_structured_carrier() {
             "large pruned fabric independent-block product mismatch");
 }
 
+void typed_dependency_contract() {
+    ExactRepresentationFabric fabric(6U);
+    std::vector<Operation> operations{
+        {OperationCode::H, 0U},
+        {OperationCode::H, 2U},
+    };
+    for (const Operation& operation : operations) {
+        fabric.append(operation);
+    }
+
+    constexpr ExactRepresentationDependencyType type = 73U;
+    const std::array<QubitId, 3> support{0U, 2U, 4U};
+    fabric.declare_dependency(type, support);
+    const std::vector<ExactRepresentationDependencyReceipt> receipts =
+        fabric.dependency_receipts();
+    require(receipts.size() == 1U, "typed dependency receipt count mismatch");
+    require(receipts[0].type == type, "typed dependency identity was not preserved");
+    require(receipts[0].support.size() == support.size() &&
+            receipts[0].support[0] == support[0] &&
+            receipts[0].support[1] == support[1] &&
+            receipts[0].support[2] == support[2],
+            "typed dependency support was not preserved");
+    require(fabric.stats().declared_dependencies == 1U &&
+            fabric.stats().dependency_support_entries == support.size(),
+            "typed dependency resource accounting mismatch");
+
+    const std::vector<QubitId> query{0U, 2U, 4U};
+    const std::vector<std::uint8_t> bits{0U, 0U, 0U};
+    const ExactPreparedProbabilityPlan global = ExactPreparedProbabilityPlan::for_marginals(
+        6U, operations);
+    require(close(
+                fabric.marginal_probability(query, bits).value,
+                global.marginal_probability(query, bits).value),
+            "typed dependency fabricated numerical coupling");
+    require(fabric.stats().active_components == 1U,
+            "typed dependency did not preserve one conservative island closure");
+
+    ExactRepresentationFabricConfig config;
+    config.max_dependency_width = 2U;
+    config.max_declared_dependencies = 1U;
+    config.max_dependency_support_entries = 2U;
+    ExactRepresentationFabric bounded(4U, config);
+    const std::array<QubitId, 2> first{0U, 1U};
+    const std::array<QubitId, 2> second{2U, 3U};
+    bounded.declare_dependency(11U, first);
+    bool rejected = false;
+    try {
+        bounded.declare_dependency(12U, second);
+    } catch (const QStateError&) {
+        rejected = true;
+    }
+    require(rejected && bounded.stats().declared_dependencies == 1U &&
+            bounded.stats().dependency_support_entries == 2U &&
+            bounded.dependency_receipts().size() == 1U,
+            "typed dependency cap did not fail closed");
+}
+
 void rejection_cases() {
     bool rejected = false;
     try {
@@ -171,6 +230,7 @@ void rejection_cases() {
 int main() {
     exact_small_control();
     large_structured_carrier();
+    typed_dependency_contract();
     rejection_cases();
     std::cout << "component fabric tests passed\n";
     return 0;
