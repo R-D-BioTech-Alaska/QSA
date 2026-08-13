@@ -41,6 +41,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qhpath_prepared.hpp",
     "include/qubit/qhpath_basis.hpp",
     "include/qubit/qhpath_born.hpp",
+    "include/qubit/qhpath_basis_born.hpp",
     "include/qubit/qamplitude_advisor.hpp",
     "include/qubit/qadaptive_amplitude.hpp",
     "include/qubit/qadaptive_prepared_amplitude.hpp",

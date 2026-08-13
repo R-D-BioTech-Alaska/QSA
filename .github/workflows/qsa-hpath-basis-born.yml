@@ -1,0 +1,171 @@
+name: QSA Computational Basis Hadamard Born
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qhpath_basis_born.hpp"
+      - "include/qubit/qhpath_born.hpp"
+      - "include/qubit/qfactor.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_hpath_basis_born.cpp"
+      - "benchmarks/hpath_basis_born.cpp"
+      - ".github/workflows/qsa-hpath-basis-born.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hpath-basis-born-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build basis Born driver
+        shell: bash
+        run: |
+          mkdir -p hpath-basis-born-driver
+          cat > hpath-basis-born-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABasisHadamardBornCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(hpath_basis_born_tests ../tests/test_hpath_basis_born.cpp)
+          target_link_libraries(hpath_basis_born_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(hpath_basis_born_tests PRIVATE /W4)
+          else()
+              target_compile_options(hpath_basis_born_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME hpath_basis_born_tests COMMAND hpath_basis_born_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S hpath-basis-born-driver -B hpath-basis-born-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build hpath-basis-born-build --config Release --target hpath_basis_born_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir hpath-basis-born-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  hpath-basis-born-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p hpath-basis-born-driver
+          cat > hpath-basis-born-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABasisHadamardBornSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(hpath_basis_born_tests ../tests/test_hpath_basis_born.cpp)
+          target_link_libraries(hpath_basis_born_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S hpath-basis-born-driver -B hpath-basis-born-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build hpath-basis-born-sanitize-build --target hpath_basis_born_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./hpath-basis-born-sanitize-build/hpath_basis_born_tests
+
+  hpath-basis-born-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p hpath-basis-born-driver
+          cat > hpath-basis-born-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABasisHadamardBornEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(hpath_basis_born_benchmark ../benchmarks/hpath_basis_born.cpp)
+          target_link_libraries(hpath_basis_born_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S hpath-basis-born-driver -B hpath-basis-born-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build hpath-basis-born-evidence-build --target hpath_basis_born_benchmark --parallel 2
+      - name: Run basis Born carrier
+        run: |
+          set -o pipefail
+          ./hpath-basis-born-evidence-build/hpath_basis_born_benchmark | tee hpath-basis-born-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("hpath-basis-born-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["basis_born_qubits"]) == 2048
+          assert int(values["basis_born_h_events"]) == 4096
+          assert int(values["basis_born_h_active_qubits"]) == 2048
+          assert int(values["basis_born_hidden_variables_per_side"]) == 2048
+          assert int(values["basis_born_removed_first_h_per_side"]) == 2048
+          assert int(values["basis_born_physical_output_variables"]) == 2048
+          assert int(values["basis_born_native_variables"]) == 6144
+          assert int(values["basis_born_emulated_variables"]) == 14336
+          variable_ratio = float(values["basis_born_variable_reduction_ratio"])
+          assert math.isfinite(variable_ratio) and variable_ratio > 2.3
+          assert int(values["basis_born_native_factor_count"]) < int(values["basis_born_emulated_factor_count"])
+          assert int(values["basis_born_native_peak_union_variables"]) <= 20
+          assert int(values["basis_born_native_peak_factor_entries"]) <= 1 << 20
+          native_plan = int(values["basis_born_native_plan_bytes"])
+          emulated_plan = int(values["basis_born_emulated_plan_bytes"])
+          assert 0 < native_plan < 1024 * 1024 * 1024
+          assert native_plan < emulated_plan
+          plan_ratio = float(values["basis_born_plan_memory_reduction_ratio"])
+          assert math.isfinite(plan_ratio) and plan_ratio > 1.5
+          assert 0 < int(values["basis_born_native_workspace_bytes"]) < 512 * 1024 * 1024
+          assert 0 < int(values["basis_born_emulated_workspace_bytes"]) < 1024 * 1024 * 1024
+          assert int(values["basis_born_output_entries"]) == 16
+          total = float(values["basis_born_probability_sum"])
+          assert math.isfinite(total) and abs(total - 1.0) <= 1e-8
+          assert float(values["basis_born_max_abs_imaginary"]) <= 1e-9
+          assert float(values["basis_born_max_error"]) <= 1e-8
+          assert 0.0 < float(values["basis_born_native_setup_ms"]) < 30000.0
+          assert 0.0 < float(values["basis_born_emulated_setup_ms"]) < 30000.0
+          assert 0.0 < float(values["basis_born_native_query_ms"]) < 30000.0
+          assert 0.0 < float(values["basis_born_emulated_query_ms"]) < 30000.0
+          assert math.isfinite(float(values["basis_born_setup_speed_ratio"]))
+          assert math.isfinite(float(values["basis_born_query_speed_ratio"]))
+          assert int(values["dense_state_materialized"]) == 0
+          assert int(values["explicit_output_enumeration_performed"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum hpath-basis-born-evidence.txt | tee hpath-basis-born-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-hpath-basis-born-evidence
+          path: |
+            hpath-basis-born-evidence.txt
+            hpath-basis-born-evidence.sha256
