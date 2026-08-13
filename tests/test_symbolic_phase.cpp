@@ -41,11 +41,11 @@ qubit::QMatrix4 controlled_phase(double angle) {
 }
 
 qubit::QRegister plus_state(std::size_t qubits) {
-    qubit::QRegister state(qubits);
-    for (std::size_t index = 0U; index < qubits; ++index) {
-        state.apply_h(static_cast<qubit::QubitId>(index));
-    }
-    return state;
+    const std::size_t dimension = std::size_t{1U} << qubits;
+    const double amplitude = std::exp2(-0.5 * static_cast<double>(qubits));
+    std::vector<qubit::QComplex> values(
+        dimension, qubit::QComplex{amplitude, 0.0});
+    return qubit::QRegister::from_amplitudes(std::move(values));
 }
 
 void dense_equivalence() {
@@ -149,6 +149,34 @@ void exact_reconvergence() {
     require(exact.sqrt2_denominator_power == 0, "symbolic point denominator mismatch");
 }
 
+void connected_branch_growth() {
+    using qubit::ExactSymbolicPhaseConfig;
+    using qubit::ExactSymbolicPhaseGraphSum;
+
+    ExactSymbolicPhaseConfig config;
+    config.max_live_branches = 256U;
+    config.max_intermediate_branches = 512U;
+    config.max_coefficient_terms = 1024U;
+    config.max_symbol_terms = 32768U;
+    config.max_retained_estimated_bytes = 128U * 1024U * 1024U;
+    ExactSymbolicPhaseGraphSum state(64U, config);
+
+    for (std::uint32_t symbol = 0U; symbol < 16U; ++symbol) {
+        state.bind_symbol(symbol, -1.7 + 0.193 * static_cast<double>(symbol + 1U));
+    }
+    for (std::uint32_t defect = 0U; defect < 8U; ++defect) {
+        const auto target = static_cast<qubit::QubitId>(defect + 1U);
+        state.apply_controlled_phase_symbol(0U, target, 2U * defect);
+        state.apply_h(target);
+        state.apply_controlled_phase_symbol(0U, target, 2U * defect + 1U);
+    }
+
+    require(state.stats().hadamard_defects == 8U,
+        "connected symbolic control Hadamard count mismatch");
+    require(state.branch_count() == 256U,
+        "connected symbolic control did not retain the full 2^H branch count");
+}
+
 void fail_closed() {
     using qubit::ExactSymbolicPhaseConfig;
     using qubit::ExactSymbolicPhaseGraphSum;
@@ -171,7 +199,7 @@ void fail_closed() {
         state.apply_rz_symbol(qubit, defect);
         state.apply_h(qubit);
     }
-    require(state.branch_count() == 16U, "symbolic irreducible setup did not reach sixteen branches");
+    require(state.branch_count() == 16U, "symbolic branch-cap setup did not reach sixteen branches");
     const auto before = state.stats();
     bool rejected = false;
     try {
@@ -223,6 +251,7 @@ int main() {
     try {
         dense_equivalence();
         exact_reconvergence();
+        connected_branch_growth();
         fail_closed();
         std::cout << "exact symbolic phase graph tests passed\n";
         return 0;

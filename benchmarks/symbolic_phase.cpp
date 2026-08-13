@@ -52,26 +52,29 @@ int main() {
     const double log2_probability = state.log2_probability_bits(zero_bits);
     const auto query_end = Clock::now();
 
-    ExactSymbolicPhaseConfig hard_config = config;
-    hard_config.max_live_branches = 1024U;
-    hard_config.max_intermediate_branches = 2048U;
-    hard_config.max_coefficient_terms = 4096U;
-    ExactSymbolicPhaseGraphSum hard(64U, hard_config);
-    for (std::uint32_t symbol = 0U; symbol < 6U; ++symbol) {
-        hard.bind_symbol(symbol, 0.113 + 0.271 * static_cast<double>(symbol + 1U));
+    ExactSymbolicPhaseConfig control_config = config;
+    control_config.max_live_branches = 16384U;
+    control_config.max_intermediate_branches = 16384U;
+    control_config.max_coefficient_terms = 65536U;
+    control_config.max_symbol_terms = 1U << 20U;
+    control_config.max_retained_estimated_bytes = 512U * 1024U * 1024U;
+    ExactSymbolicPhaseGraphSum control(64U, control_config);
+    for (std::uint32_t symbol = 0U; symbol < 32U; ++symbol) {
+        control.bind_symbol(symbol, -1.9 + 0.117 * static_cast<double>(symbol + 1U));
     }
-    for (std::uint32_t defect = 0U; defect < 5U; ++defect) {
-        const auto target = static_cast<qubit::QubitId>(defect);
-        hard.apply_h(target);
-        hard.apply_rz_symbol(target, defect);
-        hard.apply_h(target);
+    for (std::uint32_t defect = 0U; defect < 14U; ++defect) {
+        const auto target = static_cast<qubit::QubitId>(defect + 1U);
+        control.apply_controlled_phase_symbol(0U, target, 2U * defect);
+        control.apply_h(target);
+        control.apply_controlled_phase_symbol(0U, target, 2U * defect + 1U);
     }
-    const auto hard_before = hard.stats();
-    bool sixth_rejected = false;
+    control.apply_controlled_phase_symbol(0U, 15U, 28U);
+    const auto control_before = control.stats();
+    bool fifteenth_rejected = false;
     try {
-        hard.apply_h(5U);
+        control.apply_h(15U);
     } catch (const QStateError&) {
-        sixth_rejected = true;
+        fifteenth_rejected = true;
     }
 
     bool direct_underflow_rejected = false;
@@ -123,9 +126,12 @@ int main() {
               << "carrier_query_us=" << query_us << '\n'
               << "carrier_direct_amplitude_underflow_rejected="
               << (direct_underflow_rejected ? 1 : 0) << '\n'
-              << "irreducible_live_before_rejection=" << hard_before.live_branches << '\n'
-              << "irreducible_hadamards_before_rejection=" << hard_before.hadamard_defects << '\n'
-              << "irreducible_sixth_h_rejected=" << (sixth_rejected ? 1 : 0) << '\n'
+              << "control_connected_hadamards=" << control_before.hadamard_defects << '\n'
+              << "control_live_branches=" << control_before.live_branches << '\n'
+              << "control_expected_live_branches=16384\n"
+              << "control_retained_estimated_bytes="
+              << control_before.retained_estimated_bytes << '\n'
+              << "control_fifteenth_h_rejected=" << (fifteenth_rejected ? 1 : 0) << '\n'
               << "dense_state_materialized=0\n";
     return 0;
 }

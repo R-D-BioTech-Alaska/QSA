@@ -113,7 +113,6 @@ jobs:
       - name: Enforce bounded evidence
         run: |
           python - <<'PY'
-          import math
           values = {}
           with open("symbolic-phase-evidence.txt", "r", encoding="utf-8") as handle:
               for line in handle:
@@ -144,9 +143,11 @@ jobs:
           assert 0.0 < float(values["carrier_evolution_ms"]) < 30000.0
           assert 0.0 < float(values["carrier_query_us"]) < 30000.0
           assert int(values["carrier_direct_amplitude_underflow_rejected"]) == 1
-          assert int(values["irreducible_live_before_rejection"]) == 1024
-          assert int(values["irreducible_hadamards_before_rejection"]) == 10
-          assert int(values["irreducible_sixth_h_rejected"]) == 1
+          assert int(values["control_connected_hadamards"]) == 14
+          assert int(values["control_live_branches"]) == 16384
+          assert int(values["control_expected_live_branches"]) == 16384
+          assert 0 < int(values["control_retained_estimated_bytes"]) < 512 * 1024 * 1024
+          assert int(values["control_fifteenth_h_rejected"]) == 1
           assert int(values["dense_state_materialized"]) == 0
           PY
       - name: Hash evidence
