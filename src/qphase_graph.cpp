@@ -5,11 +5,13 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 namespace qubit {
 namespace {
 
 constexpr double kPi = 3.141592653589793238462643383279502884;
+constexpr double kInvSqrt2 = 0.707106781186547524400844362104849039;
 
 struct PhaseGraphSplitMix64 {
     std::uint64_t state;
@@ -34,6 +36,43 @@ void require_finite(double value, const char* label) {
         throw QStateError(std::string(label) + " overflowed");
     }
     return value;
+}
+
+[[nodiscard]] std::size_t saturating_add(std::size_t first, std::size_t second) noexcept {
+    const std::size_t maximum = std::numeric_limits<std::size_t>::max();
+    if (second > maximum - first) {
+        return maximum;
+    }
+    return first + second;
+}
+
+[[nodiscard]] std::size_t saturating_multiply(
+    std::size_t first,
+    std::size_t second) noexcept {
+    if (first == 0U || second == 0U) {
+        return 0U;
+    }
+    const std::size_t maximum = std::numeric_limits<std::size_t>::max();
+    if (first > maximum / second) {
+        return maximum;
+    }
+    return first * second;
+}
+
+[[nodiscard]] QComplex materialize_scaled(
+    const PhaseGraphScaledAmplitude& amplitude,
+    const char* label) {
+    if (amplitude.mantissa.norm2() == 0.0) {
+        return {};
+    }
+    const double scale = std::exp2(amplitude.log2_scale);
+    if (scale == 0.0) {
+        throw QStateError(std::string(label) + " underflows double precision");
+    }
+    if (!std::isfinite(scale)) {
+        throw QStateError(std::string(label) + " overflows double precision");
+    }
+    return amplitude.mantissa * scale;
 }
 
 }  // namespace
@@ -229,10 +268,10 @@ double PhaseGraphState::probability_one(QubitId qubit) const {
     return 0.5;
 }
 
-QComplex PhaseGraphState::amplitude(BasisIndex basis) const {
+PhaseGraphScaledAmplitude PhaseGraphState::scaled_amplitude(BasisIndex basis) const {
     if (qubit_count_ >= 63U) {
         throw QStateError(
-            "Integer phase-graph amplitude lookup supports at most 62 qubits; use amplitude_bits");
+            "Integer phase-graph amplitude lookup supports at most 62 qubits; use scaled_amplitude_bits");
     }
     const BasisIndex dimension = BasisIndex{1} << qubit_count_;
     if (basis >= dimension) {
@@ -242,10 +281,10 @@ QComplex PhaseGraphState::amplitude(BasisIndex basis) const {
     for (std::size_t qubit = 0; qubit < qubit_count_; ++qubit) {
         bits[qubit] = static_cast<std::uint8_t>((basis >> qubit) & 1U);
     }
-    return amplitude_bits(bits);
+    return scaled_amplitude_bits(bits);
 }
 
-QComplex PhaseGraphState::amplitude_bits(
+PhaseGraphScaledAmplitude PhaseGraphState::scaled_amplitude_bits(
     std::span<const std::uint8_t> bits) const {
     if (bits.size() != qubit_count_) {
         throw QStateError("Phase-graph bit-vector length does not match qubit count");
@@ -266,11 +305,20 @@ QComplex PhaseGraphState::amplitude_bits(
             phase = checked_sum(phase, angle, "Phase-graph amplitude edge phase");
         }
     }
-    const double scale = std::exp2(-0.5 * static_cast<double>(qubit_count_));
-    if (scale == 0.0) {
-        throw QStateError("Phase-graph amplitude magnitude underflows double precision");
-    }
-    return QComplex::from_polar(scale, phase);
+    return {
+        QComplex::from_polar(1.0, phase),
+        -0.5 * static_cast<double>(qubit_count_),
+    };
+}
+
+QComplex PhaseGraphState::amplitude(BasisIndex basis) const {
+    return materialize_scaled(scaled_amplitude(basis), "Phase-graph amplitude magnitude");
+}
+
+QComplex PhaseGraphState::amplitude_bits(
+    std::span<const std::uint8_t> bits) const {
+    return materialize_scaled(
+        scaled_amplitude_bits(bits), "Phase-graph amplitude magnitude");
 }
 
 std::vector<QComplex> PhaseGraphState::materialize(std::size_t max_qubits) const {
@@ -357,6 +405,293 @@ std::string PhaseGraphState::describe() const {
            << "qubits: " << qubit_count_ << "\n"
            << "quadratic phase edges: " << edge_phases_.size() << "\n"
            << "estimated engine bytes: " << estimated_bytes() << "\n";
+    return stream.str();
+}
+
+PhaseGraphBranchState::PhaseGraphBranchState(
+    std::size_t qubit_count,
+    PhaseGraphBranchConfig config)
+    : qubit_count_(qubit_count), config_(config) {
+    if (config_.max_branches == 0U) {
+        throw QStateError("PhaseGraphBranchState max_branches must be positive");
+    }
+    if (config_.max_estimated_bytes == 0U) {
+        throw QStateError("PhaseGraphBranchState max_estimated_bytes must be positive");
+    }
+    branches_.emplace_back(
+        QComplex{1.0, 0.0}, PhaseGraphState(qubit_count_, config_.phase_graph));
+    enforce_resources(branches_);
+}
+
+std::size_t PhaseGraphBranchState::estimated_bytes(
+    const std::vector<Branch>& branches) const noexcept {
+    std::size_t bytes = sizeof(*this);
+    bytes = saturating_add(
+        bytes, saturating_multiply(branches.capacity(), sizeof(Branch)));
+    for (const auto& branch : branches) {
+        const std::size_t state_bytes = branch.state.estimated_bytes();
+        if (state_bytes > sizeof(PhaseGraphState)) {
+            bytes = saturating_add(bytes, state_bytes - sizeof(PhaseGraphState));
+        }
+    }
+    return bytes;
+}
+
+std::size_t PhaseGraphBranchState::estimated_bytes() const noexcept {
+    return estimated_bytes(branches_);
+}
+
+void PhaseGraphBranchState::enforce_resources(
+    const std::vector<Branch>& branches) const {
+    if (branches.empty()) {
+        throw QStateError("PhaseGraphBranchState requires at least one branch");
+    }
+    if (branches.size() > config_.max_branches) {
+        throw QStateError("PhaseGraphBranchState exceeded configured branch limit");
+    }
+    if (estimated_bytes(branches) > config_.max_estimated_bytes) {
+        throw QStateError("PhaseGraphBranchState exceeded configured memory limit");
+    }
+}
+
+void PhaseGraphBranchState::apply_h(QubitId qubit) {
+    if (branches_.size() > config_.max_branches / 2U) {
+        throw QStateError("PhaseGraphBranchState exceeded configured branch limit");
+    }
+    const std::size_t next_count = branches_.size() * 2U;
+    std::size_t projected = sizeof(*this);
+    projected = saturating_add(
+        projected, saturating_multiply(next_count, sizeof(Branch)));
+    for (const auto& branch : branches_) {
+        const std::size_t state_bytes = branch.state.estimated_bytes();
+        const std::size_t dynamic_bytes = state_bytes > sizeof(PhaseGraphState)
+            ? state_bytes - sizeof(PhaseGraphState)
+            : 0U;
+        projected = saturating_add(
+            projected, saturating_multiply(2U, dynamic_bytes));
+    }
+    if (projected > config_.max_estimated_bytes) {
+        throw QStateError("PhaseGraphBranchState exceeded configured memory limit");
+    }
+
+    std::vector<Branch> next;
+    next.reserve(next_count);
+    for (const auto& branch : branches_) {
+        PhaseGraphState left = branch.state;
+        left.apply_x(qubit);
+        QComplex coefficient = branch.coefficient;
+        coefficient *= kInvSqrt2;
+        next.emplace_back(coefficient, std::move(left));
+
+        PhaseGraphState right = branch.state;
+        right.apply_z(qubit);
+        next.emplace_back(coefficient, std::move(right));
+    }
+    enforce_resources(next);
+    branches_ = std::move(next);
+    ++hadamard_defects_;
+}
+
+void PhaseGraphBranchState::apply_single(
+    void (PhaseGraphState::*operation)(QubitId),
+    QubitId qubit) {
+    std::vector<Branch> next = branches_;
+    for (auto& branch : next) {
+        (branch.state.*operation)(qubit);
+    }
+    enforce_resources(next);
+    branches_ = std::move(next);
+}
+
+void PhaseGraphBranchState::apply_single_angle(
+    void (PhaseGraphState::*operation)(QubitId, double),
+    QubitId qubit,
+    double angle) {
+    std::vector<Branch> next = branches_;
+    for (auto& branch : next) {
+        (branch.state.*operation)(qubit, angle);
+    }
+    enforce_resources(next);
+    branches_ = std::move(next);
+}
+
+void PhaseGraphBranchState::apply_two(
+    void (PhaseGraphState::*operation)(QubitId, QubitId),
+    QubitId first,
+    QubitId second) {
+    std::vector<Branch> next = branches_;
+    for (auto& branch : next) {
+        (branch.state.*operation)(first, second);
+    }
+    enforce_resources(next);
+    branches_ = std::move(next);
+}
+
+void PhaseGraphBranchState::apply_two_angle(
+    void (PhaseGraphState::*operation)(QubitId, QubitId, double),
+    QubitId first,
+    QubitId second,
+    double angle) {
+    std::vector<Branch> next = branches_;
+    for (auto& branch : next) {
+        (branch.state.*operation)(first, second, angle);
+    }
+    enforce_resources(next);
+    branches_ = std::move(next);
+}
+
+void PhaseGraphBranchState::apply_x(QubitId qubit) {
+    apply_single(&PhaseGraphState::apply_x, qubit);
+}
+
+void PhaseGraphBranchState::apply_y(QubitId qubit) {
+    apply_single(&PhaseGraphState::apply_y, qubit);
+}
+
+void PhaseGraphBranchState::apply_z(QubitId qubit) {
+    apply_single(&PhaseGraphState::apply_z, qubit);
+}
+
+void PhaseGraphBranchState::apply_s(QubitId qubit) {
+    apply_single(&PhaseGraphState::apply_s, qubit);
+}
+
+void PhaseGraphBranchState::apply_sdg(QubitId qubit) {
+    apply_single(&PhaseGraphState::apply_sdg, qubit);
+}
+
+void PhaseGraphBranchState::apply_t(QubitId qubit) {
+    apply_single(&PhaseGraphState::apply_t, qubit);
+}
+
+void PhaseGraphBranchState::apply_tdg(QubitId qubit) {
+    apply_single(&PhaseGraphState::apply_tdg, qubit);
+}
+
+void PhaseGraphBranchState::apply_rz(QubitId qubit, double angle) {
+    apply_single_angle(&PhaseGraphState::apply_rz, qubit, angle);
+}
+
+void PhaseGraphBranchState::apply_cz(QubitId first, QubitId second) {
+    apply_two(&PhaseGraphState::apply_cz, first, second);
+}
+
+void PhaseGraphBranchState::apply_controlled_phase(
+    QubitId first,
+    QubitId second,
+    double angle) {
+    apply_two_angle(&PhaseGraphState::apply_controlled_phase, first, second, angle);
+}
+
+void PhaseGraphBranchState::apply_swap(QubitId first, QubitId second) {
+    apply_two(&PhaseGraphState::apply_swap, first, second);
+}
+
+PhaseGraphScaledAmplitude PhaseGraphBranchState::scaled_amplitude(
+    BasisIndex basis) const {
+    if (qubit_count_ >= 63U) {
+        throw QStateError(
+            "Integer phase-graph branch amplitude lookup supports at most 62 qubits; use scaled_amplitude_bits");
+    }
+    const BasisIndex dimension = BasisIndex{1} << qubit_count_;
+    if (basis >= dimension) {
+        throw QStateError("Phase-graph branch basis index is out of range");
+    }
+    std::vector<std::uint8_t> bits(qubit_count_);
+    for (std::size_t qubit = 0; qubit < qubit_count_; ++qubit) {
+        bits[qubit] = static_cast<std::uint8_t>((basis >> qubit) & 1U);
+    }
+    return scaled_amplitude_bits(bits);
+}
+
+PhaseGraphScaledAmplitude PhaseGraphBranchState::scaled_amplitude_bits(
+    std::span<const std::uint8_t> bits) const {
+    QComplex mantissa{};
+    double log2_scale = 0.0;
+    bool first = true;
+    for (const auto& branch : branches_) {
+        const PhaseGraphScaledAmplitude value = branch.state.scaled_amplitude_bits(bits);
+        if (first) {
+            log2_scale = value.log2_scale;
+            first = false;
+        } else if (value.log2_scale != log2_scale) {
+            throw QStateError("PhaseGraphBranchState branch amplitude scales diverged");
+        }
+        mantissa += branch.coefficient * value.mantissa;
+    }
+    return {mantissa, log2_scale};
+}
+
+QComplex PhaseGraphBranchState::amplitude(BasisIndex basis) const {
+    return materialize_scaled(
+        scaled_amplitude(basis), "Phase-graph branch amplitude magnitude");
+}
+
+QComplex PhaseGraphBranchState::amplitude_bits(
+    std::span<const std::uint8_t> bits) const {
+    return materialize_scaled(
+        scaled_amplitude_bits(bits), "Phase-graph branch amplitude magnitude");
+}
+
+std::vector<QComplex> PhaseGraphBranchState::materialize(
+    std::size_t max_qubits) const {
+    if (qubit_count_ > max_qubits || qubit_count_ >= 63U) {
+        throw QStateError(
+            "Phase-graph branch materialization exceeds the requested qubit limit");
+    }
+    const BasisIndex dimension = BasisIndex{1} << qubit_count_;
+    std::vector<QComplex> result(static_cast<std::size_t>(dimension));
+    for (BasisIndex basis = 0; basis < dimension; ++basis) {
+        result[static_cast<std::size_t>(basis)] = amplitude(basis);
+    }
+    return result;
+}
+
+bool PhaseGraphBranchState::validate(std::string* reason) const {
+    const auto fail = [reason](const char* message) {
+        if (reason != nullptr) {
+            *reason = message;
+        }
+        return false;
+    };
+    if (qubit_count_ == 0U) {
+        return fail("phase-graph branch qubit count is invalid");
+    }
+    if (config_.max_branches == 0U || branches_.empty() ||
+        branches_.size() > config_.max_branches) {
+        return fail("phase-graph branch count is invalid");
+    }
+    if (config_.max_estimated_bytes == 0U ||
+        estimated_bytes() > config_.max_estimated_bytes) {
+        return fail("phase-graph branch memory estimate exceeds the configured limit");
+    }
+    for (const auto& branch : branches_) {
+        if (!std::isfinite(branch.coefficient.re) ||
+            !std::isfinite(branch.coefficient.im)) {
+            return fail("phase-graph branch coefficient is non-finite");
+        }
+        if (branch.state.qubit_count() != qubit_count_) {
+            return fail("phase-graph branch qubit count differs from carrier");
+        }
+        std::string branch_reason;
+        if (!branch.state.validate(&branch_reason)) {
+            if (reason != nullptr) {
+                *reason = "phase-graph branch invalid: " + branch_reason;
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string PhaseGraphBranchState::describe() const {
+    std::ostringstream stream;
+    stream << "QSA bounded phase-graph branch sum\n"
+           << "qubits: " << qubit_count_ << "\n"
+           << "Hadamard defects: " << hadamard_defects_ << "\n"
+           << "branches: " << branches_.size() << " / " << config_.max_branches << "\n"
+           << "estimated engine bytes: " << estimated_bytes() << " / "
+           << config_.max_estimated_bytes << "\n";
     return stream.str();
 }
 
