@@ -123,14 +123,20 @@ jobs:
                       values[key] = value
           assert int(values["fabric_qubits"]) == 4096
           assert int(values["fabric_global_dense_log2_amplitudes"]) == 4096
-          assert int(values["fabric_operations"]) == 4096
+          assert int(values["fabric_operations"]) == 4097
           assert int(values["fabric_components"]) == 1024
           assert int(values["fabric_largest_component_qubits"]) == 4
           assert int(values["fabric_prepared_components"]) == 1024
+          assert int(values["fabric_stabilizer_routes"]) == 1023
+          assert int(values["fabric_non_stabilizer_routes"]) == 1
           assert abs(float(values["fabric_selected_probability"]) - 0.25) < 1e-12
+          assert abs(float(values["fabric_selected_probability"]) - float(values["fabric_global_probability"])) < 1e-12
           assert int(values["fabric_estimated_bytes"]) > 0
+          assert int(values["fabric_global_estimated_bytes"]) > 0
           assert float(values["fabric_setup_ms"]) < 10000.0
           assert float(values["fabric_query_ms"]) < 1000.0
+          assert float(values["fabric_global_setup_ms"]) < 10000.0
+          assert float(values["fabric_global_query_ms"]) < 1000.0
           PY
       - name: Hash evidence
         run: sha256sum component-fabric-evidence.txt | tee component-fabric-evidence.sha256
