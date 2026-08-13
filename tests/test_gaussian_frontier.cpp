@@ -23,8 +23,12 @@ void require_close(double actual, double expected, double tolerance, const std::
 }  // namespace
 
 int main() {
+    using qubit::FermionicGaussianEligibilityCode;
+    using qubit::FermionicGaussianState;
     using qubit::GaussianState;
     using qubit::QStateError;
+    using qubit::fermionic_gaussian_eligibility;
+    using qubit::fermionic_gaussian_required_bytes;
 
     {
         GaussianState state(1U);
@@ -130,6 +134,85 @@ int main() {
             rejected = true;
         }
         require(rejected, "out-of-range Gaussian mode was accepted");
+    }
+
+    {
+        FermionicGaussianState state(1U);
+        require(state.validate(), "fermionic vacuum failed validation");
+        require_close(state.occupation(0U), 0.0, 1e-13, "fermionic vacuum occupation changed");
+    }
+
+    {
+        const double theta = 0.63;
+        FermionicGaussianState state(2U);
+        state.rotate_majoranas(1U, 2U, theta);
+        const double expected = 0.5 * (1.0 - std::cos(theta));
+        require_close(state.occupation(0U), expected, 2e-13, "first fermionic occupation is wrong");
+        require_close(state.occupation(1U), expected, 2e-13, "second fermionic occupation is wrong");
+        require(state.validate(1e-12), "fermionic Majorana rotation broke pure Gaussian closure");
+        state.rotate_majoranas(1U, 2U, -theta);
+        require_close(state.total_occupation(), 0.0, 4e-13, "inverse fermionic rotation did not restore vacuum");
+        require(state.validate(1e-12), "inverse fermionic rotation broke validation");
+    }
+
+    {
+        FermionicGaussianState state(128U);
+        for (std::size_t mode = 0U; mode + 1U < state.mode_count(); ++mode) {
+            state.rotate_majoranas(2U * mode + 1U, 2U * (mode + 1U), 0.001 * static_cast<double>(mode + 1U));
+        }
+        require(state.validate(1e-9), "large fermionic Gaussian state failed validation");
+        require(state.estimated_bytes() < 600U * 1024U, "fermionic covariance exceeded polynomial storage envelope");
+    }
+
+    {
+        constexpr std::size_t one_gib = 1024U * 1024U * 1024U;
+        require(
+            fermionic_gaussian_required_bytes(4096U) == 536870912U,
+            "4096-mode fermionic covariance byte count changed");
+        const auto accepted = fermionic_gaussian_eligibility(4096U, true, 2U, one_gib);
+        require(accepted.accepted(), "4096-mode quadratic fermionic Gaussian request was rejected");
+        require(accepted.required_bytes == 536870912U, "fermionic eligibility byte receipt changed");
+        require(
+            fermionic_gaussian_eligibility(4096U, false, 2U, one_gib).code ==
+                FermionicGaussianEligibilityCode::non_gaussian_input,
+            "non-Gaussian fermionic input was accepted");
+        require(
+            fermionic_gaussian_eligibility(4096U, true, 4U, one_gib).code ==
+                FermionicGaussianEligibilityCode::non_quadratic_hamiltonian,
+            "quartic fermionic interaction was accepted");
+        require(
+            fermionic_gaussian_eligibility(8192U, true, 2U, one_gib).code ==
+                FermionicGaussianEligibilityCode::memory_budget_exceeded,
+            "fermionic request exceeding the memory budget was accepted");
+        require(
+            fermionic_gaussian_eligibility(0U, true, 2U, one_gib).code ==
+                FermionicGaussianEligibilityCode::zero_modes,
+            "zero-mode fermionic request was accepted");
+    }
+
+    {
+        FermionicGaussianState state(2U);
+        bool rejected = false;
+        try {
+            state.rotate_majoranas(0U, 0U, 0.1);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "same-index fermionic rotation was accepted");
+        rejected = false;
+        try {
+            state.rotate_majoranas(0U, 4U, 0.1);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "out-of-range fermionic Majorana index was accepted");
+        rejected = false;
+        try {
+            state.rotate_majoranas(0U, 1U, std::numeric_limits<double>::infinity());
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "nonfinite fermionic rotation was accepted");
     }
 
     return 0;

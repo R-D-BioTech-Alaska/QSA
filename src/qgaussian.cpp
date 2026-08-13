@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace qubit {
 
@@ -212,6 +213,169 @@ bool GaussianState::validate(double tolerance) const noexcept {
         const double qp = covariance_[q * dimension + p];
         if (qq * pp - qp * qp < 0.25 - tolerance) {
             return false;
+        }
+    }
+    return true;
+}
+
+std::size_t fermionic_gaussian_required_bytes(std::size_t modes) noexcept {
+    if (modes == 0U) {
+        return 0U;
+    }
+    const std::size_t maximum = std::numeric_limits<std::size_t>::max();
+    if (modes > maximum / 2U) {
+        return maximum;
+    }
+    const std::size_t dimension = 2U * modes;
+    if (dimension > maximum / dimension) {
+        return maximum;
+    }
+    const std::size_t entries = dimension * dimension;
+    if (entries > maximum / sizeof(double)) {
+        return maximum;
+    }
+    return entries * sizeof(double);
+}
+
+FermionicGaussianEligibility fermionic_gaussian_eligibility(
+    std::size_t modes,
+    bool gaussian_input,
+    std::size_t maximum_majorana_degree,
+    std::size_t memory_budget_bytes) noexcept {
+    if (modes == 0U) {
+        return {FermionicGaussianEligibilityCode::zero_modes, 0U};
+    }
+    if (!gaussian_input) {
+        return {FermionicGaussianEligibilityCode::non_gaussian_input, 0U};
+    }
+    if (maximum_majorana_degree != 2U) {
+        return {FermionicGaussianEligibilityCode::non_quadratic_hamiltonian, 0U};
+    }
+    const std::size_t required = fermionic_gaussian_required_bytes(modes);
+    if (required == std::numeric_limits<std::size_t>::max()) {
+        return {FermionicGaussianEligibilityCode::size_overflow, required};
+    }
+    if (required > memory_budget_bytes) {
+        return {FermionicGaussianEligibilityCode::memory_budget_exceeded, required};
+    }
+    return {FermionicGaussianEligibilityCode::eligible, required};
+}
+
+FermionicGaussianState::FermionicGaussianState(std::size_t modes) : modes_(modes) {
+    if (modes_ == 0U) {
+        throw QStateError("Fermionic Gaussian state requires at least one mode");
+    }
+    const std::size_t required = fermionic_gaussian_required_bytes(modes_);
+    if (required == std::numeric_limits<std::size_t>::max()) {
+        throw QStateError("Fermionic Gaussian covariance size overflow");
+    }
+    const std::size_t dimension = 2U * modes_;
+    covariance_.assign(dimension * dimension, 0.0);
+    for (std::size_t mode = 0U; mode < modes_; ++mode) {
+        const std::size_t first = 2U * mode;
+        const std::size_t second = first + 1U;
+        covariance_[first * dimension + second] = -1.0;
+        covariance_[second * dimension + first] = 1.0;
+    }
+}
+
+std::size_t FermionicGaussianState::estimated_bytes() const noexcept {
+    return sizeof(*this) + covariance_.capacity() * sizeof(double);
+}
+
+void FermionicGaussianState::validate_majorana(std::size_t index) const {
+    if (index >= 2U * modes_) {
+        throw QStateError("Fermionic Majorana index is out of range");
+    }
+}
+
+void FermionicGaussianState::validate_mode(std::size_t mode) const {
+    if (mode >= modes_) {
+        throw QStateError("Fermionic mode is out of range");
+    }
+}
+
+void FermionicGaussianState::rotate_majoranas(
+    std::size_t first,
+    std::size_t second,
+    double theta) {
+    validate_majorana(first);
+    validate_majorana(second);
+    if (first == second || !std::isfinite(theta)) {
+        throw QStateError("Fermionic Majorana rotation requires distinct indices and finite angle");
+    }
+    const std::size_t dimension = 2U * modes_;
+    const double c = std::cos(theta);
+    const double s = std::sin(theta);
+    std::vector<double> first_row(dimension, 0.0);
+    std::vector<double> second_row(dimension, 0.0);
+    for (std::size_t column = 0U; column < dimension; ++column) {
+        const double left = covariance_[first * dimension + column];
+        const double right = covariance_[second * dimension + column];
+        first_row[column] = c * left - s * right;
+        second_row[column] = s * left + c * right;
+    }
+    for (std::size_t column = 0U; column < dimension; ++column) {
+        covariance_[first * dimension + column] = first_row[column];
+        covariance_[second * dimension + column] = second_row[column];
+    }
+
+    std::vector<double> first_column(dimension, 0.0);
+    std::vector<double> second_column(dimension, 0.0);
+    for (std::size_t row = 0U; row < dimension; ++row) {
+        const double left = covariance_[row * dimension + first];
+        const double right = covariance_[row * dimension + second];
+        first_column[row] = c * left - s * right;
+        second_column[row] = s * left + c * right;
+    }
+    for (std::size_t row = 0U; row < dimension; ++row) {
+        covariance_[row * dimension + first] = first_column[row];
+        covariance_[row * dimension + second] = second_column[row];
+    }
+}
+
+double FermionicGaussianState::occupation(std::size_t mode) const {
+    validate_mode(mode);
+    const std::size_t dimension = 2U * modes_;
+    const std::size_t first = 2U * mode;
+    return 0.5 * (1.0 + covariance_[first * dimension + first + 1U]);
+}
+
+double FermionicGaussianState::total_occupation() const {
+    double total = 0.0;
+    for (std::size_t mode = 0U; mode < modes_; ++mode) {
+        total += occupation(mode);
+    }
+    return total;
+}
+
+bool FermionicGaussianState::validate(double tolerance) const noexcept {
+    if (!(tolerance >= 0.0) || !std::isfinite(tolerance)) {
+        return false;
+    }
+    const std::size_t dimension = 2U * modes_;
+    if (covariance_.size() != dimension * dimension) {
+        return false;
+    }
+    for (std::size_t row = 0U; row < dimension; ++row) {
+        for (std::size_t column = 0U; column < dimension; ++column) {
+            const double value = covariance_[row * dimension + column];
+            if (!std::isfinite(value) ||
+                std::abs(value + covariance_[column * dimension + row]) > tolerance) {
+                return false;
+            }
+        }
+    }
+    for (std::size_t row = 0U; row < dimension; ++row) {
+        for (std::size_t column = 0U; column < dimension; ++column) {
+            double value = row == column ? 1.0 : 0.0;
+            for (std::size_t inner = 0U; inner < dimension; ++inner) {
+                value += covariance_[row * dimension + inner] *
+                         covariance_[inner * dimension + column];
+            }
+            if (std::abs(value) > tolerance) {
+                return false;
+            }
         }
     }
     return true;
