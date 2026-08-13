@@ -1,5 +1,6 @@
 #include "qubit/qmath.hpp"
 #include "qubit/qsigned.hpp"
+#include "qubit/qweyl.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -70,7 +71,6 @@ int main() {
 
     const auto deps = math.dependencies(math.multiply({f, math.apply(A, psi)}));
     require(deps == std::vector<std::string>({"A", "psi", "z"}), "dependency extraction failed");
-
     require(math.equation(x, y)->type.scalar == QMathScalar::Boolean, "equation did not produce boolean type");
 
     QMathArena bounded(QMathConfig{2, 8, 8});
@@ -168,6 +168,66 @@ int main() {
     rejected = false;
     try { brain.add(QPolarity::Positive, QRational(-1)); } catch (const QMathError&) { rejected = true; }
     require(rejected, "signed channel accepted negative magnitude");
+
+    const QWeylSpace qutrit_space{3U};
+    const QWeylOperator X3 = QWeylOperator::local(qutrit_space, 0U, 1, 0);
+    const QWeylOperator Z3 = QWeylOperator::local(qutrit_space, 0U, 0, 1);
+    require(X3.power(3).identity_exact() && Z3.power(3).identity_exact(),
+            "qutrit Weyl generators do not have order three");
+    require(X3.commutation_turns(Z3) == QRational(2, 3) && Z3.commutation_turns(X3) == QRational(1, 3),
+            "qutrit Weyl commutation phase is wrong");
+    require(!X3.commutes_with(Z3), "noncommuting qutrit Weyl generators were marked commuting");
+    require(X3.multiplied(Z3).equivalent_up_to_global_phase(Z3.multiplied(X3)),
+            "Weyl canonical exponents depend on multiplication order");
+    const QWeylOperator XZ3 = X3.multiplied(Z3);
+    require(XZ3.multiplied(XZ3.inverse()).identity_exact(), "Weyl inverse failed exact group cancellation");
+
+    const QWeylSpace mixed_space{2U, 3U, 5U};
+    const QWeylOperator mixed_x = QWeylOperator::local(mixed_space, 0U, 1, 0);
+    const QWeylOperator mixed_z = QWeylOperator::local(mixed_space, 2U, 0, 1);
+    require(mixed_x.commutes_with(mixed_z), "disjoint mixed-dimension Weyl operators did not commute");
+    require(mixed_space.dense_dimension() == 30U, "mixed local Hilbert dimension is wrong");
+
+    const QTernaryVector ternary_shift{QPolarity::Positive, QPolarity::Negative, QPolarity::Neutral};
+    const QTernaryVector ternary_clock{QPolarity::Neutral, QPolarity::Positive, QPolarity::Negative};
+    const QWeylOperator ternary_weyl = QWeylOperator::from_ternary(ternary_shift, ternary_clock);
+    require(ternary_weyl.ternary_shift() == ternary_shift && ternary_weyl.ternary_clock() == ternary_clock,
+            "signed ternary/Weyl exponent bridge failed");
+
+    QSignedWeylCircuit controlled(qutrit_space);
+    controlled.append(QPolarity::Positive, X3);
+    controlled.append(QPolarity::Neutral, Z3);
+    controlled.append(QPolarity::Negative, X3);
+    auto controlled_result = controlled.compile();
+    require(!controlled_result.receipt.ready && controlled_result.receipt.unresolved_steps == 1U && !controlled_result.value,
+            "neutral Brain circuit control was silently treated as executable");
+    controlled.resolve(1U, QPolarity::Positive);
+    controlled_result = controlled.compile();
+    require(controlled_result.receipt.ready && controlled_result.value.has_value(),
+            "resolved signed Weyl circuit did not compile");
+
+    QSignedWeylCircuit cancellation(qutrit_space);
+    cancellation.append(QPolarity::Positive, X3);
+    cancellation.append(QPolarity::Positive, Z3);
+    cancellation.append(QPolarity::Negative, Z3);
+    cancellation.append(QPolarity::Negative, X3);
+    const auto canceled_circuit = cancellation.compile();
+    require(canceled_circuit.receipt.ready && canceled_circuit.value->identity_exact(),
+            "signed Weyl circuit failed exact inverse cancellation");
+    require(canceled_circuit.receipt.reduced_support_terms == 0U && canceled_circuit.receipt.local_cancellations != 0U,
+            "Weyl circuit receipt lost exact local cancellation");
+
+    const QWeylSpace qubit_space{2U};
+    const QWeylOperator XZ = QWeylOperator::local(qubit_space, 0U, 1, 1);
+    const QWeylQubitLowering lowered = lower_weyl_qubits(XZ);
+    require(lowered.operations.size() == 1U && lowered.operations[0].code == OperationCode::Y &&
+            lowered.global_phase_turns == QRational(3, 4),
+            "exact Weyl-to-qubit lowering lost XZ global phase");
+
+    const QWeylMathProjection qmath_weyl = project_weyl_qmath(ternary_weyl, math);
+    require(qmath_weyl.expression && qmath_weyl.expression->type.space == QMathSpace::Operator &&
+            qmath_weyl.global_phase_turns == ternary_weyl.phase_turns(),
+            "Weyl-to-QMath projection lost operator type or exact phase");
 
     std::cout << "QMath core tests passed\n";
 }
