@@ -59,6 +59,21 @@ int main() {
     assert(close(squeezed_block[3], 0.5 * std::exp(2.0 * squeeze)));
     assert(close(squeezed.mean_occupation(0U), std::sinh(squeeze) * std::sinh(squeeze)));
 
+    StructuredGaussianState paired = StructuredGaussianState::vacuum(2U, config);
+    constexpr double pair_squeeze = 0.4;
+    paired.two_mode_squeeze(0U, 1U, pair_squeeze);
+    assert(paired.stats().components == 1U);
+    assert(paired.stats().largest_component_modes == 2U);
+    const double pair_occupation = std::sinh(pair_squeeze) * std::sinh(pair_squeeze);
+    assert(close(paired.mean_occupation(0U), pair_occupation));
+    assert(close(paired.mean_occupation(1U), pair_occupation));
+    const auto paired_cross = paired.covariance_block(0U, 1U);
+    const double paired_correlation = std::cosh(pair_squeeze) * std::sinh(pair_squeeze);
+    assert(close(paired_cross[0], paired_correlation));
+    assert(close(paired_cross[1], 0.0));
+    assert(close(paired_cross[2], 0.0));
+    assert(close(paired_cross[3], -paired_correlation));
+
     const std::vector<double> occupations{1.0, 0.0};
     StructuredGaussianState mixed = StructuredGaussianState::thermal(occupations, config);
     mixed.beam_splitter(0U, 1U, 0.5);
@@ -82,7 +97,10 @@ int main() {
     component_cap.max_component_modes = 1U;
     StructuredGaussianState separated = StructuredGaussianState::vacuum(2U, component_cap);
     assert(throws_qstate([&] { separated.beam_splitter(0U, 1U, 0.5); }));
+    assert(throws_qstate([&] { separated.two_mode_squeeze(0U, 1U, 0.2); }));
     assert(throws_qstate([&] { squeezed.squeeze(0U, 5.0); }));
+    assert(throws_qstate([&] { paired.two_mode_squeeze(0U, 1U, 5.0); }));
+    assert(throws_qstate([&] { paired.two_mode_squeeze(0U, 0U, 0.2); }));
     assert(throws_qstate([&] { mixed.loss(0U, 1.1); }));
     assert(throws_qstate([&] { mixed.beam_splitter(0U, 0U, 0.5); }));
 

@@ -107,6 +107,39 @@ public:
         apply_single(mode, {q, 0.0, 0.0, p});
     }
 
+    void two_mode_squeeze(std::size_t first, std::size_t second, double parameter) {
+        validate_mode(first);
+        validate_mode(second);
+        if (first == second) {
+            throw QStateError("Gaussian two-mode squeezing requires distinct modes");
+        }
+        if (!std::isfinite(parameter) || std::abs(parameter) > config_.max_abs_squeeze) {
+            throw QStateError(
+                "Gaussian two-mode squeezing is non-finite or exceeds configured magnitude cap");
+        }
+        const double c = std::cosh(parameter);
+        const double s = std::sinh(parameter);
+        if (!std::isfinite(c) || !std::isfinite(s)) {
+            throw QStateError("Gaussian two-mode squeezing produced a non-finite symplectic factor");
+        }
+        merge_components(first, second);
+        auto [component, first_local] = locate(first);
+        const std::size_t second_local = local_index(*component, second);
+        const std::array<std::size_t, 4> selected{
+            2U * first_local, 2U * first_local + 1U,
+            2U * second_local, 2U * second_local + 1U,
+        };
+        const std::array<double, 16> transform{
+            c, 0.0, s, 0.0,
+            0.0, c, 0.0, -s,
+            s, 0.0, c, 0.0,
+            0.0, -s, 0.0, c,
+        };
+        apply_selected(*component, selected, transform);
+        require_finite(*component);
+        refresh_stats();
+    }
+
     void beam_splitter(std::size_t first, std::size_t second, double transmissivity) {
         validate_mode(first);
         validate_mode(second);
@@ -352,7 +385,7 @@ private:
         const std::size_t merged_modes = checked_sum(
             left.modes.size(), right.modes.size(), "Gaussian component mode count overflowed");
         if (merged_modes > config_.max_component_modes) {
-            throw QStateError("Gaussian beam splitter exceeds configured component-mode cap");
+            throw QStateError("Gaussian mode coupling exceeds configured component-mode cap");
         }
         const std::size_t dimension =
             checked_product(merged_modes, 2U, "Gaussian component dimension overflowed");
@@ -361,7 +394,7 @@ private:
         const std::size_t component_scalars = checked_sum(
             dimension, covariance_scalars, "Gaussian component scalar count overflowed");
         if (component_scalars > config_.max_component_scalars) {
-            throw QStateError("Gaussian beam splitter exceeds configured component scalar cap");
+            throw QStateError("Gaussian mode coupling exceeds configured component scalar cap");
         }
 
         GaussianComponent merged;

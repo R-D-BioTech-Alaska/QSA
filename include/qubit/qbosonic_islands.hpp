@@ -122,6 +122,16 @@ public:
         refresh_stats();
     }
 
+    void gaussian_two_mode_squeeze(
+        std::size_t first,
+        std::size_t second,
+        double parameter) {
+        const std::size_t local_first = require_gaussian(first);
+        const std::size_t local_second = require_gaussian(second);
+        gaussian_.two_mode_squeeze(local_first, local_second, parameter);
+        refresh_stats();
+    }
+
     void gaussian_loss(
         std::size_t global_mode,
         double transmissivity,

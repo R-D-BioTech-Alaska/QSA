@@ -29,7 +29,7 @@ int main() {
         std::move(gaussian), std::move(fock));
 
     const auto transform_begin = Clock::now();
-    product.gaussian_squeeze(0U, 0.35);
+    product.gaussian_two_mode_squeeze(0U, 1U, 0.35);
     product.gaussian_displace(2U, 0.75, -0.25);
     for (std::size_t pair = 0U; pair < 1024U; ++pair) {
         product.gaussian_beam_splitter(2U * pair, 2U * pair + 1U, 0.5);
@@ -105,6 +105,7 @@ int main() {
               << (cross_beam_splitter_rejected ? 1 : 0) << '\n'
               << "island_cross_hopping_rejected="
               << (cross_hopping_rejected ? 1 : 0) << '\n'
+              << "island_two_mode_squeezing_exercised=1\n"
               << "island_transform_ms=" << transform_ms << '\n'
               << "island_query_ms=" << query_ms << '\n'
               << "gaussian_to_fock_conversion_performed=0\n"

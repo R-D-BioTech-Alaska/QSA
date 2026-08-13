@@ -65,10 +65,13 @@ void independent_island_evolution() {
 
     product.gaussian_displace(0U, 1.0, -0.5);
     product.gaussian_squeeze(1U, 0.3);
+    product.gaussian_two_mode_squeeze(1U, 2U, 0.25);
     product.gaussian_beam_splitter(0U, 1U, 0.5);
     product.gaussian_loss(2U, 0.7, 0.2);
-    require(product.gaussian().stats().components == 2U,
+    require(product.gaussian().stats().components == 1U,
         "bosonic Gaussian component merge mismatch");
+    require(product.gaussian().mean_occupation(1U) > 0.0,
+        "bosonic two-mode squeezing produced no occupation");
     require(product.fock().stats().terms == 1U,
         "Gaussian evolution changed sparse-Fock terms");
 
@@ -105,6 +108,14 @@ void fail_closed_boundaries() {
         rejected = true;
     }
     require(rejected, "cross-island beam splitter did not reject");
+
+    rejected = false;
+    try {
+        product.gaussian_two_mode_squeeze(0U, 2U, 0.3);
+    } catch (const QStateError&) {
+        rejected = true;
+    }
+    require(rejected, "cross-island two-mode squeezing did not reject");
 
     rejected = false;
     try {
