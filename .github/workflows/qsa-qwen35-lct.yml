@@ -1,0 +1,83 @@
+name: QSA Qwen35 LCT Source Bound
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qlct_qwen35.hpp"
+      - "tests/test_qwen35_lct.cpp"
+      - ".github/workflows/qsa-qwen35-lct.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qwen35-lct-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Qwen35 LCT driver
+        shell: bash
+        run: |
+          mkdir -p qwen35-lct-driver
+          cat > qwen35-lct-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAQwen35LCTCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(qwen35_lct_tests ../tests/test_qwen35_lct.cpp)
+          target_link_libraries(qwen35_lct_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(qwen35_lct_tests PRIVATE /W4)
+          else()
+              target_compile_options(qwen35_lct_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME qwen35_lct_tests COMMAND qwen35_lct_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S qwen35-lct-driver -B qwen35-lct-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build qwen35-lct-build --config Release --target qwen35_lct_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir qwen35-lct-build -C Release --output-on-failure
+
+  qwen35-lct-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run sanitizers
+        shell: bash
+        run: |
+          mkdir -p qwen35-lct-driver
+          cat > qwen35-lct-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAQwen35LCTSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(qwen35_lct_tests ../tests/test_qwen35_lct.cpp)
+          target_link_libraries(qwen35_lct_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S qwen35-lct-driver -B qwen35-lct-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build qwen35-lct-sanitize-build --target qwen35_lct_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./qwen35-lct-sanitize-build/qwen35_lct_tests
