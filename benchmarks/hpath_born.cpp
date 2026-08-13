@@ -145,6 +145,9 @@ int main() {
     const std::size_t peak_log2 = ceil_log2(std::max<std::size_t>(1U, stats.factor.peak_factor_entries));
     const std::size_t path_pair_gap = 2U * stats.h_events - peak_log2;
     const std::size_t output_gap = qubits - retained.size();
+    const std::size_t naive_uncancelled_factors = 2U * operations.size();
+    const std::size_t cancelled_final_phase_factors =
+        2U * qubits + 2U * qubits + 2U * (qubits - 1U);
     const bool hard_rejected = broad_width_rejected();
 
     std::cout << std::setprecision(17)
@@ -156,6 +159,8 @@ int main() {
               << "born_physical_output_space_log2=" << qubits << '\n'
               << "born_variables=" << stats.born_variables << '\n'
               << "born_factor_count=" << stats.factor_count << '\n'
+              << "born_naive_uncancelled_factor_count=" << naive_uncancelled_factors << '\n'
+              << "born_cancelled_final_phase_factors=" << cancelled_final_phase_factors << '\n'
               << "born_retained_qubits=" << stats.retained_qubits << '\n'
               << "born_output_entries=" << stats.output_entries << '\n'
               << "born_peak_union_variables=" << stats.factor.peak_union_variables << '\n'
@@ -177,6 +182,7 @@ int main() {
               << "physical_output_enumeration_performed=0\n";
 
     return marginal.size() == 16U &&
+            stats.factor_count + cancelled_final_phase_factors == naive_uncancelled_factors &&
             std::abs(total - 1.0) <= 1e-8 &&
             max_abs_imaginary <= 1e-9 &&
             minimum_probability >= -1e-10 &&

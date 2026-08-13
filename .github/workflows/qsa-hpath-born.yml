@@ -133,7 +133,10 @@ jobs:
           assert int(values["born_path_pair_log2"]) == 8192
           assert int(values["born_physical_output_space_log2"]) == 1024
           assert int(values["born_variables"]) == 9216
-          assert int(values["born_factor_count"]) == 32760
+          assert int(values["born_factor_count"]) == 26618
+          assert int(values["born_naive_uncancelled_factor_count"]) == 32760
+          assert int(values["born_cancelled_final_phase_factors"]) == 6142
+          assert int(values["born_factor_count"]) + int(values["born_cancelled_final_phase_factors"]) == int(values["born_naive_uncancelled_factor_count"])
           assert int(values["born_retained_qubits"]) == 4
           assert int(values["born_output_entries"]) == 16
           assert int(values["born_peak_union_variables"]) <= 20
