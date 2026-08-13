@@ -55,6 +55,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qqtt_split_step.hpp",
     "include/qubit/qfock.hpp",
     "include/qubit/qgaussian.hpp",
+    "include/qubit/qbosonic_islands.hpp",
     "src/qfactor.cpp",
 )
 

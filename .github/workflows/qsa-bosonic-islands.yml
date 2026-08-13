@@ -1,0 +1,152 @@
+name: QSA Exact Bosonic Island Product
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qbosonic_islands.hpp"
+      - "tests/test_bosonic_islands.cpp"
+      - "benchmarks/bosonic_islands.cpp"
+      - ".github/workflows/qsa-bosonic-islands.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bosonic-islands-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build island driver
+        shell: bash
+        run: |
+          mkdir -p bosonic-islands-driver
+          cat > bosonic-islands-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABosonicIslandsCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(bosonic_islands_tests ../tests/test_bosonic_islands.cpp)
+          target_link_libraries(bosonic_islands_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(bosonic_islands_tests PRIVATE /W4)
+          else()
+              target_compile_options(bosonic_islands_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME bosonic_islands_tests COMMAND bosonic_islands_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S bosonic-islands-driver -B bosonic-islands-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build bosonic-islands-build --config Release --target bosonic_islands_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir bosonic-islands-build -C Release --output-on-failure
+
+  bosonic-islands-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p bosonic-islands-driver
+          cat > bosonic-islands-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABosonicIslandsSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(bosonic_islands_tests ../tests/test_bosonic_islands.cpp)
+          target_link_libraries(bosonic_islands_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S bosonic-islands-driver -B bosonic-islands-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build bosonic-islands-sanitize-build --target bosonic_islands_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./bosonic-islands-sanitize-build/bosonic_islands_tests
+
+  bosonic-islands-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p bosonic-islands-driver
+          cat > bosonic-islands-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABosonicIslandsEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(bosonic_islands_benchmark ../benchmarks/bosonic_islands.cpp)
+          target_link_libraries(bosonic_islands_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S bosonic-islands-driver -B bosonic-islands-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build bosonic-islands-evidence-build --target bosonic_islands_benchmark --parallel 2
+      - name: Run island carrier
+        run: |
+          set -o pipefail
+          ./bosonic-islands-evidence-build/bosonic_islands_benchmark | tee bosonic-islands-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("bosonic-islands-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["island_total_modes"]) == 8192
+          assert int(values["island_gaussian_modes"]) == 4096
+          assert int(values["island_fock_modes"]) == 4096
+          assert int(values["island_gaussian_components"]) == 3072
+          assert int(values["island_gaussian_descriptor_scalars"]) == 32768
+          assert int(values["island_gaussian_dense_descriptor_scalars"]) == 67117056
+          assert float(values["island_gaussian_descriptor_ratio"]) > 2048.0
+          assert int(values["island_fock_terms"]) == 8
+          assert int(values["island_fock_occupied_entries"]) == 72
+          assert int(values["island_fock_fixed_particles"]) == 4096
+          assert float(values["island_fock_sector_log2_dimension"]) > 8180.0
+          assert float(values["island_gaussian_mean_mode0"]) > 0.0
+          assert abs(float(values["island_fock_mean_first_mode"]) - 511.875) < 1e-10
+          assert float(values["island_total_mean_number"]) > 4096.0
+          assert float(values["island_cross_number_product"]) > 0.0
+          assert abs(float(values["island_cross_number_covariance"])) < 1e-15
+          assert int(values["island_cross_beam_splitter_rejected"]) == 1
+          assert int(values["island_cross_hopping_rejected"]) == 1
+          assert 0.0 < float(values["island_transform_ms"]) < 10000.0
+          assert 0.0 < float(values["island_query_ms"]) < 10000.0
+          assert int(values["gaussian_to_fock_conversion_performed"]) == 0
+          assert int(values["fock_to_gaussian_conversion_performed"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum bosonic-islands-evidence.txt | tee bosonic-islands-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-bosonic-islands-evidence
+          path: |
+            bosonic-islands-evidence.txt
+            bosonic-islands-evidence.sha256
