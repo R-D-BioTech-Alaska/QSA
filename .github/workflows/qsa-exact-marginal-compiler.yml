@@ -1,0 +1,147 @@
+name: QSA Exact Marginal Compiler
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qcompiler.hpp"
+      - "include/qubit/qfabric.hpp"
+      - "tests/test_exact_marginal_compiler.cpp"
+      - "benchmarks/exact_marginal_compiler.cpp"
+      - ".github/workflows/qsa-exact-marginal-compiler.yml"
+      - "include/qubit/qbroker.hpp"
+      - "src/qbroker.cpp"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compiler-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compiler driver
+        shell: bash
+        run: |
+          mkdir -p compiler-driver
+          cat > compiler-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactMarginalCompilerCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(exact_marginal_compiler_tests ../tests/test_exact_marginal_compiler.cpp)
+          target_link_libraries(exact_marginal_compiler_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(exact_marginal_compiler_tests PRIVATE /W4)
+          else()
+              target_compile_options(exact_marginal_compiler_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME exact_marginal_compiler_tests COMMAND exact_marginal_compiler_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S compiler-driver -B compiler-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build compiler-build --config Release --target exact_marginal_compiler_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir compiler-build -C Release --output-on-failure
+
+  compiler-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p compiler-driver
+          cat > compiler-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactMarginalCompilerSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(exact_marginal_compiler_tests ../tests/test_exact_marginal_compiler.cpp)
+          target_link_libraries(exact_marginal_compiler_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S compiler-driver -B compiler-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build compiler-sanitize-build --target exact_marginal_compiler_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./compiler-sanitize-build/exact_marginal_compiler_tests
+
+  compiler-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p compiler-driver
+          cat > compiler-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactMarginalCompilerEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(exact_marginal_compiler_benchmark ../benchmarks/exact_marginal_compiler.cpp)
+          target_link_libraries(exact_marginal_compiler_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S compiler-driver -B compiler-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build compiler-evidence-build --target exact_marginal_compiler_benchmark --parallel 2
+      - name: Run compiler carrier
+        run: |
+          set -o pipefail
+          ./compiler-evidence-build/exact_marginal_compiler_benchmark | tee exact-marginal-compiler-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("exact-marginal-compiler-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["compiler_original_qubits"]) == 10000
+          assert int(values["compiler_original_operations"]) == 99998
+          assert int(values["compiler_causal_qubits"]) == 11
+          assert int(values["compiler_causal_operations"]) == 63
+          assert int(values["compiler_removed_qubits"]) == 9989
+          assert int(values["compiler_removed_operations"]) == 99935
+          assert int(values["compiler_components"]) == 1
+          assert int(values["compiler_prepared_components"]) == 1
+          assert int(values["compiler_stabilizer_routes"]) == 1
+          assert int(values["compiler_register_routes"]) == 0
+          assert int(values["compiler_estimated_bytes"]) > 0
+          assert abs(float(values["compiler_probability"]) - 1.0) < 1e-12
+          assert float(values["compiler_setup_ms"]) < 10000.0
+          assert float(values["compiler_query_us"]) < 10000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum exact-marginal-compiler-evidence.txt | tee exact-marginal-compiler-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-exact-marginal-compiler-evidence
+          path: |
+            exact-marginal-compiler-evidence.txt
+            exact-marginal-compiler-evidence.sha256
