@@ -15,6 +15,8 @@
 
 namespace qubit {
 
+using ExactRepresentationDependencyType = std::uint64_t;
+
 enum class ExactRepresentationExecutionKind : std::uint8_t {
     LocalDense = 0,
     Broker = 1,
@@ -33,6 +35,8 @@ struct ExactRepresentationFabricConfig {
     std::size_t max_component_operations{1U << 24U};
     std::size_t max_operations{1U << 26U};
     std::size_t max_dependency_width{1U << 20U};
+    std::size_t max_declared_dependencies{1U << 20U};
+    std::size_t max_dependency_support_entries{1U << 24U};
     std::size_t max_local_dense_qubits{18U};
     std::size_t max_local_dense_state_scalars{1U << 18U};
     std::size_t max_local_dense_scalar_sweep_units{1U << 28U};
@@ -44,6 +48,7 @@ struct ExactRepresentationFabricStats {
     std::size_t qubits{0U};
     std::size_t operations{0U};
     std::size_t declared_dependencies{0U};
+    std::size_t dependency_support_entries{0U};
     std::size_t active_components{0U};
     std::size_t component_merges{0U};
     std::size_t component_invalidations{0U};
@@ -68,6 +73,13 @@ struct ExactRepresentationComponentReceipt {
     std::size_t broker_cached_plans{0U};
     std::size_t local_dense_cached_plans{0U};
     std::size_t local_dense_cached_scalars{0U};
+};
+
+struct ExactRepresentationDependencyReceipt {
+    std::size_t component{0U};
+    std::size_t generation{0U};
+    ExactRepresentationDependencyType type{0U};
+    std::vector<QubitId> support{};
 };
 
 struct ExactRepresentationTransitionReceipt {
@@ -134,7 +146,8 @@ public:
             qubit_count_ > static_cast<std::size_t>(std::numeric_limits<QubitId>::max()) ||
             config_.max_active_components == 0U || config_.max_component_qubits == 0U ||
             config_.max_component_operations == 0U || config_.max_operations == 0U ||
-            config_.max_dependency_width < 2U ||
+            config_.max_dependency_width < 2U || config_.max_declared_dependencies == 0U ||
+            config_.max_dependency_support_entries < config_.max_dependency_width ||
             config_.max_local_dense_qubits >= std::numeric_limits<std::size_t>::digits ||
             config_.max_local_dense_state_scalars == 0U ||
             config_.max_local_dense_scalar_sweep_units == 0U ||
@@ -156,17 +169,32 @@ public:
         }
         if (pair(operation.code)) {
             const std::array<QubitId, 2> support{operation.first, operation.second};
-            attach(normalize(support, 2U), &operation, false);
+            attach(normalize(support, 2U), &operation, false, 0U);
         } else {
             const std::array<QubitId, 1> support{operation.first};
-            attach(normalize(support, 1U), &operation, false);
+            attach(normalize(support, 1U), &operation, false, 0U);
         }
         ++stats_.operations;
     }
 
     void declare_dependency(std::span<const QubitId> support) {
-        attach(normalize(support, 2U), nullptr, true);
+        declare_dependency(0U, support);
+    }
+
+    void declare_dependency(
+        ExactRepresentationDependencyType type,
+        std::span<const QubitId> support) {
+        const std::vector<QubitId> normalized = normalize(support, 2U);
+        if (stats_.declared_dependencies >= config_.max_declared_dependencies ||
+            stats_.dependency_support_entries > config_.max_dependency_support_entries ||
+            normalized.size() >
+                config_.max_dependency_support_entries - stats_.dependency_support_entries) {
+            throw QStateError("Representation fabric dependency resource cap exceeded");
+        }
+        attach(normalized, nullptr, true, type);
         ++stats_.declared_dependencies;
+        stats_.dependency_support_entries = checked_sum(
+            stats_.dependency_support_entries, normalized.size());
     }
 
     [[nodiscard]] ExactRepresentationProbabilityResult marginal_probability(
@@ -365,6 +393,26 @@ public:
         return result;
     }
 
+    [[nodiscard]] std::vector<ExactRepresentationDependencyReceipt> dependency_receipts() const {
+        std::vector<ExactRepresentationDependencyReceipt> result;
+        result.reserve(stats_.declared_dependencies);
+        for (std::size_t index = 0U; index < components_.size(); ++index) {
+            const Component& component = components_[index];
+            if (!component.active) {
+                continue;
+            }
+            for (const DependencyRecord& dependency : component.dependency_records) {
+                result.push_back(ExactRepresentationDependencyReceipt{
+                    index,
+                    component.generation,
+                    dependency.type,
+                    dependency.support,
+                });
+            }
+        }
+        return result;
+    }
+
     void reset() noexcept {
         components_.clear();
         std::fill(component_of_.begin(), component_of_.end(), npos());
@@ -392,6 +440,11 @@ private:
         std::unique_ptr<QRegister> state{};
     };
 
+    struct DependencyRecord {
+        ExactRepresentationDependencyType type{0U};
+        std::vector<QubitId> support{};
+    };
+
     struct Component {
         bool active{false};
         bool qubits_sorted{true};
@@ -399,6 +452,7 @@ private:
         std::size_t dependencies{0U};
         std::vector<QubitId> qubits{};
         std::vector<Operation> operations{};
+        std::vector<DependencyRecord> dependency_records{};
         std::unique_ptr<ExactCompiledMarginalProgram> program{};
         std::vector<DenseCacheEntry> dense_cache{};
         std::size_t dense_cached_scalars{0U};
@@ -465,7 +519,8 @@ private:
     void attach(
         const std::vector<QubitId>& support,
         const Operation* operation,
-        bool dependency) {
+        bool dependency,
+        ExactRepresentationDependencyType dependency_type) {
         std::vector<std::size_t> ids;
         ids.reserve(support.size());
         for (const QubitId qubit : support) {
@@ -486,6 +541,9 @@ private:
             component.active = true;
             component.qubits = support;
             component.dependencies = dependency ? 1U : 0U;
+            if (dependency) {
+                component.dependency_records.push_back(DependencyRecord{dependency_type, support});
+            }
             if (operation != nullptr) {
                 component.operations.push_back(*operation);
             }
@@ -530,6 +588,7 @@ private:
             }
             if (dependency) {
                 component.dependencies = checked_sum(component.dependencies, 1U);
+                component.dependency_records.push_back(DependencyRecord{dependency_type, support});
             }
             for (const QubitId qubit : additions) {
                 component_of_[static_cast<std::size_t>(qubit)] = ids.front();
@@ -556,12 +615,21 @@ private:
             throw QStateError("Representation fabric merge exceeds configured cap");
         }
         operations.reserve(operation_count);
+        std::vector<DependencyRecord> dependency_records;
+        dependency_records.reserve(dependencies);
         for (const std::size_t id : ids) {
             operations.insert(
                 operations.end(), components_[id].operations.begin(), components_[id].operations.end());
+            dependency_records.insert(
+                dependency_records.end(),
+                components_[id].dependency_records.begin(),
+                components_[id].dependency_records.end());
         }
         if (operation != nullptr) {
             operations.push_back(*operation);
+        }
+        if (dependency) {
+            dependency_records.push_back(DependencyRecord{dependency_type, support});
         }
         if (generation == std::numeric_limits<std::size_t>::max()) {
             throw QStateError("Representation fabric generation counter overflowed");
@@ -580,6 +648,7 @@ private:
         target.dependencies = dependencies;
         target.qubits = std::move(combined);
         target.operations = std::move(operations);
+        target.dependency_records = std::move(dependency_records);
         target.program.reset();
         target.dense_cache.clear();
         target.dense_cached_scalars = 0U;
