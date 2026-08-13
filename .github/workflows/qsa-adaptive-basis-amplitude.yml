@@ -1,0 +1,165 @@
+name: QSA Adaptive Computational Basis Amplitude
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qadaptive_basis_amplitude.hpp"
+      - "include/qubit/qhpath_basis.hpp"
+      - "include/qubit/qadaptive_amplitude.hpp"
+      - "include/qubit/qphase_sum.hpp"
+      - "include/qubit/qfactor.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_adaptive_basis_amplitude.cpp"
+      - "benchmarks/adaptive_basis_amplitude.cpp"
+      - ".github/workflows/qsa-adaptive-basis-amplitude.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adaptive-basis-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build adaptive basis driver
+        shell: bash
+        run: |
+          mkdir -p adaptive-basis-driver
+          cat > adaptive-basis-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAAdaptiveBasisAmplitudeCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(adaptive_basis_tests ../tests/test_adaptive_basis_amplitude.cpp)
+          target_link_libraries(adaptive_basis_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(adaptive_basis_tests PRIVATE /W4)
+          else()
+              target_compile_options(adaptive_basis_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME adaptive_basis_tests COMMAND adaptive_basis_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S adaptive-basis-driver -B adaptive-basis-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build adaptive-basis-build --config Release --target adaptive_basis_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir adaptive-basis-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  adaptive-basis-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p adaptive-basis-driver
+          cat > adaptive-basis-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAAdaptiveBasisAmplitudeSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(adaptive_basis_tests ../tests/test_adaptive_basis_amplitude.cpp)
+          target_link_libraries(adaptive_basis_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S adaptive-basis-driver -B adaptive-basis-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build adaptive-basis-sanitize-build --target adaptive_basis_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./adaptive-basis-sanitize-build/adaptive_basis_tests
+
+  adaptive-basis-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p adaptive-basis-driver
+          cat > adaptive-basis-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAAdaptiveBasisAmplitudeEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(adaptive_basis_benchmark ../benchmarks/adaptive_basis_amplitude.cpp)
+          target_link_libraries(adaptive_basis_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S adaptive-basis-driver -B adaptive-basis-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build adaptive-basis-evidence-build --target adaptive_basis_benchmark --parallel 2
+      - name: Run adaptive basis carrier
+        run: |
+          set -o pipefail
+          ./adaptive-basis-evidence-build/adaptive_basis_benchmark | tee adaptive-basis-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("adaptive-basis-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["adaptive_basis_qubits"]) == 2048
+          assert int(values["adaptive_basis_target_h_events"]) == 4096
+          assert int(values["adaptive_basis_preparation_h_events"]) == 2048
+          assert int(values["adaptive_basis_phase_h_defects"]) == 6144
+          assert int(values["adaptive_basis_phase_envelope_fits_size_t"]) == 0
+          assert int(values["adaptive_basis_phase_eligible"]) == 0
+          assert int(values["adaptive_basis_hpath_eligible"]) == 1
+          assert int(values["adaptive_basis_hpath_resource_rejected"]) == 0
+          assert int(values["adaptive_basis_route"]) == 2
+          assert int(values["adaptive_basis_decision_code"]) == 2
+          assert int(values["adaptive_basis_hpath_variables"]) == 2048
+          assert int(values["adaptive_basis_direct_variables"]) == 2048
+          assert int(values["adaptive_basis_hpath_peak_union_variables"]) <= 8
+          assert int(values["adaptive_basis_hpath_peak_factor_entries"]) <= 256
+          assert 0 < int(values["adaptive_basis_hpath_plan_bytes"]) < 512 * 1024 * 1024
+          assert 0 < int(values["adaptive_basis_workspace_bytes"]) < 64 * 1024 * 1024
+          assert int(values["adaptive_basis_query_count"]) == 8
+          assert 0.0 < float(values["adaptive_basis_setup_ms"]) < 30000.0
+          assert 0.0 < float(values["adaptive_basis_direct_setup_ms"]) < 30000.0
+          assert 0.0 < float(values["adaptive_basis_query_ms"]) < 30000.0
+          assert 0.0 < float(values["adaptive_basis_direct_query_ms"]) < 30000.0
+          assert math.isfinite(float(values["adaptive_basis_setup_overhead_ratio"]))
+          assert math.isfinite(float(values["adaptive_basis_query_overhead_ratio"]))
+          assert float(values["adaptive_basis_max_logp_error"]) <= 1e-10
+          assert int(values["dense_state_materialized"]) == 0
+          assert int(values["explicit_phase_branch_list_materialized"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum adaptive-basis-evidence.txt | tee adaptive-basis-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-adaptive-basis-amplitude-evidence
+          path: |
+            adaptive-basis-evidence.txt
+            adaptive-basis-evidence.sha256

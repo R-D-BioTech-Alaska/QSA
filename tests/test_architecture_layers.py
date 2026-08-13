@@ -45,6 +45,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qamplitude_advisor.hpp",
     "include/qubit/qadaptive_amplitude.hpp",
     "include/qubit/qadaptive_prepared_amplitude.hpp",
+    "include/qubit/qadaptive_basis_amplitude.hpp",
     "include/qubit/qpauli.hpp",
     "include/qubit/qtensor.hpp",
     "include/qubit/qmps.hpp",
