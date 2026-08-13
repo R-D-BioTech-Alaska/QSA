@@ -229,10 +229,10 @@ double PhaseGraphState::probability_one(QubitId qubit) const {
     return 0.5;
 }
 
-QComplex PhaseGraphState::amplitude(BasisIndex basis) const {
+QComplex PhaseGraphState::unit_phase(BasisIndex basis) const {
     if (qubit_count_ >= 63U) {
         throw QStateError(
-            "Integer phase-graph amplitude lookup supports at most 62 qubits; use amplitude_bits");
+            "Integer phase-graph phase lookup supports at most 62 qubits; use unit_phase_bits");
     }
     const BasisIndex dimension = BasisIndex{1} << qubit_count_;
     if (basis >= dimension) {
@@ -242,10 +242,10 @@ QComplex PhaseGraphState::amplitude(BasisIndex basis) const {
     for (std::size_t qubit = 0; qubit < qubit_count_; ++qubit) {
         bits[qubit] = static_cast<std::uint8_t>((basis >> qubit) & 1U);
     }
-    return amplitude_bits(bits);
+    return unit_phase_bits(bits);
 }
 
-QComplex PhaseGraphState::amplitude_bits(
+QComplex PhaseGraphState::unit_phase_bits(
     std::span<const std::uint8_t> bits) const {
     if (bits.size() != qubit_count_) {
         throw QStateError("Phase-graph bit-vector length does not match qubit count");
@@ -266,11 +266,26 @@ QComplex PhaseGraphState::amplitude_bits(
             phase = checked_sum(phase, angle, "Phase-graph amplitude edge phase");
         }
     }
-    const double scale = std::exp2(-0.5 * static_cast<double>(qubit_count_));
+    return QComplex::from_polar(1.0, phase);
+}
+
+QComplex PhaseGraphState::amplitude(BasisIndex basis) const {
+    const QComplex phase = unit_phase(basis);
+    const double scale = std::exp2(log2_uniform_amplitude_scale());
     if (scale == 0.0) {
         throw QStateError("Phase-graph amplitude magnitude underflows double precision");
     }
-    return QComplex::from_polar(scale, phase);
+    return phase * scale;
+}
+
+QComplex PhaseGraphState::amplitude_bits(
+    std::span<const std::uint8_t> bits) const {
+    const QComplex phase = unit_phase_bits(bits);
+    const double scale = std::exp2(log2_uniform_amplitude_scale());
+    if (scale == 0.0) {
+        throw QStateError("Phase-graph amplitude magnitude underflows double precision");
+    }
+    return phase * scale;
 }
 
 std::vector<QComplex> PhaseGraphState::materialize(std::size_t max_qubits) const {
