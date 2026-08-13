@@ -80,6 +80,17 @@ void prepared_matches_direct_all_outputs() {
     }
     require(workspace.rebind_count() == prepared.stats().output_bindings * 16U,
         "prepared Hpath targeted rebind count mismatch");
+
+    auto second_workspace = prepared.workspace();
+    bits = {1U, 0U, 1U, 1U};
+    const auto second_value = prepared.scaled_amplitude_bits(bits, second_workspace);
+    const auto second_direct = direct.scaled_amplitude_bits(bits);
+    require(qubit::almost_equal(second_value.mantissa, second_direct.mantissa, 3e-12),
+        "second compact workspace inherited stale prepared bindings");
+    require(second_workspace.rebind_count() == prepared.stats().output_bindings,
+        "second compact workspace rebind count is not independent");
+    require(workspace.rebind_count() == prepared.stats().output_bindings * 16U,
+        "first compact workspace rebind count changed after second workspace query");
 }
 
 void no_h_path_matches_direct() {
@@ -112,6 +123,8 @@ void no_h_path_matches_direct() {
                     2e-12),
             "no-H prepared amplitude differs from direct Hpath");
     }
+    require(workspace.rebind_count() == 0U,
+        "no-H compact workspace reported source rebinds");
 }
 
 void workspace_identity_is_enforced() {

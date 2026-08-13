@@ -67,10 +67,12 @@ int main() {
     using Clock = std::chrono::steady_clock;
     using qubit::ExactHadamardPathAmplitudePlan;
     using qubit::ExactPreparedHadamardPathPlan;
+    using qubit::ExactPreparedHadamardPathWorkspace;
     using qubit::QComplex;
 
     constexpr std::size_t qubits = 1024U;
     constexpr std::size_t query_count = 8U;
+    constexpr std::size_t workspace_count = 16U;
     const auto operations = spacetime_operations();
     const auto settings = config();
 
@@ -131,6 +133,23 @@ int main() {
     const double break_even_queries = saved_per_query > 0.0 ? setup_ms / saved_per_query : -1.0;
 
     const auto& stats = prepared.stats();
+    const std::size_t compact_workspace_bytes = workspace.estimated_bytes();
+    const std::size_t plan_copy_equivalent_bytes =
+        compact_workspace_bytes + stats.plan_estimated_bytes;
+    const double workspace_memory_ratio =
+        static_cast<double>(plan_copy_equivalent_bytes) /
+        static_cast<double>(compact_workspace_bytes);
+
+    std::vector<ExactPreparedHadamardPathWorkspace> workspaces;
+    workspaces.reserve(workspace_count);
+    std::size_t compact_workspace_batch_bytes = 0U;
+    for (std::size_t index = 0U; index < workspace_count; ++index) {
+        workspaces.push_back(prepared.workspace());
+        compact_workspace_batch_bytes += workspaces.back().estimated_bytes();
+    }
+    const std::size_t plan_copy_equivalent_batch_bytes =
+        workspace_count * plan_copy_equivalent_bytes;
+
     std::cout << std::setprecision(17)
               << "prepared_qubits=" << qubits << '\n'
               << "prepared_operations=" << operations.size() << '\n'
@@ -144,7 +163,13 @@ int main() {
               << "prepared_metadata_bytes=" << stats.metadata_estimated_bytes << '\n'
               << "prepared_graph_bytes=" << stats.graph_estimated_bytes << '\n'
               << "prepared_plan_bytes=" << stats.plan_estimated_bytes << '\n'
-              << "prepared_workspace_bytes=" << workspace.estimated_bytes() << '\n'
+              << "prepared_workspace_bytes=" << compact_workspace_bytes << '\n'
+              << "prepared_plan_copy_equivalent_workspace_bytes=" << plan_copy_equivalent_bytes << '\n'
+              << "prepared_workspace_memory_reduction_ratio=" << workspace_memory_ratio << '\n'
+              << "prepared_workspace_count=" << workspace_count << '\n'
+              << "prepared_compact_workspace_batch_bytes=" << compact_workspace_batch_bytes << '\n'
+              << "prepared_plan_copy_equivalent_batch_bytes=" << plan_copy_equivalent_batch_bytes << '\n'
+              << "prepared_shared_plan_serializes_queries=1\n"
               << "prepared_query_count=" << query_count << '\n'
               << "prepared_rebind_count=" << workspace.rebind_count() << '\n'
               << "prepared_setup_ms=" << setup_ms << '\n'
@@ -160,6 +185,8 @@ int main() {
               << "explicit_h_branch_list_materialized=0\n";
 
     return max_logp_error <= 1e-10 &&
+            workspace_memory_ratio > 20.0 &&
+            compact_workspace_batch_bytes < plan_copy_equivalent_batch_bytes &&
             std::isfinite(query_speed_ratio) && query_speed_ratio > 0.0 &&
             std::isfinite(amortized_total_ratio) && amortized_total_ratio > 0.0
         ? 0

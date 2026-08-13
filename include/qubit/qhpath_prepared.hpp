@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <utility>
@@ -37,29 +39,20 @@ public:
     ExactPreparedHadamardPathWorkspace() = default;
 
     [[nodiscard]] std::size_t estimated_bytes() const noexcept {
-        std::size_t total = sizeof(*this);
-        if (plan_.has_value()) {
-            const std::size_t plan_bytes = plan_->estimated_bytes();
-            if (plan_bytes > std::numeric_limits<std::size_t>::max() - total) {
-                return std::numeric_limits<std::size_t>::max();
-            }
-            total += plan_bytes;
-        }
         const std::size_t workspace_bytes = factor_workspace_.estimated_bytes();
-        if (workspace_bytes > std::numeric_limits<std::size_t>::max() - total) {
+        if (workspace_bytes > std::numeric_limits<std::size_t>::max() - sizeof(*this)) {
             return std::numeric_limits<std::size_t>::max();
         }
-        return total + workspace_bytes;
+        return sizeof(*this) + workspace_bytes;
     }
 
-    [[nodiscard]] std::size_t rebind_count() const noexcept {
-        return plan_.has_value() ? plan_->rebind_count() : 0U;
-    }
+    [[nodiscard]] std::size_t rebind_count() const noexcept { return rebind_count_; }
 
 private:
     const ExactPreparedHadamardPathPlan* owner_{nullptr};
-    std::optional<ExactFactorPlan> plan_{};
     ExactFactorWorkspace factor_workspace_{};
+    std::size_t rebind_count_{0U};
+    bool factor_workspace_active_{false};
 
     explicit ExactPreparedHadamardPathWorkspace(
         const ExactPreparedHadamardPathPlan& owner);
@@ -108,14 +101,18 @@ public:
         QComplex partition{1.0};
         ExactFactorStats factor_stats{};
         if (plan_.has_value()) {
+            std::lock_guard<std::mutex> lock(*query_mutex_);
             for (const OutputBinding& binding : bindings_) {
                 const auto& values = bits[binding.bit] == 0U
                     ? binding.zero_values
                     : binding.one_values;
-                workspace.plan_->rebind_dense_factor(binding.factor, values);
+                plan_->rebind_dense_factor(binding.factor, values);
             }
-            partition = workspace.plan_->partition(workspace.factor_workspace_);
-            factor_stats = workspace.plan_->stats();
+            workspace.rebind_count_ = checked_sum(
+                workspace.rebind_count_, bindings_.size(),
+                "Prepared Hadamard-path workspace rebind count overflowed");
+            partition = plan_->partition(workspace.factor_workspace_);
+            factor_stats = plan_->stats();
         }
 
         const QComplex mantissa = global * partition;
@@ -164,7 +161,8 @@ private:
     std::vector<OutputBinding> bindings_{};
     std::vector<std::pair<std::size_t, std::size_t>> fixed_cz_{};
     std::vector<std::array<QComplex, 2>> fixed_phase_{};
-    std::optional<ExactFactorPlan> plan_{};
+    mutable std::optional<ExactFactorPlan> plan_{};
+    mutable std::shared_ptr<std::mutex> query_mutex_{std::make_shared<std::mutex>()};
     ExactPreparedHadamardPathStats stats_{};
 
     void build(std::span<const Operation> operations) {
@@ -403,7 +401,7 @@ private:
         if (workspace.owner_ != this) {
             throw QStateError("Prepared Hadamard-path workspace belongs to a different plan");
         }
-        if (plan_.has_value() != workspace.plan_.has_value()) {
+        if (plan_.has_value() != workspace.factor_workspace_active_) {
             throw QStateError("Prepared Hadamard-path workspace shape is inconsistent");
         }
     }
@@ -461,8 +459,8 @@ inline ExactPreparedHadamardPathWorkspace::ExactPreparedHadamardPathWorkspace(
     const ExactPreparedHadamardPathPlan& owner)
     : owner_(&owner) {
     if (owner.plan_.has_value()) {
-        plan_.emplace(*owner.plan_);
-        factor_workspace_ = plan_->workspace();
+        factor_workspace_ = owner.plan_->workspace();
+        factor_workspace_active_ = true;
     }
 }
 

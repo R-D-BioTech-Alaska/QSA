@@ -136,7 +136,19 @@ jobs:
           assert 0 < int(values["prepared_metadata_bytes"]) < 64 * 1024 * 1024
           assert 0 < int(values["prepared_graph_bytes"]) < 128 * 1024 * 1024
           assert 0 < int(values["prepared_plan_bytes"]) < 512 * 1024 * 1024
-          assert 0 < int(values["prepared_workspace_bytes"]) < 1024 * 1024 * 1024
+          workspace_bytes = int(values["prepared_workspace_bytes"])
+          copy_equivalent = int(values["prepared_plan_copy_equivalent_workspace_bytes"])
+          assert 0 < workspace_bytes < 8 * 1024 * 1024
+          assert copy_equivalent > 64 * 1024 * 1024
+          memory_ratio = float(values["prepared_workspace_memory_reduction_ratio"])
+          assert math.isfinite(memory_ratio) and memory_ratio > 20.0
+          assert int(values["prepared_workspace_count"]) == 16
+          compact_batch = int(values["prepared_compact_workspace_batch_bytes"])
+          copy_batch = int(values["prepared_plan_copy_equivalent_batch_bytes"])
+          assert compact_batch < 128 * 1024 * 1024
+          assert copy_batch > 1024 * 1024 * 1024
+          assert copy_batch > compact_batch * 20
+          assert int(values["prepared_shared_plan_serializes_queries"]) == 1
           assert int(values["prepared_query_count"]) == 8
           assert int(values["prepared_rebind_count"]) == int(values["prepared_output_bindings"]) * 8
           assert 0.0 < float(values["prepared_setup_ms"]) < 10000.0
