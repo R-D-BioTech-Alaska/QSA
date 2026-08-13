@@ -24,6 +24,8 @@ struct ExactComponentReceipt {
     std::size_t index{0U};
     std::size_t qubits{0U};
     std::size_t operations{0U};
+    bool active{false};
+    bool prepared{false};
     ExactExecutionRoute route{ExactExecutionRoute::Register};
     std::size_t estimated_bytes{0U};
 };
@@ -33,6 +35,7 @@ struct ExactComponentFabricStats {
     std::size_t operations{0U};
     std::size_t components{0U};
     std::size_t largest_component_qubits{0U};
+    std::size_t active_components{0U};
     std::size_t prepared_components{0U};
     std::size_t estimated_bytes{0U};
 };
@@ -43,137 +46,21 @@ public:
         std::size_t qubit_count,
         std::span<const Operation> operations,
         ExactComponentFabricConfig config = {})
-        : qubit_count_(qubit_count), config_(config) {
-        if (qubit_count_ == 0U || qubit_count_ > config_.max_qubits ||
-            qubit_count_ > static_cast<std::size_t>(std::numeric_limits<QubitId>::max())) {
-            throw QStateError("Component fabric qubit count is zero or exceeds configured/index cap");
-        }
-        if (config_.max_components == 0U || config_.max_operations == 0U ||
-            operations.size() > config_.max_operations) {
-            throw QStateError("Component fabric configuration or operation count is invalid");
-        }
+        : ExactComponentProbabilityPlan(
+              qubit_count, operations, std::span<const QubitId>{}, config, true) {}
 
-        std::vector<std::size_t> parent(qubit_count_);
-        std::vector<std::uint8_t> rank(qubit_count_, 0U);
-        for (std::size_t qubit = 0U; qubit < qubit_count_; ++qubit) {
-            parent[qubit] = qubit;
-        }
-
-        const auto find_root = [&](std::size_t value, auto&& self) -> std::size_t {
-            while (parent[value] != value) {
-                parent[value] = parent[parent[value]];
-                value = parent[value];
-            }
-            return value;
-        };
-        const auto unite = [&](std::size_t left, std::size_t right, auto&& find, auto&& self) -> void {
-            std::size_t a = find(left, find);
-            std::size_t b = find(right, find);
-            if (a == b) {
-                return;
-            }
-            if (rank[a] < rank[b]) {
-                std::swap(a, b);
-            }
-            parent[b] = a;
-            if (rank[a] == rank[b]) {
-                ++rank[a];
-            }
-        };
-
-        for (const Operation& operation : operations) {
-            validate_support(operation);
-            if (two_qubit(operation.code)) {
-                unite(
-                    static_cast<std::size_t>(operation.first),
-                    static_cast<std::size_t>(operation.second),
-                    find_root,
-                    unite);
-            }
-        }
-
-        global_component_.assign(qubit_count_, 0U);
-        global_local_.assign(qubit_count_, 0U);
-        std::vector<std::size_t> root_component(qubit_count_, npos());
-        for (std::size_t qubit = 0U; qubit < qubit_count_; ++qubit) {
-            const std::size_t root = find_root(qubit, find_root);
-            if (root_component[root] == npos()) {
-                if (components_.size() >= config_.max_components) {
-                    throw QStateError("Component fabric exceeds configured component cap");
-                }
-                root_component[root] = components_.size();
-                components_.push_back(Component{});
-            }
-            const std::size_t component_index = root_component[root];
-            global_component_[qubit] = component_index;
-            global_local_[qubit] = components_[component_index].global_qubits.size();
-            components_[component_index].global_qubits.push_back(static_cast<QubitId>(qubit));
-        }
-
-        for (const Operation& operation : operations) {
-            const std::size_t component_index = global_component_[operation.first];
-            Operation local = operation;
-            local.first = static_cast<QubitId>(global_local_[operation.first]);
-            if (two_qubit(operation.code)) {
-                if (global_component_[operation.second] != component_index) {
-                    throw QStateError("Component fabric dependency partition is inconsistent");
-                }
-                local.second = static_cast<QubitId>(global_local_[operation.second]);
-            }
-            components_[component_index].operations.push_back(local);
-        }
-
-        std::size_t estimated = checked_product(
-            qubit_count_, sizeof(std::size_t) * 2U,
-            "Component fabric index storage overflowed");
-        std::size_t largest = 0U;
-        std::size_t prepared = 0U;
-        receipts_.reserve(components_.size());
-        for (std::size_t index = 0U; index < components_.size(); ++index) {
-            Component& component = components_[index];
-            largest = std::max(largest, component.global_qubits.size());
-            std::size_t component_bytes = checked_sum(
-                checked_product(
-                    component.global_qubits.size(), sizeof(QubitId),
-                    "Component fabric qubit receipt overflowed"),
-                checked_product(
-                    component.operations.size(), sizeof(Operation),
-                    "Component fabric operation storage overflowed"),
-                "Component fabric component storage overflowed");
-            ExactExecutionRoute route = ExactExecutionRoute::BasisPermutation;
-            if (!component.operations.empty()) {
-                auto plan = ExactPreparedProbabilityPlan::for_marginals(
-                    component.global_qubits.size(), component.operations, config_.broker);
-                component.plan = std::make_unique<ExactPreparedProbabilityPlan>(std::move(plan));
-                route = component.plan->prepared_route();
-                component_bytes = checked_sum(
-                    component_bytes, component.plan->estimated_bytes(),
-                    "Component fabric prepared storage overflowed");
-                ++prepared;
-            }
-            estimated = checked_sum(
-                estimated, component_bytes,
-                "Component fabric total estimated storage overflowed");
-            receipts_.push_back(ExactComponentReceipt{
-                index,
-                component.global_qubits.size(),
-                component.operations.size(),
-                route,
-                component_bytes,
-            });
-        }
-
-        stats_ = ExactComponentFabricStats{
-            qubit_count_,
-            operations.size(),
-            components_.size(),
-            largest,
-            prepared,
-            estimated,
-        };
+    [[nodiscard]] static ExactComponentProbabilityPlan for_marginals(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        std::span<const QubitId> qubits,
+        ExactComponentFabricConfig config = {}) {
+        return ExactComponentProbabilityPlan(qubit_count, operations, qubits, config, false);
     }
 
     [[nodiscard]] double basis_probability(std::span<const std::uint8_t> bits) const {
+        if (!full_basis_capable_) {
+            throw QStateError("Query-pruned component fabric cannot answer full-basis queries");
+        }
         if (bits.size() != qubit_count_) {
             throw QStateError("Component fabric basis query size does not match qubit count");
         }
@@ -225,6 +112,9 @@ public:
             }
             seen[global] = 1U;
             const std::size_t component_index = global_component_[global];
+            if (!components_[component_index].active) {
+                throw QStateError("Component fabric marginal lies outside prepared query support");
+            }
             local_qubits[component_index].push_back(
                 static_cast<QubitId>(global_local_[global]));
             local_bits[component_index].push_back(bits[index]);
@@ -253,6 +143,7 @@ public:
         return probability;
     }
 
+    [[nodiscard]] bool full_basis_capable() const noexcept { return full_basis_capable_; }
     [[nodiscard]] const ExactComponentFabricStats& stats() const noexcept { return stats_; }
     [[nodiscard]] const std::vector<ExactComponentReceipt>& receipts() const noexcept {
         return receipts_;
@@ -264,6 +155,7 @@ private:
         std::vector<QubitId> global_qubits{};
         std::vector<Operation> operations{};
         std::unique_ptr<ExactPreparedProbabilityPlan> plan{};
+        bool active{false};
     };
 
     std::size_t qubit_count_{0U};
@@ -273,6 +165,186 @@ private:
     std::vector<std::size_t> global_local_{};
     std::vector<ExactComponentReceipt> receipts_{};
     ExactComponentFabricStats stats_{};
+    bool full_basis_capable_{false};
+
+    ExactComponentProbabilityPlan(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        std::span<const QubitId> prepared_qubits,
+        ExactComponentFabricConfig config,
+        bool prepare_all)
+        : qubit_count_(qubit_count), config_(config), full_basis_capable_(prepare_all) {
+        validate_configuration(operations.size());
+
+        std::vector<std::size_t> parent(qubit_count_);
+        std::vector<std::uint8_t> rank(qubit_count_, 0U);
+        for (std::size_t qubit = 0U; qubit < qubit_count_; ++qubit) {
+            parent[qubit] = qubit;
+        }
+
+        const auto find_root = [&](std::size_t value) {
+            std::size_t root = value;
+            while (parent[root] != root) {
+                root = parent[root];
+            }
+            while (parent[value] != value) {
+                const std::size_t next = parent[value];
+                parent[value] = root;
+                value = next;
+            }
+            return root;
+        };
+        const auto unite = [&](std::size_t left, std::size_t right) {
+            std::size_t a = find_root(left);
+            std::size_t b = find_root(right);
+            if (a == b) {
+                return;
+            }
+            if (rank[a] < rank[b]) {
+                std::swap(a, b);
+            }
+            parent[b] = a;
+            if (rank[a] == rank[b]) {
+                ++rank[a];
+            }
+        };
+
+        for (const Operation& operation : operations) {
+            validate_support(operation);
+            if (two_qubit(operation.code)) {
+                unite(
+                    static_cast<std::size_t>(operation.first),
+                    static_cast<std::size_t>(operation.second));
+            }
+        }
+
+        global_component_.assign(qubit_count_, 0U);
+        global_local_.assign(qubit_count_, 0U);
+        std::vector<std::size_t> root_component(qubit_count_, npos());
+        std::size_t largest = 0U;
+        for (std::size_t qubit = 0U; qubit < qubit_count_; ++qubit) {
+            const std::size_t root = find_root(qubit);
+            if (root_component[root] == npos()) {
+                if (components_.size() >= config_.max_components) {
+                    throw QStateError("Component fabric exceeds configured component cap");
+                }
+                root_component[root] = components_.size();
+                components_.push_back(Component{});
+            }
+            const std::size_t component_index = root_component[root];
+            global_component_[qubit] = component_index;
+            global_local_[qubit] = components_[component_index].global_qubits.size();
+            components_[component_index].global_qubits.push_back(static_cast<QubitId>(qubit));
+            largest = std::max(largest, components_[component_index].global_qubits.size());
+        }
+
+        for (const Operation& operation : operations) {
+            const std::size_t component_index = global_component_[operation.first];
+            Operation local = operation;
+            local.first = static_cast<QubitId>(global_local_[operation.first]);
+            if (two_qubit(operation.code)) {
+                if (global_component_[operation.second] != component_index) {
+                    throw QStateError("Component fabric dependency partition is inconsistent");
+                }
+                local.second = static_cast<QubitId>(global_local_[operation.second]);
+            }
+            components_[component_index].operations.push_back(local);
+        }
+
+        if (prepare_all) {
+            for (Component& component : components_) {
+                component.active = true;
+            }
+        } else {
+            std::vector<std::uint8_t> seen(qubit_count_, 0U);
+            for (QubitId qubit : prepared_qubits) {
+                const std::size_t global = static_cast<std::size_t>(qubit);
+                if (global >= qubit_count_) {
+                    throw QStateError("Component fabric prepared marginal qubit is out of range");
+                }
+                if (seen[global] != 0U) {
+                    throw QStateError("Component fabric prepared marginal contains a duplicate qubit");
+                }
+                seen[global] = 1U;
+                components_[global_component_[global]].active = true;
+            }
+        }
+
+        std::size_t estimated = checked_product(
+            qubit_count_, sizeof(std::size_t) * 2U,
+            "Component fabric index storage overflowed");
+        std::size_t active = 0U;
+        std::size_t prepared = 0U;
+        receipts_.reserve(components_.size());
+        for (std::size_t index = 0U; index < components_.size(); ++index) {
+            Component& component = components_[index];
+            const std::size_t qubit_count_before_prune = component.global_qubits.size();
+            const std::size_t operation_count_before_prune = component.operations.size();
+            std::size_t component_bytes = 0U;
+            ExactExecutionRoute route = ExactExecutionRoute::Register;
+            bool backend_prepared = false;
+            if (component.active) {
+                ++active;
+                component_bytes = checked_sum(
+                    checked_product(
+                        component.global_qubits.size(), sizeof(QubitId),
+                        "Component fabric qubit receipt overflowed"),
+                    checked_product(
+                        component.operations.size(), sizeof(Operation),
+                        "Component fabric operation storage overflowed"),
+                    "Component fabric component storage overflowed");
+                if (!component.operations.empty()) {
+                    auto plan = ExactPreparedProbabilityPlan::for_marginals(
+                        component.global_qubits.size(), component.operations, config_.broker);
+                    component.plan = std::make_unique<ExactPreparedProbabilityPlan>(std::move(plan));
+                    route = component.plan->prepared_route();
+                    component_bytes = checked_sum(
+                        component_bytes, component.plan->estimated_bytes(),
+                        "Component fabric prepared storage overflowed");
+                    backend_prepared = true;
+                    ++prepared;
+                }
+                estimated = checked_sum(
+                    estimated, component_bytes,
+                    "Component fabric total estimated storage overflowed");
+            } else {
+                component.global_qubits.clear();
+                component.global_qubits.shrink_to_fit();
+                component.operations.clear();
+                component.operations.shrink_to_fit();
+            }
+            receipts_.push_back(ExactComponentReceipt{
+                index,
+                qubit_count_before_prune,
+                operation_count_before_prune,
+                component.active,
+                backend_prepared,
+                route,
+                component_bytes,
+            });
+        }
+
+        stats_ = ExactComponentFabricStats{
+            qubit_count_,
+            operations.size(),
+            components_.size(),
+            largest,
+            active,
+            prepared,
+            estimated,
+        };
+    }
+
+    void validate_configuration(std::size_t operation_count) const {
+        if (qubit_count_ == 0U || qubit_count_ > config_.max_qubits ||
+            qubit_count_ > static_cast<std::size_t>(std::numeric_limits<QubitId>::max())) {
+            throw QStateError("Component fabric qubit count is zero or exceeds configured/index cap");
+        }
+        if (config_.max_components == 0U || config_.max_operations == 0U ||
+            operation_count > config_.max_operations) {
+            throw QStateError("Component fabric configuration or operation count is invalid");
+        }
+    }
 
     [[nodiscard]] static constexpr std::size_t npos() noexcept {
         return std::numeric_limits<std::size_t>::max();
