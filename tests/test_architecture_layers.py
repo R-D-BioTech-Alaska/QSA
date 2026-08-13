@@ -38,6 +38,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qsymbolic_phase.hpp",
     "include/qubit/qdefect_advisor.hpp",
     "include/qubit/qhpath_factor.hpp",
+    "include/qubit/qhpath_prepared.hpp",
     "include/qubit/qamplitude_advisor.hpp",
     "include/qubit/qadaptive_amplitude.hpp",
     "include/qubit/qpauli.hpp",
