@@ -62,8 +62,9 @@ void exact_representation_preflight() {
 
 int main() {
     RepresentationAdvisor advisor;
+    QRegister state(64);
+
     {
-        QRegister state(64);
         const std::array<Operation, 6> operations{{
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
