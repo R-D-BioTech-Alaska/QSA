@@ -11,6 +11,8 @@
 
 namespace {
 
+using qubit::PhaseGraphBranchConfig;
+using qubit::PhaseGraphBranchState;
 using qubit::PhaseGraphConfig;
 using qubit::PhaseGraphState;
 using qubit::QComplex;
@@ -56,6 +58,74 @@ void compare(
     require(
         fidelity(graph.materialize(14), reference.materialize(14)) >= 1.0 - tolerance,
         "phase-graph state differs from QRegister");
+}
+
+void compare(
+    const PhaseGraphBranchState& graph,
+    const QRegister& reference,
+    double tolerance = 3e-10) {
+    require(
+        fidelity(graph.materialize(14), reference.materialize(14)) >= 1.0 - tolerance,
+        "phase-graph branch state differs from QRegister");
+}
+
+void apply_random_supported(
+    PhaseGraphBranchState& graph,
+    QRegister& reference,
+    std::mt19937_64& generator,
+    std::uniform_real_distribution<double>& angle) {
+    const std::size_t qubits = graph.qubit_count();
+    const QubitId first = static_cast<QubitId>(generator() % qubits);
+    QubitId second = static_cast<QubitId>(generator() % qubits);
+    if (second == first) {
+        second = static_cast<QubitId>((second + 1U) % qubits);
+    }
+    switch (generator() % 10U) {
+        case 0U:
+            graph.apply_x(first);
+            reference.apply_x(first);
+            break;
+        case 1U:
+            graph.apply_y(first);
+            reference.apply_y(first);
+            break;
+        case 2U:
+            graph.apply_z(first);
+            reference.apply_z(first);
+            break;
+        case 3U:
+            graph.apply_s(first);
+            reference.apply_s(first);
+            break;
+        case 4U:
+            graph.apply_sdg(first);
+            reference.apply_sdg(first);
+            break;
+        case 5U:
+            graph.apply_t(first);
+            reference.apply_t(first);
+            break;
+        case 6U:
+            graph.apply_tdg(first);
+            reference.apply_tdg(first);
+            break;
+        case 7U: {
+            const double value = angle(generator);
+            graph.apply_rz(first, value);
+            reference.apply_rz(first, value);
+            break;
+        }
+        case 8U: {
+            const double value = angle(generator);
+            graph.apply_controlled_phase(first, second, value);
+            apply_controlled_phase(reference, first, second, value);
+            break;
+        }
+        default:
+            graph.apply_swap(first, second);
+            reference.apply_swap(first, second);
+            break;
+    }
 }
 
 }  // namespace
@@ -196,6 +266,97 @@ int main() {
         }
         require(rejected, "phase graph accepted an infinite angle");
         require(graph.validate(), "invalid-angle rejection damaged the phase graph");
+    }
+
+    {
+        PhaseGraphState graph(4096);
+        std::vector<std::uint8_t> bits(4096U, 0U);
+        const auto scaled = graph.scaled_amplitude_bits(bits);
+        require(std::abs(scaled.mantissa.magnitude() - 1.0) < 1e-12,
+                "scaled phase-graph mantissa is not unit magnitude");
+        require(scaled.log2_scale == -2048.0,
+                "scaled phase-graph amplitude has the wrong binary exponent");
+        bool rejected = false;
+        try {
+            (void)graph.amplitude_bits(bits);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "ordinary large phase-graph amplitude did not report underflow");
+    }
+
+    for (std::size_t test_case = 0; test_case < 96U; ++test_case) {
+        const std::size_t qubits = 2U + test_case % 7U;
+        const std::size_t defects = 1U + test_case % 5U;
+        PhaseGraphBranchConfig config;
+        config.max_branches = 64U;
+        config.max_estimated_bytes = 32ULL * 1024ULL * 1024ULL;
+        PhaseGraphBranchState graph(qubits, config);
+        QRegister reference(qubits);
+        for (std::size_t qubit = 0; qubit < qubits; ++qubit) {
+            reference.apply_h(static_cast<QubitId>(qubit));
+        }
+        for (std::size_t defect = 0; defect < defects; ++defect) {
+            for (std::size_t gate = 0; gate < 3U; ++gate) {
+                apply_random_supported(graph, reference, generator, angle);
+            }
+            const QubitId target = static_cast<QubitId>(generator() % qubits);
+            graph.apply_h(target);
+            reference.apply_h(target);
+            compare(graph, reference, 1e-9);
+        }
+        for (std::size_t gate = 0; gate < 5U; ++gate) {
+            apply_random_supported(graph, reference, generator, angle);
+        }
+        require(graph.branch_count() == (std::size_t{1} << defects),
+                "low-H phase-graph branch count is wrong");
+        require(graph.hadamard_defects() == defects,
+                "low-H phase-graph defect count is wrong");
+        require(graph.validate(), "low-H phase-graph branch state failed validation");
+        compare(graph, reference, 1e-9);
+    }
+
+    {
+        PhaseGraphBranchConfig config;
+        config.max_branches = 16U;
+        config.max_estimated_bytes = 2ULL * 1024ULL * 1024ULL;
+        PhaseGraphBranchState graph(4096, config);
+        for (QubitId qubit = 0; qubit < 4U; ++qubit) {
+            graph.apply_h(qubit);
+        }
+        require(graph.branch_count() == 16U,
+                "large low-H phase-graph carrier has the wrong branch count");
+        require(graph.estimated_bytes() < 2ULL * 1024ULL * 1024ULL,
+                "large low-H phase-graph carrier exceeded its memory envelope");
+        std::vector<std::uint8_t> bits(4096U, 0U);
+        const auto scaled = graph.scaled_amplitude_bits(bits);
+        require(std::isfinite(scaled.mantissa.re) && std::isfinite(scaled.mantissa.im),
+                "large low-H phase-graph scaled amplitude is non-finite");
+        require(scaled.log2_scale == -2048.0,
+                "large low-H phase-graph scaled amplitude has the wrong exponent");
+        require(graph.validate(), "large low-H phase-graph carrier failed validation");
+    }
+
+    {
+        PhaseGraphBranchConfig config;
+        config.max_branches = 4U;
+        config.max_estimated_bytes = 1024ULL * 1024ULL;
+        PhaseGraphBranchState graph(4, config);
+        graph.apply_h(0);
+        graph.apply_h(1);
+        const auto before = graph.materialize(8);
+        bool rejected = false;
+        try {
+            graph.apply_h(2);
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "low-H phase-graph branch limit was not enforced");
+        require(graph.branch_count() == 4U && graph.hadamard_defects() == 2U,
+                "failed branch expansion mutated the carrier counters");
+        require(fidelity(before, graph.materialize(8)) >= 1.0 - 1e-12,
+                "failed branch expansion mutated the carrier state");
+        require(graph.validate(), "branch-limit rejection damaged the carrier");
     }
 
     std::cout << "phase graph tests passed\n";
