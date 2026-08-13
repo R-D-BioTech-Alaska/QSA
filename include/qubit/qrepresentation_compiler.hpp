@@ -10,9 +10,21 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace qubit {
+
+enum class ExactRepresentationExecutionKind : std::uint8_t {
+    LocalDense = 0,
+    Broker = 1,
+};
+
+enum class ExactRepresentationTransitionKind : std::uint8_t {
+    None = 0,
+    SameGenerationReplay = 1,
+    GenerationReplay = 2,
+};
 
 struct ExactRepresentationFabricConfig {
     ExactCompiledMarginalProgramConfig program{};
@@ -21,6 +33,11 @@ struct ExactRepresentationFabricConfig {
     std::size_t max_component_operations{1U << 24U};
     std::size_t max_operations{1U << 26U};
     std::size_t max_dependency_width{1U << 20U};
+    std::size_t max_local_dense_qubits{18U};
+    std::size_t max_local_dense_state_scalars{1U << 18U};
+    std::size_t max_local_dense_scalar_sweep_units{1U << 28U};
+    std::size_t max_local_dense_cached_plans{256U};
+    std::size_t max_local_dense_cached_scalars{1U << 22U};
 };
 
 struct ExactRepresentationFabricStats {
@@ -34,6 +51,9 @@ struct ExactRepresentationFabricStats {
     std::size_t queries{0U};
     std::size_t cache_hits{0U};
     std::size_t cache_misses{0U};
+    std::size_t local_dense_executions{0U};
+    std::size_t broker_executions{0U};
+    std::size_t representation_transitions{0U};
     std::size_t largest_component_qubits{0U};
     std::size_t largest_component_operations{0U};
 };
@@ -45,7 +65,18 @@ struct ExactRepresentationComponentReceipt {
     std::size_t operations{0U};
     std::size_t declared_dependencies{0U};
     bool program_ready{false};
-    std::size_t cached_plans{0U};
+    std::size_t broker_cached_plans{0U};
+    std::size_t local_dense_cached_plans{0U};
+    std::size_t local_dense_cached_scalars{0U};
+};
+
+struct ExactRepresentationTransitionReceipt {
+    ExactRepresentationTransitionKind kind{ExactRepresentationTransitionKind::None};
+    ExactRepresentationExecutionKind from{ExactRepresentationExecutionKind::LocalDense};
+    ExactRepresentationExecutionKind to{ExactRepresentationExecutionKind::LocalDense};
+    std::size_t from_generation{0U};
+    std::size_t to_generation{0U};
+    bool exact_replay{false};
 };
 
 struct ExactRepresentationIslandExecutionReceipt {
@@ -60,6 +91,12 @@ struct ExactRepresentationIslandExecutionReceipt {
     std::size_t estimated_executor_bytes{0U};
     std::size_t cache_hits{0U};
     std::size_t cache_misses{0U};
+    bool local_dense_eligible{false};
+    std::size_t local_dense_state_scalars{0U};
+    std::size_t local_dense_payload_bytes{0U};
+    std::size_t local_dense_scalar_sweep_units{0U};
+    ExactRepresentationExecutionKind execution{ExactRepresentationExecutionKind::Broker};
+    ExactRepresentationTransitionReceipt transition{};
     std::array<std::size_t, 9> route_counts{};
 };
 
@@ -75,6 +112,9 @@ struct ExactRepresentationQueryReceipt {
     std::size_t estimated_executor_bytes{0U};
     std::size_t cache_hits{0U};
     std::size_t cache_misses{0U};
+    std::size_t local_dense_islands{0U};
+    std::size_t broker_islands{0U};
+    std::size_t representation_transitions{0U};
     std::array<std::size_t, 9> route_counts{};
 };
 
@@ -95,6 +135,11 @@ public:
             config_.max_active_components == 0U || config_.max_component_qubits == 0U ||
             config_.max_component_operations == 0U || config_.max_operations == 0U ||
             config_.max_dependency_width < 2U ||
+            config_.max_local_dense_qubits >= std::numeric_limits<std::size_t>::digits ||
+            config_.max_local_dense_state_scalars == 0U ||
+            config_.max_local_dense_scalar_sweep_units == 0U ||
+            config_.max_local_dense_cached_plans == 0U ||
+            config_.max_local_dense_cached_scalars == 0U ||
             config_.max_component_qubits > config_.program.index.max_qubits ||
             config_.max_component_qubits > config_.program.marginal.fabric.max_qubits ||
             config_.max_component_operations > config_.program.index.max_operations ||
@@ -172,6 +217,7 @@ public:
             while (end < terms.size() && terms[end].component == component_id) {
                 ++end;
             }
+
             Component& component = components_[component_id];
             ensure_program(component);
             std::vector<QubitId> local_qubits;
@@ -184,54 +230,109 @@ public:
             }
 
             ExactCompiledMarginalProgram& program = *component.program;
-            const ExactCompiledMarginalProgramStats before = program.stats();
-            const ExactIndexedMarginalCompilerPlan& plan = program.prepare(local_qubits);
-            const ExactCompiledMarginalProgramStats after = program.stats();
-            const std::size_t hits = after.cache_hits - before.cache_hits;
-            const std::size_t misses = after.cache_misses - before.cache_misses;
+            const ExactCausalSlice slice = program.causal_index().slice(local_qubits);
+            DenseCertificate dense = dense_certificate(component, slice, local_qubits);
+            DenseCacheEntry* dense_cache = find_dense_cache(component, local_qubits);
+            if (dense_cache != nullptr) {
+                dense.eligible = true;
+                dense.state_scalars = dense_cache->state_scalars;
+                dense.payload_bytes = checked_product(
+                    dense.state_scalars,
+                    sizeof(QComplex),
+                    "Representation fabric local dense payload overflowed");
+            }
+
+            const ExactRepresentationExecutionKind execution = dense.eligible
+                ? ExactRepresentationExecutionKind::LocalDense
+                : ExactRepresentationExecutionKind::Broker;
+
             ExactRepresentationIslandExecutionReceipt island;
             island.component = component_id;
             island.generation = component.generation;
             island.component_qubits = component.qubits.size();
             island.component_operations = component.operations.size();
             island.query_qubits = local_qubits.size();
-            island.causal_qubits = plan.stats().causal_qubits;
-            island.causal_operations = plan.stats().causal_operations;
-            island.executor_components = plan.stats().components;
-            island.estimated_executor_bytes = plan.stats().estimated_bytes;
-            island.cache_hits = hits;
-            island.cache_misses = misses;
+            island.causal_qubits = slice.global_qubits.size();
+            island.causal_operations = slice.operations.size();
+            island.local_dense_eligible = dense.eligible;
+            island.local_dense_state_scalars = dense.state_scalars;
+            island.local_dense_payload_bytes = dense.payload_bytes;
+            island.local_dense_scalar_sweep_units = dense.scalar_sweep_units;
+            island.execution = execution;
+            island.transition = transition(component, execution);
+            if (island.transition.kind != ExactRepresentationTransitionKind::None) {
+                ++result.receipt.representation_transitions;
+                ++stats_.representation_transitions;
+            }
 
-            result.receipt.cache_hits += hits;
-            result.receipt.cache_misses += misses;
-            stats_.cache_hits += hits;
-            stats_.cache_misses += misses;
+            double value = 0.0;
+            if (execution == ExactRepresentationExecutionKind::LocalDense) {
+                bool hit = dense_cache != nullptr;
+                if (dense_cache == nullptr) {
+                    dense_cache = &prepare_dense(component, local_qubits, slice, dense);
+                }
+                island.cache_hits = hit ? 1U : 0U;
+                island.cache_misses = hit ? 0U : 1U;
+                island.executor_components = 1U;
+                island.estimated_executor_bytes = dense_cache->state->estimated_bytes();
+                ++island.route_counts[static_cast<std::size_t>(ExactExecutionRoute::Register)];
+                value = dense_cache->state->marginal_probability(
+                    dense_cache->local_query_qubits,
+                    local_bits);
+                ++result.receipt.local_dense_islands;
+                ++stats_.local_dense_executions;
+            } else {
+                const ExactCompiledMarginalProgramStats before = program.stats();
+                const ExactIndexedMarginalCompilerPlan& plan = program.prepare(local_qubits);
+                const ExactCompiledMarginalProgramStats after = program.stats();
+                island.cache_hits = after.cache_hits - before.cache_hits;
+                island.cache_misses = after.cache_misses - before.cache_misses;
+                island.causal_qubits = plan.stats().causal_qubits;
+                island.causal_operations = plan.stats().causal_operations;
+                island.executor_components = plan.stats().components;
+                island.estimated_executor_bytes = plan.stats().estimated_bytes;
+                for (const ExactComponentReceipt& receipt : plan.component_receipts()) {
+                    if (!receipt.prepared) {
+                        continue;
+                    }
+                    const std::size_t route = static_cast<std::size_t>(receipt.route);
+                    if (route >= island.route_counts.size()) {
+                        throw QStateError("Representation fabric received an unknown execution route");
+                    }
+                    ++island.route_counts[route];
+                }
+                value = plan.probability(local_bits);
+                ++result.receipt.broker_islands;
+                ++stats_.broker_executions;
+            }
+
+            result.receipt.cache_hits = checked_sum(
+                result.receipt.cache_hits, island.cache_hits);
+            result.receipt.cache_misses = checked_sum(
+                result.receipt.cache_misses, island.cache_misses);
+            stats_.cache_hits = checked_sum(stats_.cache_hits, island.cache_hits);
+            stats_.cache_misses = checked_sum(stats_.cache_misses, island.cache_misses);
             ++result.receipt.fabric_components;
-            result.receipt.executor_components += plan.stats().components;
+            result.receipt.executor_components = checked_sum(
+                result.receipt.executor_components, island.executor_components);
             result.receipt.causal_qubits = checked_sum(
-                result.receipt.causal_qubits, plan.stats().causal_qubits);
+                result.receipt.causal_qubits, island.causal_qubits);
             result.receipt.causal_operations = checked_sum(
-                result.receipt.causal_operations, plan.stats().causal_operations);
+                result.receipt.causal_operations, island.causal_operations);
             result.receipt.estimated_executor_bytes = checked_sum(
-                result.receipt.estimated_executor_bytes, plan.stats().estimated_bytes);
-            for (const ExactComponentReceipt& receipt : plan.component_receipts()) {
-                if (!receipt.prepared) {
-                    continue;
-                }
-                const std::size_t route = static_cast<std::size_t>(receipt.route);
-                if (route >= result.receipt.route_counts.size()) {
-                    throw QStateError("Representation fabric received an unknown execution route");
-                }
-                ++result.receipt.route_counts[route];
-                ++island.route_counts[route];
+                result.receipt.estimated_executor_bytes, island.estimated_executor_bytes);
+            for (std::size_t route = 0U; route < island.route_counts.size(); ++route) {
+                result.receipt.route_counts[route] = checked_sum(
+                    result.receipt.route_counts[route], island.route_counts[route]);
             }
             result.islands.push_back(std::move(island));
-            result.value *= plan.probability(local_bits);
+            result.value *= value;
             if (result.value == 0.0) {
                 break;
             }
             cursor = end;
         }
+
         if (result.receipt.causal_qubits > qubit_count_) {
             throw QStateError("Representation fabric causal receipt exceeds global qubit count");
         }
@@ -255,6 +356,8 @@ public:
                 component.dependencies,
                 component.program != nullptr,
                 component.program ? component.program->stats().cached_plans : 0U,
+                component.dense_cache.size(),
+                component.dense_cached_scalars,
             });
         }
         return result;
@@ -272,6 +375,21 @@ public:
     }
 
 private:
+    struct DenseCertificate {
+        bool eligible{false};
+        std::size_t state_scalars{0U};
+        std::size_t payload_bytes{0U};
+        std::size_t scalar_sweep_units{0U};
+    };
+
+    struct DenseCacheEntry {
+        std::size_t generation{0U};
+        std::vector<QubitId> query_qubits{};
+        std::vector<QubitId> local_query_qubits{};
+        std::size_t state_scalars{0U};
+        std::unique_ptr<QRegister> state{};
+    };
+
     struct Component {
         bool active{false};
         std::size_t generation{1U};
@@ -279,6 +397,11 @@ private:
         std::vector<QubitId> qubits{};
         std::vector<Operation> operations{};
         std::unique_ptr<ExactCompiledMarginalProgram> program{};
+        std::vector<DenseCacheEntry> dense_cache{};
+        std::size_t dense_cached_scalars{0U};
+        bool has_last_execution{false};
+        ExactRepresentationExecutionKind last_execution{ExactRepresentationExecutionKind::LocalDense};
+        std::size_t last_execution_generation{0U};
     };
 
     std::size_t qubit_count_{0U};
@@ -400,7 +523,7 @@ private:
                 component.operations.push_back(*operation);
             }
             if (dependency) {
-                ++component.dependencies;
+                component.dependencies = checked_sum(component.dependencies, 1U);
             }
             for (const QubitId qubit : additions) {
                 component_of_[static_cast<std::size_t>(qubit)] = ids.front();
@@ -440,7 +563,7 @@ private:
 
         const std::size_t target_id = ids.front();
         for (const std::size_t id : ids) {
-            if (components_[id].program) {
+            if (components_[id].program || !components_[id].dense_cache.empty()) {
                 ++stats_.component_invalidations;
             }
         }
@@ -451,6 +574,9 @@ private:
         target.qubits = std::move(combined);
         target.operations = std::move(operations);
         target.program.reset();
+        target.dense_cache.clear();
+        target.dense_cached_scalars = 0U;
+        target.has_last_execution = false;
         for (std::size_t index = 1U; index < ids.size(); ++index) {
             components_[ids[index]] = Component{};
         }
@@ -463,10 +589,12 @@ private:
     }
 
     void invalidate(Component& component) {
-        if (component.program) {
-            component.program.reset();
+        if (component.program || !component.dense_cache.empty()) {
             ++stats_.component_invalidations;
         }
+        component.program.reset();
+        component.dense_cache.clear();
+        component.dense_cached_scalars = 0U;
         increment_generation(component);
     }
 
@@ -494,6 +622,111 @@ private:
         component.program = std::make_unique<ExactCompiledMarginalProgram>(
             component.qubits.size(), local, config_.program);
         ++stats_.program_builds;
+    }
+
+    [[nodiscard]] DenseCertificate dense_certificate(
+        const Component& component,
+        const ExactCausalSlice& slice,
+        std::span<const QubitId> query_qubits) const {
+        DenseCertificate result;
+        const std::size_t width = slice.global_qubits.size();
+        if (width == 0U || width > config_.max_local_dense_qubits ||
+            width >= std::numeric_limits<std::size_t>::digits) {
+            return result;
+        }
+        const std::size_t scalars = std::size_t{1U} << width;
+        if (scalars > config_.max_local_dense_state_scalars ||
+            component.dense_cache.size() >= config_.max_local_dense_cached_plans ||
+            scalars > config_.max_local_dense_cached_scalars -
+                std::min(component.dense_cached_scalars, config_.max_local_dense_cached_scalars)) {
+            return result;
+        }
+        const std::size_t sweeps = checked_sum(
+            checked_sum(slice.operations.size(), query_qubits.size()), 1U);
+        if (scalars > config_.max_local_dense_scalar_sweep_units / sweeps) {
+            return result;
+        }
+        result.eligible = true;
+        result.state_scalars = scalars;
+        result.payload_bytes = checked_product(
+            scalars,
+            sizeof(QComplex),
+            "Representation fabric local dense payload overflowed");
+        result.scalar_sweep_units = scalars * sweeps;
+        return result;
+    }
+
+    [[nodiscard]] DenseCacheEntry* find_dense_cache(
+        Component& component,
+        std::span<const QubitId> query_qubits) noexcept {
+        for (DenseCacheEntry& entry : component.dense_cache) {
+            if (entry.generation != component.generation ||
+                entry.query_qubits.size() != query_qubits.size()) {
+                continue;
+            }
+            bool equal = true;
+            for (std::size_t index = 0U; index < query_qubits.size(); ++index) {
+                if (entry.query_qubits[index] != query_qubits[index]) {
+                    equal = false;
+                    break;
+                }
+            }
+            if (equal) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+
+    DenseCacheEntry& prepare_dense(
+        Component& component,
+        std::span<const QubitId> query_qubits,
+        const ExactCausalSlice& slice,
+        const DenseCertificate& certificate) {
+        if (!certificate.eligible || certificate.state_scalars == 0U) {
+            throw QStateError("Representation fabric local dense route lacks a valid certificate");
+        }
+        auto state = std::make_unique<QRegister>(slice.global_qubits.size());
+        OperationPlan plan(slice.operations);
+        plan.execute(*state);
+        if (component.dense_cache.size() >= config_.max_local_dense_cached_plans ||
+            certificate.state_scalars > config_.max_local_dense_cached_scalars -
+                component.dense_cached_scalars) {
+            throw QStateError("Representation fabric local dense cache changed after certification");
+        }
+        DenseCacheEntry entry;
+        entry.generation = component.generation;
+        entry.query_qubits.assign(query_qubits.begin(), query_qubits.end());
+        entry.local_query_qubits = slice.local_query_qubits;
+        entry.state_scalars = certificate.state_scalars;
+        entry.state = std::move(state);
+        component.dense_cached_scalars = checked_sum(
+            component.dense_cached_scalars, certificate.state_scalars);
+        component.dense_cache.push_back(std::move(entry));
+        return component.dense_cache.back();
+    }
+
+    ExactRepresentationTransitionReceipt transition(
+        Component& component,
+        ExactRepresentationExecutionKind execution) {
+        ExactRepresentationTransitionReceipt result;
+        result.to = execution;
+        result.to_generation = component.generation;
+        if (component.has_last_execution) {
+            result.from = component.last_execution;
+            result.from_generation = component.last_execution_generation;
+            if (component.last_execution_generation != component.generation) {
+                result.kind = ExactRepresentationTransitionKind::GenerationReplay;
+                result.exact_replay = true;
+            } else if (component.last_execution != execution) {
+                result.kind = ExactRepresentationTransitionKind::SameGenerationReplay;
+                result.exact_replay = true;
+            }
+        }
+        component.has_last_execution = true;
+        component.last_execution = execution;
+        component.last_execution_generation = component.generation;
+        return result;
     }
 
     void update_maxima(const Component& component) noexcept {
@@ -534,6 +767,16 @@ private:
             default:
                 throw QStateError("Representation fabric supports unitary circuit operations only");
         }
+    }
+
+    [[nodiscard]] static std::size_t checked_product(
+        std::size_t left,
+        std::size_t right,
+        const char* message) {
+        if (left != 0U && right > std::numeric_limits<std::size_t>::max() / left) {
+            throw QStateError(message);
+        }
+        return left * right;
     }
 
     [[nodiscard]] static std::size_t checked_sum(std::size_t left, std::size_t right) {
