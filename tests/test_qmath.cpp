@@ -77,10 +77,12 @@ int main() {
     try { (void)bounded.symbol("c", QMathType::scalar_type()); } catch (const QMathError&) { rejected = true; }
     require(rejected, "node limit did not fail closed");
 
-    rejected = false;
-    try { (void)(QRational(std::numeric_limits<std::int64_t>::max()) + QRational(1)); }
-    catch (const QMathError&) { rejected = true; }
-    require(rejected, "rational overflow did not fail closed");
+    const auto promoted = QRational(std::numeric_limits<std::int64_t>::max()) + QRational(1);
+    require(promoted.canonical() == "9223372036854775808", "exact rational did not promote beyond int64");
+    require(QInteger(7).is_small() && !QInteger::parse("9223372036854775808").is_small(),
+            "small-value arbitrary-precision representation contract changed");
+    require(QRational::parse("100000000000000000000/25000000000000000000").canonical() == "4",
+            "arbitrary-precision rational normalization failed");
 
     std::cout << "QMath core tests passed\n";
 }
