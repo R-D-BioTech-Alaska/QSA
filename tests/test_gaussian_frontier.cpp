@@ -188,6 +188,24 @@ int main() {
             fermionic_gaussian_eligibility(0U, true, 2U, one_gib).code ==
                 FermionicGaussianEligibilityCode::zero_modes,
             "zero-mode fermionic request was accepted");
+        const std::size_t maximum = std::numeric_limits<std::size_t>::max();
+        require(
+            fermionic_gaussian_required_bytes(maximum) == maximum,
+            "fermionic covariance size overflow did not fail closed");
+        require(
+            fermionic_gaussian_eligibility(maximum, true, 2U, maximum).code ==
+                FermionicGaussianEligibilityCode::size_overflow,
+            "fermionic size-overflow request was accepted");
+    }
+
+    {
+        bool rejected = false;
+        try {
+            static_cast<void>(FermionicGaussianState(0U));
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "zero-mode fermionic Gaussian state was accepted");
     }
 
     {
