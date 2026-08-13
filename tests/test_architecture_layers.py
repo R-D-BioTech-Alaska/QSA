@@ -32,6 +32,11 @@ STRUCTURAL_FILES = (
     "include/qubit/qrouter.hpp",
     "include/qubit/qstabilizer.hpp",
     "include/qubit/qphase_graph.hpp",
+    "include/qubit/qphase_sum.hpp",
+    "include/qubit/qphase_exact.hpp",
+    "include/qubit/qmagic.hpp",
+    "include/qubit/qsymbolic_phase.hpp",
+    "include/qubit/qdefect_advisor.hpp",
     "include/qubit/qpauli.hpp",
     "include/qubit/qtensor.hpp",
     "include/qubit/qmps.hpp",
@@ -48,6 +53,7 @@ STRUCTURAL_FILES = (
     "include/qubit/qqtt_sp_invariants.hpp",
     "include/qubit/qqtt_split_step.hpp",
     "include/qubit/qfock.hpp",
+    "include/qubit/qgaussian.hpp",
     "src/qfactor.cpp",
 )
 
