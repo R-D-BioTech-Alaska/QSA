@@ -35,6 +35,13 @@ int main() {
     ExactMarginalCompilerPlan compiler(qubits, operations, query);
     const auto setup_end = std::chrono::steady_clock::now();
 
+    const auto index_start = std::chrono::steady_clock::now();
+    ExactCausalOperationIndex index(qubits, operations);
+    const auto index_end = std::chrono::steady_clock::now();
+    const auto indexed_setup_start = std::chrono::steady_clock::now();
+    ExactIndexedMarginalCompilerPlan indexed(index, query);
+    const auto indexed_setup_end = std::chrono::steady_clock::now();
+
     constexpr std::size_t repeats = 1000U;
     double probability = 0.0;
     const auto query_start = std::chrono::steady_clock::now();
@@ -43,12 +50,27 @@ int main() {
     }
     const auto query_end = std::chrono::steady_clock::now();
 
+    double indexed_probability = 0.0;
+    const auto indexed_query_start = std::chrono::steady_clock::now();
+    for (std::size_t repeat = 0U; repeat < repeats; ++repeat) {
+        indexed_probability = indexed.probability(bits);
+    }
+    const auto indexed_query_end = std::chrono::steady_clock::now();
+
     const double setup_ms = std::chrono::duration<double, std::milli>(setup_end - setup_start).count();
+    const double index_build_ms =
+        std::chrono::duration<double, std::milli>(index_end - index_start).count();
+    const double indexed_setup_ms = std::chrono::duration<double, std::milli>(
+        indexed_setup_end - indexed_setup_start).count();
     const double query_us =
         std::chrono::duration<double, std::micro>(query_end - query_start).count() /
         static_cast<double>(repeats);
+    const double indexed_query_us =
+        std::chrono::duration<double, std::micro>(indexed_query_end - indexed_query_start).count() /
+        static_cast<double>(repeats);
 
     const ExactMarginalCompilerStats& stats = compiler.stats();
+    const ExactMarginalCompilerStats& indexed_stats = indexed.stats();
     std::size_t stabilizer_routes = 0U;
     std::size_t register_routes = 0U;
     for (const ExactComponentReceipt& receipt : compiler.component_receipts()) {
@@ -78,5 +100,14 @@ int main() {
     std::cout << "compiler_probability=" << probability << '\n';
     std::cout << "compiler_setup_ms=" << setup_ms << '\n';
     std::cout << "compiler_query_us=" << query_us << '\n';
+    std::cout << "index_estimated_bytes=" << index.stats().estimated_bytes << '\n';
+    std::cout << "index_build_ms=" << index_build_ms << '\n';
+    std::cout << "indexed_causal_qubits=" << indexed_stats.causal_qubits << '\n';
+    std::cout << "indexed_causal_operations=" << indexed_stats.causal_operations << '\n';
+    std::cout << "indexed_estimated_bytes=" << indexed_stats.estimated_bytes << '\n';
+    std::cout << "indexed_probability=" << indexed_probability << '\n';
+    std::cout << "indexed_setup_ms=" << indexed_setup_ms << '\n';
+    std::cout << "indexed_query_us=" << indexed_query_us << '\n';
+    std::cout << "indexed_setup_speedup_over_one_shot=" << setup_ms / indexed_setup_ms << '\n';
     return 0;
 }
