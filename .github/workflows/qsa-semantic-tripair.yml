@@ -1,0 +1,63 @@
+name: QSA Native Semantic Tripair
+
+on:
+  pull_request:
+    paths:
+      - include/qubit/qsemantic_tripair.hpp
+      - tests/test_semantic_tripair.cpp
+      - tests/semantic_tripair_driver/CMakeLists.txt
+      - benchmarks/semantic_tripair.cpp
+      - .github/workflows/qsa-semantic-tripair.yml
+  workflow_dispatch:
+
+jobs:
+  semantic-tripair-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tests/semantic_tripair_driver -B semantic-tripair-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build semantic-tripair-build --config Release --target semantic_tripair_tests --parallel 2
+      - name: Run
+        shell: bash
+        run: |
+          if [ -x semantic-tripair-build/Release/semantic_tripair_tests.exe ]; then
+            semantic-tripair-build/Release/semantic_tripair_tests.exe
+          else
+            ./semantic-tripair-build/semantic_tripair_tests
+          fi
+
+  semantic-tripair-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tests/semantic_tripair_driver -B semantic-tripair-sanitize -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build semantic-tripair-sanitize --target semantic_tripair_tests --parallel 2
+      - name: Run
+        run: ./semantic-tripair-sanitize/semantic_tripair_tests
+
+  semantic-tripair-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tests/semantic_tripair_driver -B semantic-tripair-evidence-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build semantic-tripair-evidence-build --target semantic_tripair_benchmark --parallel 2
+      - name: Run evidence
+        run: ./semantic-tripair-evidence-build/semantic_tripair_benchmark | tee semantic-tripair-evidence.txt
+      - name: Hash evidence
+        run: sha256sum semantic-tripair-evidence.txt | tee semantic-tripair-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-semantic-tripair-evidence
+          path: |
+            semantic-tripair-evidence.txt
+            semantic-tripair-evidence.sha256
