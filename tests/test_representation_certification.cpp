@@ -1,8 +1,11 @@
+#include "qubit/qrepresentation_compiler.hpp"
 #include "qubit/qrouter.hpp"
 
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -18,13 +21,49 @@ void require(bool condition, const char* message) {
     }
 }
 
+void exact_representation_preflight() {
+    std::vector<Operation> operations;
+    operations.push_back({OperationCode::Ry, 0U, 0U, 0.37});
+    for (std::size_t layer = 0U; layer < 3U; ++layer) {
+        for (std::size_t qubit = 0U; qubit < 11U; ++qubit) {
+            operations.push_back({
+                OperationCode::Cnot,
+                static_cast<qubit::QubitId>(qubit),
+                static_cast<qubit::QubitId>(qubit + 1U),
+            });
+        }
+    }
+    const std::vector<qubit::QubitId> query{0U};
+    qubit::ExactRepresentationCompilerPlan preflight(12U, operations, query);
+    require(preflight.stats().causal_qubits == 4U,
+            "representation preflight causal width mismatch");
+    require(preflight.stats().causal_operations == 7U,
+            "representation preflight causal operation count mismatch");
+    require(preflight.stats().components == 1U,
+            "representation preflight component count mismatch");
+    require(preflight.stats().local_dense_state_scalar_envelope == 16U,
+            "representation preflight dense scalar envelope mismatch");
+    require(preflight.matches_source(12U, operations, query),
+            "representation preflight source binding mismatch");
+
+    std::vector<Operation> changed = operations;
+    changed.back().sample = 0.5;
+    require(!preflight.matches_source(12U, changed, query),
+            "representation preflight ignored a source change");
+
+    const std::vector<std::uint8_t> zero{0U};
+    const auto prepared = preflight.prepare();
+    qubit::ExactMarginalCompilerPlan control(12U, operations, query);
+    require(std::abs(prepared.probability(zero) - control.probability(zero)) <= 2e-11,
+            "representation preflight execution differs from exact control");
+}
+
 }  // namespace
 
 int main() {
     RepresentationAdvisor advisor;
-    QRegister state(64);
-
     {
+        QRegister state(64);
         const std::array<Operation, 6> operations{{
             {OperationCode::H, 0U, 0U, 0.0, 0.0},
             {OperationCode::Cnot, 0U, 1U, 0.0, 0.0},
@@ -138,6 +177,7 @@ int main() {
                 "computational-basis product was not certified for an empty circuit");
     }
 
+    exact_representation_preflight();
     std::cout << "representation certification tests passed\n";
     return 0;
 }
