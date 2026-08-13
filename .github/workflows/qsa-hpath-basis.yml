@@ -1,0 +1,165 @@
+name: QSA Computational Basis Hadamard Path
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qhpath_basis.hpp"
+      - "include/qubit/qhpath_prepared.hpp"
+      - "include/qubit/qhpath_factor.hpp"
+      - "include/qubit/qfactor.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_hpath_basis.cpp"
+      - "benchmarks/hpath_basis.cpp"
+      - ".github/workflows/qsa-hpath-basis.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hpath-basis-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build basis Hpath driver
+        shell: bash
+        run: |
+          mkdir -p hpath-basis-driver
+          cat > hpath-basis-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABasisHadamardPathCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(hpath_basis_tests ../tests/test_hpath_basis.cpp)
+          target_link_libraries(hpath_basis_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(hpath_basis_tests PRIVATE /W4)
+          else()
+              target_compile_options(hpath_basis_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME hpath_basis_tests COMMAND hpath_basis_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S hpath-basis-driver -B hpath-basis-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build hpath-basis-build --config Release --target hpath_basis_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir hpath-basis-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  hpath-basis-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p hpath-basis-driver
+          cat > hpath-basis-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABasisHadamardPathSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(hpath_basis_tests ../tests/test_hpath_basis.cpp)
+          target_link_libraries(hpath_basis_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S hpath-basis-driver -B hpath-basis-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build hpath-basis-sanitize-build --target hpath_basis_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./hpath-basis-sanitize-build/hpath_basis_tests
+
+  hpath-basis-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p hpath-basis-driver
+          cat > hpath-basis-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSABasisHadamardPathEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(hpath_basis_benchmark ../benchmarks/hpath_basis.cpp)
+          target_link_libraries(hpath_basis_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S hpath-basis-driver -B hpath-basis-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build hpath-basis-evidence-build --target hpath_basis_benchmark --parallel 2
+      - name: Run basis-native carrier
+        run: |
+          set -o pipefail
+          ./hpath-basis-evidence-build/hpath_basis_benchmark | tee hpath-basis-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("hpath-basis-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["basis_qubits"]) == 2048
+          assert int(values["basis_h_events"]) == 4096
+          assert int(values["basis_h_active_qubits"]) == 2048
+          assert int(values["basis_removed_first_h_variables"]) == 2048
+          assert int(values["basis_native_factor_variables"]) == 2048
+          assert int(values["basis_emulated_factor_variables"]) == 6144
+          assert float(values["basis_variable_reduction_ratio"]) == 3.0
+          assert int(values["basis_native_factor_count"]) < int(values["basis_emulated_factor_count"])
+          assert int(values["basis_native_peak_union_variables"]) <= 8
+          assert int(values["basis_native_peak_factor_entries"]) <= 256
+          native_plan = int(values["basis_native_plan_bytes"])
+          emulated_plan = int(values["basis_emulated_plan_bytes"])
+          assert 0 < native_plan < 512 * 1024 * 1024
+          assert native_plan < emulated_plan
+          plan_ratio = float(values["basis_plan_memory_reduction_ratio"])
+          assert math.isfinite(plan_ratio) and plan_ratio > 1.5
+          assert 0 < int(values["basis_native_workspace_bytes"]) < 128 * 1024 * 1024
+          assert 0 < int(values["basis_emulated_workspace_bytes"]) < 512 * 1024 * 1024
+          assert int(values["basis_query_count"]) == 8
+          assert 0.0 < float(values["basis_native_setup_ms"]) < 30000.0
+          assert 0.0 < float(values["basis_emulated_setup_ms"]) < 30000.0
+          assert 0.0 < float(values["basis_native_query_ms"]) < 30000.0
+          assert 0.0 < float(values["basis_emulated_query_ms"]) < 30000.0
+          assert math.isfinite(float(values["basis_setup_speed_ratio"]))
+          assert math.isfinite(float(values["basis_query_speed_ratio"]))
+          assert float(values["basis_max_logp_error"]) <= 1e-9
+          assert int(values["dense_state_materialized"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum hpath-basis-evidence.txt | tee hpath-basis-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-hpath-basis-evidence
+          path: |
+            hpath-basis-evidence.txt
+            hpath-basis-evidence.sha256
