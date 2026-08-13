@@ -1,6 +1,7 @@
 #include "qubit/qfabric.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
