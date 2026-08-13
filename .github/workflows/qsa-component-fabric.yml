@@ -126,15 +126,21 @@ jobs:
           assert int(values["fabric_operations"]) == 4097
           assert int(values["fabric_components"]) == 1024
           assert int(values["fabric_largest_component_qubits"]) == 4
-          assert int(values["fabric_prepared_components"]) == 1024
-          assert int(values["fabric_stabilizer_routes"]) == 1023
-          assert int(values["fabric_non_stabilizer_routes"]) == 1
+          assert int(values["fabric_full_active_components"]) == 1024
+          assert int(values["fabric_full_prepared_components"]) == 1024
+          assert int(values["fabric_full_stabilizer_routes"]) == 1023
+          assert int(values["fabric_full_non_stabilizer_routes"]) == 1
+          assert int(values["fabric_pruned_active_components"]) == 2
+          assert int(values["fabric_pruned_prepared_components"]) == 2
+          assert int(values["fabric_pruned_stabilizer_routes"]) == 2
+          assert int(values["fabric_pruned_non_stabilizer_routes"]) == 0
+          assert int(values["fabric_pruned_estimated_bytes"]) < int(values["fabric_full_estimated_bytes"])
           assert abs(float(values["fabric_selected_probability"]) - 0.25) < 1e-12
           assert abs(float(values["fabric_selected_probability"]) - float(values["fabric_global_probability"])) < 1e-12
-          assert int(values["fabric_estimated_bytes"]) > 0
           assert int(values["fabric_global_estimated_bytes"]) > 0
-          assert float(values["fabric_setup_ms"]) < 10000.0
-          assert float(values["fabric_query_ms"]) < 1000.0
+          assert float(values["fabric_full_setup_ms"]) < 10000.0
+          assert float(values["fabric_pruned_setup_ms"]) < 10000.0
+          assert float(values["fabric_pruned_query_ms"]) < 1000.0
           assert float(values["fabric_global_setup_ms"]) < 10000.0
           assert float(values["fabric_global_query_ms"]) < 1000.0
           PY
