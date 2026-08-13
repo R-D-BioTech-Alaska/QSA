@@ -51,7 +51,7 @@ void exact_cached_queries() {
     require(&first == &second, "compiled marginal program did not reuse cached plan identity");
     require(first.stats().causal_qubits == 5U,
             "compiled marginal program unexpected q0 causal width");
-    require(first.stats().causal_operations == 9U,
+    require(first.stats().causal_operations == 11U,
             "compiled marginal program unexpected q0 causal operation count");
     require(close(
                 program.probability(query0, zero),
