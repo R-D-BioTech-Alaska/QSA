@@ -13,28 +13,31 @@
 
 namespace qubit {
 
-struct ExactSingleHPathConfig {
+struct ExactHadamardPathConfig {
     ExactFactorConfig factor{};
     std::size_t max_qubits{1U << 20U};
     std::size_t max_operations{1U << 24U};
-    std::size_t max_h_defects{1U << 20U};
+    std::size_t max_h_events{1U << 20U};
+    std::size_t max_metadata_bytes{1U << 30U};
 };
 
-struct ExactSingleHPathAmplitude {
+struct ExactHadamardPathAmplitude {
     QComplex mantissa{};
     double log2_scale{0.0};
-    std::size_t h_defects{0U};
+    std::size_t h_events{0U};
+    std::size_t h_active_qubits{0U};
     std::size_t factor_variables{0U};
     std::size_t factor_count{0U};
+    std::size_t metadata_estimated_bytes{0U};
     std::size_t graph_estimated_bytes{0U};
     std::size_t plan_estimated_bytes{0U};
     ExactFactorStats factor_stats{};
 
     [[nodiscard]] QComplex amplitude() const {
         const double scale = std::exp2(log2_scale);
-        if (scale == 0.0 && mantissa.norm2() != 0.0) {
+        if (scale == 0.0 && (mantissa.re != 0.0 || mantissa.im != 0.0)) {
             throw QStateError(
-                "Single-H path amplitude underflows; use scaled result or log2_probability");
+                "Hadamard-path amplitude underflows; use scaled result or log2_probability");
         }
         return mantissa * scale;
     }
@@ -44,7 +47,7 @@ struct ExactSingleHPathAmplitude {
         const double imaginary = std::abs(mantissa.im);
         const double maximum = std::max(real, imaginary);
         if (!std::isfinite(maximum)) {
-            throw QStateError("Single-H path probability became non-finite");
+            throw QStateError("Hadamard-path probability became non-finite");
         }
         if (maximum == 0.0) {
             return -std::numeric_limits<double>::infinity();
@@ -58,63 +61,79 @@ struct ExactSingleHPathAmplitude {
     }
 };
 
-class ExactSingleHPathAmplitudePlan {
+class ExactHadamardPathAmplitudePlan {
 public:
-    ExactSingleHPathAmplitudePlan(
+    ExactHadamardPathAmplitudePlan(
         std::size_t qubit_count,
         std::span<const Operation> operations,
-        ExactSingleHPathConfig config = {})
+        ExactHadamardPathConfig config = {})
         : qubit_count_(qubit_count),
           operations_(operations.begin(), operations.end()),
           config_(config),
-          has_h_(qubit_count, 0U) {
+          operation_event_(operations.size(), npos()),
+          first_h_event_(qubit_count, npos()) {
         validate_configuration();
-        for (const Operation& operation : operations_) {
+        std::vector<std::size_t> last_h_event(qubit_count_, npos());
+        for (std::size_t operation_index = 0U;
+             operation_index < operations_.size();
+             ++operation_index) {
+            const Operation& operation = operations_[operation_index];
             validate_operation(operation);
-            if (operation.code == OperationCode::H) {
-                const std::size_t qubit = static_cast<std::size_t>(operation.first);
-                if (has_h_[qubit] != 0U) {
-                    throw QStateError(
-                        "Single-H path compiler accepts at most one Hadamard per qubit");
-                }
-                has_h_[qubit] = 1U;
-                ++h_defects_;
+            if (operation.code != OperationCode::H) {
+                continue;
             }
+            if (h_events_ >= config_.max_h_events ||
+                h_events_ >= config_.factor.max_variables) {
+                throw QStateError("Hadamard-path compiler exceeds its H-event variable cap");
+            }
+            const std::size_t qubit = static_cast<std::size_t>(operation.first);
+            const std::size_t event = h_events_++;
+            operation_event_[operation_index] = event;
+            next_h_event_.push_back(npos());
+            if (last_h_event[qubit] == npos()) {
+                first_h_event_[qubit] = event;
+                ++h_active_qubits_;
+            } else {
+                next_h_event_[last_h_event[qubit]] = event;
+            }
+            last_h_event[qubit] = event;
         }
-        if (h_defects_ > config_.max_h_defects ||
-            h_defects_ > config_.factor.max_variables) {
-            throw QStateError("Single-H path compiler exceeds its Hadamard-variable cap");
+        metadata_estimated_bytes_ = estimate_metadata_bytes(last_h_event.capacity());
+        if (metadata_estimated_bytes_ > config_.max_metadata_bytes) {
+            throw QStateError("Hadamard-path compiler metadata exceeds configured byte cap");
         }
     }
 
     [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
     [[nodiscard]] std::size_t operation_count() const noexcept { return operations_.size(); }
-    [[nodiscard]] std::size_t h_defects() const noexcept { return h_defects_; }
-    [[nodiscard]] const ExactSingleHPathConfig& config() const noexcept { return config_; }
+    [[nodiscard]] std::size_t h_events() const noexcept { return h_events_; }
+    [[nodiscard]] std::size_t h_active_qubits() const noexcept { return h_active_qubits_; }
+    [[nodiscard]] std::size_t metadata_estimated_bytes() const noexcept {
+        return metadata_estimated_bytes_;
+    }
+    [[nodiscard]] const ExactHadamardPathConfig& config() const noexcept { return config_; }
 
-    [[nodiscard]] ExactSingleHPathAmplitude scaled_amplitude_bits(
+    [[nodiscard]] ExactHadamardPathAmplitude scaled_amplitude_bits(
         std::span<const std::uint8_t> bits) const {
         validate_bits(bits);
 
         ExactFactorGraph graph(config_.factor);
-        const FactorVariableId invalid = std::numeric_limits<FactorVariableId>::max();
-        std::vector<FactorVariableId> variables(qubit_count_, invalid);
-        for (std::size_t qubit = 0U; qubit < qubit_count_; ++qubit) {
-            if (has_h_[qubit] != 0U) {
-                variables[qubit] = graph.add_variable(2U);
-            }
+        std::vector<FactorVariableId> variables(h_events_);
+        for (std::size_t event = 0U; event < h_events_; ++event) {
+            variables[event] = graph.add_variable(2U);
         }
-
-        std::vector<std::uint8_t> passed_h(qubit_count_, 0U);
+        std::vector<std::size_t> current_event = first_h_event_;
         QComplex global{1.0, 0.0};
-        const auto variable_active = [&](QubitId qubit) noexcept {
-            const std::size_t index = static_cast<std::size_t>(qubit);
-            return has_h_[index] != 0U && passed_h[index] == 0U;
+
+        const auto active_variable = [&](QubitId qubit) -> const FactorVariableId* {
+            const std::size_t event = current_event[static_cast<std::size_t>(qubit)];
+            return event == npos() ? nullptr : &variables[event];
         };
         const auto add_unary = [&](QubitId qubit, QComplex zero, QComplex one) {
             const std::size_t index = static_cast<std::size_t>(qubit);
-            if (variable_active(qubit)) {
-                const std::array<FactorVariableId, 1> scope{variables[index]};
+            const FactorVariableId* variable = active_variable(qubit);
+            if (variable != nullptr) {
+                const std::array<FactorVariableId, 1> scope{*variable};
                 const std::array<QComplex, 2> values{zero, one};
                 (void)graph.add_dense_factor(scope, values);
             } else {
@@ -124,45 +143,70 @@ public:
         const auto add_cz = [&](QubitId first, QubitId second) {
             const std::size_t first_index = static_cast<std::size_t>(first);
             const std::size_t second_index = static_cast<std::size_t>(second);
-            const bool first_variable = variable_active(first);
-            const bool second_variable = variable_active(second);
-            if (!first_variable && !second_variable) {
+            const FactorVariableId* first_variable = active_variable(first);
+            const FactorVariableId* second_variable = active_variable(second);
+            if (first_variable == nullptr && second_variable == nullptr) {
                 if (bits[first_index] != 0U && bits[second_index] != 0U) {
                     global *= -1.0;
                 }
                 return;
             }
-            if (first_variable && second_variable) {
+            if (first_variable != nullptr && second_variable != nullptr) {
                 const std::array<FactorVariableId, 2> scope{
-                    variables[first_index], variables[second_index]};
+                    *first_variable, *second_variable};
                 const std::array<QComplex, 4> values{
                     QComplex{1.0, 0.0}, QComplex{1.0, 0.0},
                     QComplex{1.0, 0.0}, QComplex{-1.0, 0.0}};
                 (void)graph.add_dense_factor(scope, values);
                 return;
             }
-            const QubitId variable_qubit = first_variable ? first : second;
-            const std::size_t fixed_index = first_variable ? second_index : first_index;
+            const FactorVariableId variable =
+                first_variable != nullptr ? *first_variable : *second_variable;
+            const std::size_t fixed_index =
+                first_variable != nullptr ? second_index : first_index;
             if (bits[fixed_index] != 0U) {
-                const std::size_t variable_index =
-                    static_cast<std::size_t>(variable_qubit);
-                const std::array<FactorVariableId, 1> scope{variables[variable_index]};
+                const std::array<FactorVariableId, 1> scope{variable};
                 const std::array<QComplex, 2> values{
                     QComplex{1.0, 0.0}, QComplex{-1.0, 0.0}};
                 (void)graph.add_dense_factor(scope, values);
             }
         };
 
-        for (const Operation& operation : operations_) {
+        constexpr double inverse_sqrt_two =
+            0.707106781186547524400844362104849039;
+        for (std::size_t operation_index = 0U;
+             operation_index < operations_.size();
+             ++operation_index) {
+            const Operation& operation = operations_[operation_index];
             switch (operation.code) {
                 case OperationCode::H: {
-                    const std::size_t index = static_cast<std::size_t>(operation.first);
-                    const double one_sign = bits[index] == 0U ? 0.5 : -0.5;
-                    const std::array<FactorVariableId, 1> scope{variables[index]};
-                    const std::array<QComplex, 2> values{
-                        QComplex{0.5, 0.0}, QComplex{one_sign, 0.0}};
-                    (void)graph.add_dense_factor(scope, values);
-                    passed_h[index] = 1U;
+                    const std::size_t qubit = static_cast<std::size_t>(operation.first);
+                    const std::size_t event = operation_event_[operation_index];
+                    if (event == npos() || current_event[qubit] != event) {
+                        throw QStateError("Hadamard-path event sequence is inconsistent");
+                    }
+                    const std::size_t next = next_h_event_[event];
+                    const double normalization =
+                        event == first_h_event_[qubit] ? 0.5 : inverse_sqrt_two;
+                    if (next != npos()) {
+                        const std::array<FactorVariableId, 2> scope{
+                            variables[event], variables[next]};
+                        const std::array<QComplex, 4> values{
+                            QComplex{normalization, 0.0},
+                            QComplex{normalization, 0.0},
+                            QComplex{normalization, 0.0},
+                            QComplex{-normalization, 0.0},
+                        };
+                        (void)graph.add_dense_factor(scope, values);
+                    } else {
+                        const double one_sign =
+                            bits[qubit] == 0U ? normalization : -normalization;
+                        const std::array<FactorVariableId, 1> scope{variables[event]};
+                        const std::array<QComplex, 2> values{
+                            QComplex{normalization, 0.0}, QComplex{one_sign, 0.0}};
+                        (void)graph.add_dense_factor(scope, values);
+                    }
+                    current_event[qubit] = next;
                     break;
                 }
                 case OperationCode::Z:
@@ -197,14 +241,14 @@ public:
                     break;
                 default:
                     throw QStateError(
-                        "Operation left the validated single-H diagonal path contract");
+                        "Operation left the validated Hadamard-path diagonal contract");
             }
         }
 
         QComplex partition{1.0, 0.0};
         ExactFactorStats factor_stats{};
         std::size_t plan_bytes = 0U;
-        if (h_defects_ != 0U) {
+        if (h_events_ != 0U) {
             ExactFactorPlan plan = graph.compile();
             partition = plan.partition();
             factor_stats = plan.stats();
@@ -212,15 +256,17 @@ public:
         }
         const QComplex mantissa = global * partition;
         if (!std::isfinite(mantissa.re) || !std::isfinite(mantissa.im)) {
-            throw QStateError("Single-H path amplitude became non-finite");
+            throw QStateError("Hadamard-path amplitude became non-finite");
         }
 
-        return ExactSingleHPathAmplitude{
+        return ExactHadamardPathAmplitude{
             mantissa,
-            -0.5 * static_cast<double>(qubit_count_ - h_defects_),
-            h_defects_,
+            -0.5 * static_cast<double>(qubit_count_ - h_active_qubits_),
+            h_events_,
+            h_active_qubits_,
             graph.variable_count(),
             graph.factor_count(),
+            metadata_estimated_bytes_,
             graph.estimated_bytes(),
             plan_bytes,
             factor_stats,
@@ -235,32 +281,40 @@ public:
 private:
     std::size_t qubit_count_{0U};
     std::vector<Operation> operations_{};
-    ExactSingleHPathConfig config_{};
-    std::vector<std::uint8_t> has_h_{};
-    std::size_t h_defects_{0U};
+    ExactHadamardPathConfig config_{};
+    std::vector<std::size_t> operation_event_{};
+    std::vector<std::size_t> next_h_event_{};
+    std::vector<std::size_t> first_h_event_{};
+    std::size_t h_events_{0U};
+    std::size_t h_active_qubits_{0U};
+    std::size_t metadata_estimated_bytes_{0U};
+
+    [[nodiscard]] static constexpr std::size_t npos() noexcept {
+        return std::numeric_limits<std::size_t>::max();
+    }
 
     void validate_configuration() const {
         if (qubit_count_ == 0U || qubit_count_ > config_.max_qubits ||
             qubit_count_ > static_cast<std::size_t>(std::numeric_limits<QubitId>::max()) ||
             operations_.size() > config_.max_operations ||
-            config_.max_h_defects == 0U) {
-            throw QStateError("Single-H path compiler dimensions or configuration are invalid");
+            config_.max_h_events == 0U || config_.max_metadata_bytes == 0U) {
+            throw QStateError("Hadamard-path compiler dimensions or configuration are invalid");
         }
     }
 
     void validate_operation(const Operation& operation) const {
         const std::size_t first = static_cast<std::size_t>(operation.first);
         if (first >= qubit_count_) {
-            throw QStateError("Single-H path operation target is out of range");
+            throw QStateError("Hadamard-path operation target is out of range");
         }
         if (operation.code == OperationCode::Cz) {
             const std::size_t second = static_cast<std::size_t>(operation.second);
             if (second >= qubit_count_ || first == second) {
-                throw QStateError("Single-H path CZ support is invalid");
+                throw QStateError("Hadamard-path CZ support is invalid");
             }
         }
         if (operation.code == OperationCode::Rz && !std::isfinite(operation.parameter)) {
-            throw QStateError("Single-H path Rz angle must be finite");
+            throw QStateError("Hadamard-path Rz angle must be finite");
         }
         switch (operation.code) {
             case OperationCode::H:
@@ -283,21 +337,61 @@ private:
             case OperationCode::DepolarizingTrajectory:
             case OperationCode::AmplitudeDampingTrajectory:
                 throw QStateError(
-                    "Operation is outside the exact single-H diagonal path contract");
+                    "Operation is outside the exact Hadamard-path diagonal contract");
             default:
-                throw QStateError("Single-H path compiler received an unknown opcode");
+                throw QStateError("Hadamard-path compiler received an unknown opcode");
         }
     }
 
     void validate_bits(std::span<const std::uint8_t> bits) const {
         if (bits.size() != qubit_count_) {
-            throw QStateError("Single-H path output bit count does not match qubit count");
+            throw QStateError("Hadamard-path output bit count does not match qubit count");
         }
         for (const std::uint8_t bit : bits) {
             if (bit > 1U) {
-                throw QStateError("Single-H path output bits must be zero or one");
+                throw QStateError("Hadamard-path output bits must be zero or one");
             }
         }
+    }
+
+    [[nodiscard]] std::size_t estimate_metadata_bytes(std::size_t last_capacity) const {
+        std::size_t total = sizeof(*this);
+        total = checked_sum(total, checked_product(
+            operations_.capacity(), sizeof(Operation),
+            "Hadamard-path operation metadata overflowed"));
+        total = checked_sum(total, checked_product(
+            operation_event_.capacity(), sizeof(std::size_t),
+            "Hadamard-path event-map metadata overflowed"));
+        total = checked_sum(total, checked_product(
+            next_h_event_.capacity(), sizeof(std::size_t),
+            "Hadamard-path next-event metadata overflowed"));
+        total = checked_sum(total, checked_product(
+            first_h_event_.capacity(), sizeof(std::size_t),
+            "Hadamard-path first-event metadata overflowed"));
+        total = checked_sum(total, checked_product(
+            last_capacity, sizeof(std::size_t),
+            "Hadamard-path construction metadata overflowed"));
+        return total;
+    }
+
+    [[nodiscard]] static std::size_t checked_product(
+        std::size_t left,
+        std::size_t right,
+        const char* message) {
+        if (left != 0U && right > std::numeric_limits<std::size_t>::max() / left) {
+            throw QStateError(message);
+        }
+        return left * right;
+    }
+
+    [[nodiscard]] static std::size_t checked_sum(
+        std::size_t left,
+        std::size_t right,
+        const char* message) {
+        if (right > std::numeric_limits<std::size_t>::max() - left) {
+            throw QStateError(message);
+        }
+        return left + right;
     }
 };
 

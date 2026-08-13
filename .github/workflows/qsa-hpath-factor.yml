@@ -1,4 +1,4 @@
-name: QSA Exact Single-H Path Factor
+name: QSA Exact Hadamard Path Factor
 
 on:
   pull_request:
@@ -21,13 +21,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build path-factor driver
+      - name: Build Hadamard-path driver
         shell: bash
         run: |
           mkdir -p hpath-factor-driver
           cat > hpath-factor-driver/CMakeLists.txt <<'CMAKE'
           cmake_minimum_required(VERSION 3.20)
-          project(QSAExactSingleHPathCheck LANGUAGES CXX)
+          project(QSAExactHadamardPathCheck LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_CXX_EXTENSIONS OFF)
@@ -63,7 +63,7 @@ jobs:
           mkdir -p hpath-factor-driver
           cat > hpath-factor-driver/CMakeLists.txt <<'CMAKE'
           cmake_minimum_required(VERSION 3.20)
-          project(QSAExactSingleHPathSanitize LANGUAGES CXX)
+          project(QSAExactHadamardPathSanitize LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_CXX_EXTENSIONS OFF)
@@ -91,7 +91,7 @@ jobs:
           mkdir -p hpath-factor-driver
           cat > hpath-factor-driver/CMakeLists.txt <<'CMAKE'
           cmake_minimum_required(VERSION 3.20)
-          project(QSAExactSingleHPathEvidence LANGUAGES CXX)
+          project(QSAExactHadamardPathEvidence LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_CXX_EXTENSIONS OFF)
@@ -106,40 +106,57 @@ jobs:
           CMAKE
           cmake -S hpath-factor-driver -B hpath-factor-evidence-build -DCMAKE_BUILD_TYPE=Release
           cmake --build hpath-factor-evidence-build --target hpath_factor_benchmark --parallel 2
-      - name: Run path-factor carrier
+      - name: Run Hadamard-path carriers
         run: |
           set -o pipefail
           ./hpath-factor-evidence-build/hpath_factor_benchmark | tee hpath-factor-evidence.txt
       - name: Enforce bounded evidence
         run: |
           python - <<'PY'
+          import math
           values = {}
           with open("hpath-factor-evidence.txt", "r", encoding="utf-8") as handle:
               for line in handle:
                   key, sep, value = line.strip().partition("=")
                   if sep:
                       values[key] = value
-          assert int(values["carrier_qubits"]) == 1536
-          assert int(values["carrier_h_defects"]) == 1536
-          assert int(values["carrier_raw_branch_count_log2"]) == 1536
-          assert int(values["carrier_factor_variables"]) == 1536
-          assert int(values["carrier_factor_count"]) == 3071
-          assert int(values["carrier_peak_union_variables"]) <= 2
-          assert int(values["carrier_peak_factor_entries"]) <= 4
-          assert int(values["carrier_workspace_slots"]) <= 4
-          assert 0 < int(values["carrier_graph_estimated_bytes"]) < 16 * 1024 * 1024
-          assert 0 < int(values["carrier_plan_estimated_bytes"]) < 64 * 1024 * 1024
-          assert float(values["carrier_dense_to_peak_factor_ratio_log2"]) > 1533.0
-          assert abs(float(values["carrier_log2_probability_zero"]) + 1536.0) < 1e-9
-          assert 0.0 < float(values["carrier_compile_us"]) < 1_000_000.0
-          assert 0.0 < float(values["carrier_query_ms"]) < 10000.0
+          assert int(values["spatial_qubits"]) == 1536
+          assert int(values["spatial_h_events"]) == 1536
+          assert int(values["spatial_raw_branch_count_log2"]) == 1536
+          assert int(values["spatial_factor_variables"]) == 1536
+          assert int(values["spatial_factor_count"]) == 3071
+          assert int(values["spatial_peak_union_variables"]) <= 2
+          assert int(values["spatial_peak_factor_entries"]) <= 4
+          assert int(values["spatial_workspace_slots"]) <= 4
+          assert float(values["spatial_dense_to_peak_factor_ratio_log2"]) > 1533.0
+          assert abs(float(values["spatial_log2_probability_zero"]) + 1536.0) < 1e-9
+          assert 0.0 < float(values["spatial_compile_us"]) < 1_000_000.0
+          assert 0.0 < float(values["spatial_query_ms"]) < 10000.0
+          assert int(values["temporal_qubits"]) == 6
+          assert int(values["temporal_rounds"]) == 682
+          assert int(values["temporal_h_events"]) == 4092
+          assert int(values["temporal_raw_branch_count_log2"]) == 4092
+          assert int(values["temporal_h_active_qubits"]) == 6
+          assert int(values["temporal_factor_variables"]) == 4092
+          assert int(values["temporal_peak_union_variables"]) <= 10
+          assert int(values["temporal_peak_factor_entries"]) <= 1024
+          assert int(values["temporal_workspace_slots"]) <= 16
+          assert float(values["temporal_flat_to_peak_factor_ratio_log2"]) > 4080.0
+          temporal_logp = float(values["temporal_log2_probability_zero"])
+          assert math.isfinite(temporal_logp) and temporal_logp <= 1e-9
+          assert 0 < int(values["temporal_metadata_estimated_bytes"]) < 16 * 1024 * 1024
+          assert 0 < int(values["temporal_graph_estimated_bytes"]) < 64 * 1024 * 1024
+          assert 0 < int(values["temporal_plan_estimated_bytes"]) < 128 * 1024 * 1024
+          assert 0.0 < float(values["temporal_compile_us"]) < 1_000_000.0
+          assert 0.0 < float(values["temporal_query_ms"]) < 10000.0
+          assert int(values["temporal_physical_dense_amplitudes"]) == 64
           assert int(values["hard_qubits"]) == 32
           assert int(values["hard_cz_edges"]) == 496
           assert int(values["hard_factor_entry_cap"]) == 1024
           assert int(values["hard_dense_width_rejected"]) == 1
           assert 0.0 <= float(values["hard_rejection_ms"]) < 1000.0
           assert int(values["dense_state_materialized"]) == 0
-          assert int(values["explicit_branch_list_materialized"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
           PY
       - name: Hash evidence
         run: sha256sum hpath-factor-evidence.txt | tee hpath-factor-evidence.sha256
