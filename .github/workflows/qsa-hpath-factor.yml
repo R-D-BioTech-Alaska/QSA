@@ -132,24 +132,26 @@ jobs:
           assert abs(float(values["spatial_log2_probability_zero"]) + 1536.0) < 1e-9
           assert 0.0 < float(values["spatial_compile_us"]) < 1_000_000.0
           assert 0.0 < float(values["spatial_query_ms"]) < 10000.0
-          assert int(values["temporal_qubits"]) == 6
-          assert int(values["temporal_rounds"]) == 682
-          assert int(values["temporal_h_events"]) == 4092
-          assert int(values["temporal_raw_branch_count_log2"]) == 4092
-          assert int(values["temporal_h_active_qubits"]) == 6
-          assert int(values["temporal_factor_variables"]) == 4092
-          assert int(values["temporal_peak_union_variables"]) <= 10
-          assert int(values["temporal_peak_factor_entries"]) <= 1024
-          assert int(values["temporal_workspace_slots"]) <= 16
-          assert float(values["temporal_flat_to_peak_factor_ratio_log2"]) > 4080.0
-          temporal_logp = float(values["temporal_log2_probability_zero"])
-          assert math.isfinite(temporal_logp) and temporal_logp <= 1e-9
-          assert 0 < int(values["temporal_metadata_estimated_bytes"]) < 16 * 1024 * 1024
-          assert 0 < int(values["temporal_graph_estimated_bytes"]) < 64 * 1024 * 1024
-          assert 0 < int(values["temporal_plan_estimated_bytes"]) < 128 * 1024 * 1024
-          assert 0.0 < float(values["temporal_compile_us"]) < 1_000_000.0
-          assert 0.0 < float(values["temporal_query_ms"]) < 10000.0
-          assert int(values["temporal_physical_dense_amplitudes"]) == 64
+          assert int(values["spacetime_qubits"]) == 1024
+          assert int(values["spacetime_rounds"]) == 8
+          assert int(values["spacetime_h_events"]) == 8192
+          assert int(values["spacetime_raw_branch_count_log2"]) == 8192
+          assert int(values["spacetime_h_active_qubits"]) == 1024
+          assert int(values["spacetime_factor_variables"]) == 8192
+          assert int(values["spacetime_peak_union_variables"]) <= 12
+          assert int(values["spacetime_peak_factor_entries"]) <= 4096
+          assert 0 < int(values["spacetime_workspace_slots"]) <= 10000
+          assert float(values["spacetime_path_to_peak_factor_ratio_log2"]) > 8180.0
+          assert float(values["spacetime_dense_to_peak_factor_ratio_log2"]) > 1012.0
+          spacetime_logp = float(values["spacetime_log2_probability_probe"])
+          assert math.isfinite(spacetime_logp) and spacetime_logp <= 1e-9
+          assert 0 < int(values["spacetime_metadata_estimated_bytes"]) < 64 * 1024 * 1024
+          assert 0 < int(values["spacetime_graph_estimated_bytes"]) < 128 * 1024 * 1024
+          assert 0 < int(values["spacetime_plan_estimated_bytes"]) < 512 * 1024 * 1024
+          assert 0.0 < float(values["spacetime_compile_us"]) < 1_000_000.0
+          assert 0.0 < float(values["spacetime_query_ms"]) < 30000.0
+          assert int(values["spacetime_physical_dense_log2_amplitudes"]) == 1024
+          assert int(values["spacetime_contains_arbitrary_rz"]) == 1
           assert int(values["hard_qubits"]) == 32
           assert int(values["hard_cz_edges"]) == 496
           assert int(values["hard_factor_entry_cap"]) == 1024
