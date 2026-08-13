@@ -198,9 +198,11 @@ public:
                 }
                 continue;
             }
+            Component& query_component = components_[component];
+            ensure_qubit_order(query_component);
             terms.push_back(Term{
                 component,
-                local_id(components_[component].qubits, global),
+                local_id(query_component.qubits, global),
                 bits[index],
             });
         }
@@ -267,7 +269,7 @@ public:
 
             double value = 0.0;
             if (execution == ExactRepresentationExecutionKind::LocalDense) {
-                bool hit = dense_cache != nullptr;
+                const bool hit = dense_cache != nullptr;
                 if (dense_cache == nullptr) {
                     dense_cache = &prepare_dense(component, local_qubits, slice, dense);
                 }
@@ -392,6 +394,7 @@ private:
 
     struct Component {
         bool active{false};
+        bool qubits_sorted{true};
         std::size_t generation{1U};
         std::size_t dependencies{0U};
         std::vector<QubitId> qubits{};
@@ -464,6 +467,7 @@ private:
         const Operation* operation,
         bool dependency) {
         std::vector<std::size_t> ids;
+        ids.reserve(support.size());
         for (const QubitId qubit : support) {
             const std::size_t id = component_of_[static_cast<std::size_t>(qubit)];
             if (id != npos()) {
@@ -498,6 +502,7 @@ private:
         if (ids.size() == 1U) {
             Component& component = components_[ids.front()];
             std::vector<QubitId> additions;
+            additions.reserve(support.size());
             for (const QubitId qubit : support) {
                 if (component_of_[static_cast<std::size_t>(qubit)] == npos()) {
                     additions.push_back(qubit);
@@ -510,15 +515,16 @@ private:
                 next_operations > config_.max_component_operations) {
                 throw QStateError("Representation fabric component growth exceeds configured cap");
             }
-            component.qubits.reserve(next_qubits);
-            component.operations.reserve(next_operations);
             if (operation != nullptr || !additions.empty()) {
                 invalidate(component);
             } else if (dependency) {
                 increment_generation(component);
             }
-            component.qubits.insert(component.qubits.end(), additions.begin(), additions.end());
-            std::sort(component.qubits.begin(), component.qubits.end());
+            if (!additions.empty()) {
+                component.qubits.insert(
+                    component.qubits.end(), additions.begin(), additions.end());
+                component.qubits_sorted = false;
+            }
             if (operation != nullptr) {
                 component.operations.push_back(*operation);
             }
@@ -569,6 +575,7 @@ private:
         }
         Component& target = components_[target_id];
         target.active = true;
+        target.qubits_sorted = true;
         target.generation = generation + 1U;
         target.dependencies = dependencies;
         target.qubits = std::move(combined);
@@ -605,10 +612,19 @@ private:
         ++component.generation;
     }
 
+    static void ensure_qubit_order(Component& component) {
+        if (component.qubits_sorted) {
+            return;
+        }
+        std::sort(component.qubits.begin(), component.qubits.end());
+        component.qubits_sorted = true;
+    }
+
     void ensure_program(Component& component) {
         if (component.program) {
             return;
         }
+        ensure_qubit_order(component);
         std::vector<Operation> local;
         local.reserve(component.operations.size());
         for (const Operation& source : component.operations) {
