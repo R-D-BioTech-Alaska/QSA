@@ -1,9 +1,9 @@
 #pragma once
 
 #include "qubit/qfactor.hpp"
-#include "qubit/qphase_sum.hpp"
 #include "qubit/qplan.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -34,6 +34,7 @@ struct ExactAmplitudeAdvisorConfig {
     std::size_t max_qubits{1U << 20U};
     std::size_t max_operations{1U << 24U};
     std::size_t max_phase_h_defects{20U};
+    std::size_t max_phase_branches{1U << 20U};
     std::size_t max_hpath_events{1U << 20U};
     std::size_t minimum_hpath_log2_margin{8U};
 };
@@ -86,13 +87,18 @@ public:
             hpath_compatible = hpath_compatible && hpath_operation(operation.code);
         }
 
-        decision.phase_graph_eligible =
-            phase_compatible && decision.phase_h_defects <= config.max_phase_h_defects;
         set_phase_envelope(decision);
+        decision.phase_graph_eligible =
+            phase_compatible &&
+            decision.phase_h_defects <= config.max_phase_h_defects &&
+            decision.phase_branch_envelope_fits_size_t &&
+            decision.phase_branch_envelope <= config.max_phase_branches;
 
-        if (hpath_compatible) {
+        const std::size_t hpath_event_cap =
+            std::min(config.max_hpath_events, config.factor.max_variables);
+        if (hpath_compatible && decision.phase_h_defects <= hpath_event_cap) {
             decision.hpath = build_hpath_certificate(qubit_count, operations, config);
-            decision.hpath_eligible = decision.hpath.h_events <= config.max_hpath_events;
+            decision.hpath_eligible = true;
         }
 
         if (!decision.phase_graph_eligible && !decision.hpath_eligible) {
@@ -144,10 +150,6 @@ private:
             const Operation& operation = operations[operation_index];
             if (operation.code != OperationCode::H) {
                 continue;
-            }
-            if (h_events >= config.max_hpath_events ||
-                h_events >= config.factor.max_variables) {
-                throw QStateError("Amplitude advisor Hadamard-path event cap exceeded");
             }
             const std::size_t qubit = static_cast<std::size_t>(operation.first);
             const std::size_t event = h_events++;
@@ -267,7 +269,9 @@ private:
             qubit_count > static_cast<std::size_t>(std::numeric_limits<QubitId>::max()) ||
             operation_count > config.max_operations ||
             config.max_phase_h_defects == 0U ||
-            config.max_hpath_events == 0U) {
+            config.max_phase_branches == 0U ||
+            config.max_hpath_events == 0U ||
+            config.factor.max_variables == 0U) {
             throw QStateError("Amplitude advisor dimensions or configuration are invalid");
         }
     }

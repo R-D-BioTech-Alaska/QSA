@@ -1,21 +1,17 @@
 #include "qubit/qamplitude_advisor.hpp"
 
 #include <chrono>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
 #include <vector>
 
-int main() {
-    using Clock = std::chrono::steady_clock;
-    using qubit::ExactAmplitudeAdvisorConfig;
-    using qubit::ExactAmplitudeRepresentationAdvisor;
-    using qubit::ExactAmplitudeRoute;
+namespace {
+
+std::vector<qubit::Operation> large_spacetime() {
     using qubit::Operation;
     using qubit::OperationCode;
-
     constexpr std::size_t qubits = 1024U;
     constexpr std::size_t rounds = 8U;
     std::vector<Operation> operations;
@@ -44,6 +40,41 @@ int main() {
             });
         }
     }
+    return operations;
+}
+
+std::vector<qubit::Operation> comparable_chain(std::size_t qubits) {
+    using qubit::Operation;
+    using qubit::OperationCode;
+    std::vector<Operation> operations;
+    for (std::size_t target = 0U; target < qubits; ++target) {
+        operations.push_back({
+            OperationCode::Rz,
+            static_cast<qubit::QubitId>(target),
+            0U,
+            0.031 * static_cast<double>(target + 1U),
+        });
+    }
+    for (std::size_t target = 0U; target + 1U < qubits; ++target) {
+        operations.push_back({
+            OperationCode::Cz,
+            static_cast<qubit::QubitId>(target),
+            static_cast<qubit::QubitId>(target + 1U),
+        });
+    }
+    for (std::size_t target = 0U; target < qubits; ++target) {
+        operations.push_back({OperationCode::H, static_cast<qubit::QubitId>(target)});
+    }
+    return operations;
+}
+
+}  // namespace
+
+int main() {
+    using Clock = std::chrono::steady_clock;
+    using qubit::ExactAmplitudeAdvisorConfig;
+    using qubit::ExactAmplitudeRepresentationAdvisor;
+    using qubit::ExactAmplitudeRoute;
 
     ExactAmplitudeAdvisorConfig config;
     config.factor.max_variables = 10000U;
@@ -54,48 +85,53 @@ int main() {
     config.max_qubits = 2048U;
     config.max_operations = 50000U;
     config.max_phase_h_defects = 10000U;
+    config.max_phase_branches = 1U << 20U;
     config.max_hpath_events = 10000U;
     config.minimum_hpath_log2_margin = 8U;
 
-    const auto begin = Clock::now();
-    const auto decision = ExactAmplitudeRepresentationAdvisor::analyze_plus_state(
-        qubits, operations, config);
-    const auto end = Clock::now();
+    const auto large_operations = large_spacetime();
+    const auto large_begin = Clock::now();
+    const auto large = ExactAmplitudeRepresentationAdvisor::analyze_plus_state(
+        1024U, large_operations, config);
+    const auto large_end = Clock::now();
 
-    const std::vector<Operation> phase_only{
-        {OperationCode::H, 0U},
-        {OperationCode::X, 0U},
-        {OperationCode::T, 1U},
-    };
-    const auto phase = ExactAmplitudeRepresentationAdvisor::analyze_plus_state(
-        4U, phase_only, config);
+    constexpr std::size_t compare_qubits = 12U;
+    const auto compare_operations = comparable_chain(compare_qubits);
+    const auto compare = ExactAmplitudeRepresentationAdvisor::analyze_plus_state(
+        compare_qubits, compare_operations, config);
 
-    const double analysis_ms =
-        std::chrono::duration<double, std::milli>(end - begin).count();
+    const double large_ms =
+        std::chrono::duration<double, std::milli>(large_end - large_begin).count();
     std::cout << std::setprecision(17)
-              << "advisor_qubits=" << qubits << '\n'
-              << "advisor_rounds=" << rounds << '\n'
-              << "advisor_operations=" << operations.size() << '\n'
-              << "advisor_phase_h_defects=" << decision.phase_h_defects << '\n'
-              << "advisor_phase_branch_log2=" << decision.phase_h_defects << '\n'
-              << "advisor_phase_branch_fits_size_t="
-              << (decision.phase_branch_envelope_fits_size_t ? 1 : 0) << '\n'
-              << "advisor_hpath_events=" << decision.hpath.h_events << '\n'
-              << "advisor_hpath_active_qubits=" << decision.hpath.h_active_qubits << '\n'
-              << "advisor_hpath_factor_variables=" << decision.hpath.factor_variables << '\n'
-              << "advisor_hpath_factor_count=" << decision.hpath.factor_count << '\n'
-              << "advisor_hpath_peak_union_variables=" << decision.hpath.peak_union_variables << '\n'
-              << "advisor_hpath_peak_factor_entries=" << decision.hpath.peak_factor_entries << '\n'
-              << "advisor_hpath_peak_log2_ceiling=" << decision.hpath.peak_factor_log2_ceiling << '\n'
-              << "advisor_hpath_compiled_index_entries=" << decision.hpath.compiled_index_entries << '\n'
-              << "advisor_hpath_workspace_slots=" << decision.hpath.workspace_slots << '\n'
-              << "advisor_hpath_graph_bytes=" << decision.hpath.graph_estimated_bytes << '\n'
-              << "advisor_hpath_plan_bytes=" << decision.hpath.plan_estimated_bytes << '\n'
-              << "advisor_structural_log2_margin=" << decision.structural_log2_margin << '\n'
-              << "advisor_selected_route=" << static_cast<unsigned>(decision.route) << '\n'
-              << "advisor_analysis_ms=" << analysis_ms << '\n'
-              << "phase_only_selected_route=" << static_cast<unsigned>(phase.route) << '\n'
+              << "advisor_large_qubits=1024\n"
+              << "advisor_large_rounds=8\n"
+              << "advisor_large_operations=" << large_operations.size() << '\n'
+              << "advisor_large_phase_h_defects=" << large.phase_h_defects << '\n'
+              << "advisor_large_phase_branch_fits_size_t="
+              << (large.phase_branch_envelope_fits_size_t ? 1 : 0) << '\n'
+              << "advisor_large_phase_eligible=" << (large.phase_graph_eligible ? 1 : 0) << '\n'
+              << "advisor_large_hpath_eligible=" << (large.hpath_eligible ? 1 : 0) << '\n'
+              << "advisor_large_hpath_events=" << large.hpath.h_events << '\n'
+              << "advisor_large_peak_union_variables=" << large.hpath.peak_union_variables << '\n'
+              << "advisor_large_peak_factor_entries=" << large.hpath.peak_factor_entries << '\n'
+              << "advisor_large_workspace_slots=" << large.hpath.workspace_slots << '\n'
+              << "advisor_large_graph_bytes=" << large.hpath.graph_estimated_bytes << '\n'
+              << "advisor_large_plan_bytes=" << large.hpath.plan_estimated_bytes << '\n'
+              << "advisor_large_route=" << static_cast<unsigned>(large.route) << '\n'
+              << "advisor_large_analysis_ms=" << large_ms << '\n'
+              << "advisor_compare_qubits=" << compare_qubits << '\n'
+              << "advisor_compare_phase_h_defects=" << compare.phase_h_defects << '\n'
+              << "advisor_compare_phase_branches=" << compare.phase_branch_envelope << '\n'
+              << "advisor_compare_phase_eligible=" << (compare.phase_graph_eligible ? 1 : 0) << '\n'
+              << "advisor_compare_hpath_eligible=" << (compare.hpath_eligible ? 1 : 0) << '\n'
+              << "advisor_compare_peak_factor_entries=" << compare.hpath.peak_factor_entries << '\n'
+              << "advisor_compare_structural_log2_margin=" << compare.structural_log2_margin << '\n'
+              << "advisor_compare_route=" << static_cast<unsigned>(compare.route) << '\n'
               << "state_expansion_materialized=0\n"
               << "explicit_h_branch_list_materialized=0\n";
-    return decision.route == ExactAmplitudeRoute::HadamardPathFactor ? 0 : 1;
+
+    return large.route == ExactAmplitudeRoute::HadamardPathFactor &&
+            compare.route == ExactAmplitudeRoute::HadamardPathFactor
+        ? 0
+        : 1;
 }

@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <limits>
 #include <optional>
 #include <span>
 
@@ -30,9 +29,9 @@ public:
         advisor.max_qubits = std::min(advisor.max_qubits, config_.hpath.max_qubits);
         advisor.max_operations = std::min(advisor.max_operations, config_.hpath.max_operations);
         advisor.max_hpath_events = std::min(advisor.max_hpath_events, config_.hpath.max_h_events);
-        advisor.max_phase_h_defects = std::min(
-            advisor.max_phase_h_defects,
-            floor_log2(config_.phase_graph.max_branches));
+        advisor.max_phase_branches = std::min(
+            advisor.max_phase_branches,
+            config_.phase_graph.max_branches);
         decision_ = ExactAmplitudeRepresentationAdvisor::analyze_plus_state(
             qubit_count_, operations, advisor);
 
@@ -91,18 +90,6 @@ private:
     ExactAmplitudeDecision decision_{};
     std::optional<ExactPhaseGraphBranchSum> phase_{};
     std::optional<ExactHadamardPathAmplitudePlan> hpath_{};
-
-    [[nodiscard]] static std::size_t floor_log2(std::size_t value) noexcept {
-        if (value == 0U) {
-            return 0U;
-        }
-        std::size_t result = 0U;
-        while (value > 1U) {
-            ++result;
-            value >>= 1U;
-        }
-        return result;
-    }
 };
 
 }  // namespace qubit

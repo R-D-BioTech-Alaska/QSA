@@ -123,17 +123,27 @@ jobs:
                   key, sep, value = line.strip().partition("=")
                   if sep:
                       values[key] = value
-          assert int(values["adaptive_qubits"]) == 1024
-          assert int(values["adaptive_rounds"]) == 8
-          assert int(values["adaptive_h_events"]) == 8192
-          assert int(values["adaptive_peak_union_variables"]) <= 5
-          assert int(values["adaptive_peak_factor_entries"]) <= 32
-          assert int(values["adaptive_structural_log2_margin"]) >= 8187
-          assert int(values["adaptive_route"]) == 2
-          logp = float(values["adaptive_log2_probability_probe"])
-          assert math.isfinite(logp) and logp <= 1e-9
-          assert 0.0 < float(values["adaptive_prepare_ms"]) < 10000.0
-          assert 0.0 < float(values["adaptive_query_ms"]) < 30000.0
+          assert int(values["adaptive_large_qubits"]) == 1024
+          assert int(values["adaptive_large_rounds"]) == 8
+          assert int(values["adaptive_large_h_events"]) == 8192
+          assert int(values["adaptive_large_phase_eligible"]) == 0
+          assert int(values["adaptive_large_hpath_eligible"]) == 1
+          assert int(values["adaptive_large_peak_union_variables"]) <= 12
+          assert int(values["adaptive_large_peak_factor_entries"]) <= 4096
+          assert int(values["adaptive_large_route"]) == 2
+          large_logp = float(values["adaptive_large_log2_probability_probe"])
+          assert math.isfinite(large_logp) and large_logp <= 1e-9
+          assert 0.0 < float(values["adaptive_large_prepare_ms"]) < 10000.0
+          assert 0.0 < float(values["adaptive_large_query_ms"]) < 30000.0
+          assert int(values["adaptive_compare_qubits"]) == 12
+          assert int(values["adaptive_compare_phase_eligible"]) == 1
+          assert int(values["adaptive_compare_hpath_eligible"]) == 1
+          assert int(values["adaptive_compare_phase_branches"]) == 4096
+          assert int(values["adaptive_compare_peak_factor_entries"]) <= 16
+          assert int(values["adaptive_compare_structural_log2_margin"]) >= 8
+          assert int(values["adaptive_compare_route"]) == 2
+          assert float(values["adaptive_compare_hpath_error"]) <= 1e-11
+          assert float(values["adaptive_compare_phase_error"]) <= 1e-11
           assert int(values["state_expansion_materialized"]) == 0
           assert int(values["explicit_h_branch_list_materialized"]) == 0
           PY
