@@ -1,0 +1,160 @@
+name: QSA Exact Low-Magic Stabilizer Sum
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qstabilizer.hpp"
+      - "include/qubit/qmagic.hpp"
+      - "tests/test_low_magic_stabilizer.cpp"
+      - "benchmarks/low_magic_stabilizer.cpp"
+      - ".github/workflows/qsa-low-magic-stabilizer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  low-magic-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build low-magic driver
+        shell: bash
+        run: |
+          mkdir -p low-magic-driver
+          cat > low-magic-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSALowMagicCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(low_magic_tests ../tests/test_low_magic_stabilizer.cpp)
+          target_link_libraries(low_magic_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(low_magic_tests PRIVATE /W4)
+          else()
+              target_compile_options(low_magic_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME low_magic_tests COMMAND low_magic_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S low-magic-driver -B low-magic-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build low-magic-build --config Release --target low_magic_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir low-magic-build -C Release --output-on-failure
+
+  low-magic-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p low-magic-driver
+          cat > low-magic-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSALowMagicSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(low_magic_tests ../tests/test_low_magic_stabilizer.cpp)
+          target_link_libraries(low_magic_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S low-magic-driver -B low-magic-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build low-magic-sanitize-build --target low_magic_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./low-magic-sanitize-build/low_magic_tests
+
+  low-magic-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p low-magic-driver
+          cat > low-magic-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSALowMagicEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(low_magic_benchmark ../benchmarks/low_magic_stabilizer.cpp)
+          target_link_libraries(low_magic_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S low-magic-driver -B low-magic-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build low-magic-evidence-build --target low_magic_benchmark --parallel 2
+      - name: Run low-magic carrier
+        run: |
+          set -o pipefail
+          ./low-magic-evidence-build/low_magic_benchmark | tee low-magic-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("low-magic-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["carrier_qubits"]) == 4096
+          assert int(values["t4_live_branches"]) == 16
+          assert 0 < int(values["t4_base_tableau_bytes"]) < 32 * 1024 * 1024
+          assert 0 < int(values["t4_retained_estimated_bytes"]) < 32 * 1024 * 1024
+          assert float(values["t4_naive_to_shared_ratio"]) > 15.0
+          probability = float(values["t4_probability_one_q0"])
+          assert math.isfinite(probability) and 0.0 <= probability <= 1.0
+          assert 0.0 < float(values["t4_evolution_ms"]) < 30000.0
+          assert 0.0 < float(values["t4_query_ms"]) < 30000.0
+          assert int(values["t8_live_branches"]) == 256
+          assert 0 < int(values["t8_retained_estimated_bytes"]) < 32 * 1024 * 1024
+          assert float(values["t8_naive_to_shared_ratio"]) > 240.0
+          assert float(values["t8_dense_to_shared_ratio_log2"]) > 4070.0
+          assert 0.0 < float(values["t8_increment_ms"]) < 30000.0
+          assert int(values["ninth_t_rejected"]) == 1
+          assert int(values["post_rejection_live_branches"]) == 256
+          assert int(values["post_rejection_t_defects"]) == 8
+          assert int(values["recon_t_defects"]) == 512
+          assert int(values["recon_raw_branch_count_log2"]) == 512
+          assert int(values["recon_live_branches"]) == 1
+          assert int(values["recon_max_live_branches"]) <= 2
+          assert int(values["recon_merged_branches"]) > 0
+          assert int(values["recon_exact_cancellations"]) > 0
+          assert int(values["recon_extracted_power_of_two_bits"]) == 512
+          assert int(values["recon_scale_power_two"]) == 0
+          assert abs(float(values["recon_norm_squared"]) - 1.0) < 1e-10
+          assert 0.0 < float(values["recon_evolution_ms"]) < 30000.0
+          assert int(values["dense_state_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum low-magic-evidence.txt | tee low-magic-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-low-magic-stabilizer-evidence
+          path: |
+            low-magic-evidence.txt
+            low-magic-evidence.sha256

@@ -34,6 +34,8 @@ struct StabilizerOperation {
     QubitId second{0};
 };
 
+class ExactLowMagicStabilizerSum;
+
 class StabilizerState {
 public:
     explicit StabilizerState(
@@ -98,6 +100,8 @@ private:
     [[nodiscard]] int deterministic_z(QubitId qubit) const;
     [[nodiscard]] std::size_t random_measurement_row(QubitId qubit) const noexcept;
     void validate_qubit(QubitId qubit) const;
+
+    friend class ExactLowMagicStabilizerSum;
 };
 
 }  // namespace qubit
