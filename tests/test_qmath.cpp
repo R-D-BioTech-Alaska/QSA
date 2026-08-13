@@ -1,6 +1,7 @@
 #include "qubit/qmath.hpp"
 #include "qubit/qsigned.hpp"
 #include "qubit/qweyl.hpp"
+#include "qubit/qweyl_algebra.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -228,6 +229,63 @@ int main() {
     require(qmath_weyl.expression && qmath_weyl.expression->type.space == QMathSpace::Operator &&
             qmath_weyl.global_phase_turns == ternary_weyl.phase_turns(),
             "Weyl-to-QMath projection lost operator type or exact phase");
+
+    QWeylAlgebra opposed(qutrit_space);
+    opposed.add(QPolarity::Positive, X3, QRational(3));
+    opposed.add(QPolarity::Negative, X3, QRational(2));
+    opposed.add(QPolarity::Neutral, Z3, QRational(4));
+    const auto opposed_projection = opposed.project();
+    require(!opposed_projection.receipt.ready && opposed_projection.receipt.unresolved_basis_terms == 1U &&
+            opposed_projection.receipt.canceled_weight == QRational(2) && opposed_projection.receipt.neutral_weight == QRational(4),
+            "Weyl algebra lost opposed or unresolved coefficient structure");
+
+    QWeylAlgebra resolved(qutrit_space);
+    resolved.add(QPolarity::Positive, X3, QRational(3));
+    resolved.add(QPolarity::Negative, X3, QRational(2));
+    resolved.add(QPolarity::Positive, Z3);
+    const auto resolved_projection = resolved.project();
+    require(resolved_projection.receipt.ready && resolved_projection.terms.size() == 2U &&
+            resolved_projection.receipt.canceled_weight == QRational(2),
+            "resolved Weyl algebra projection failed exact cancellation");
+    require(resolved.commuting_groups().size() == 2U && !resolved.all_commuting(),
+            "Weyl algebra grouped noncommuting qutrit generators together");
+
+    QWeylAlgebra cancel_basis(qutrit_space);
+    cancel_basis.add(QPolarity::Positive, X3);
+    cancel_basis.add(QPolarity::Negative, X3);
+    const auto cancel_basis_projection = cancel_basis.project();
+    require(cancel_basis_projection.receipt.ready && cancel_basis_projection.terms.empty() &&
+            cancel_basis_projection.receipt.canceled_weight == QRational(1),
+            "Weyl algebra failed complete signed basis cancellation");
+
+    QWeylAlgebra left(qutrit_space);
+    QWeylAlgebra right(qutrit_space);
+    left.add(QPolarity::Positive, X3);
+    right.add(QPolarity::Positive, Z3);
+    const auto commutator_projection = left.commutator(right).project();
+    require(commutator_projection.receipt.ready && commutator_projection.terms.size() == 2U,
+            "exact Weyl commutator lost phase-distinct terms");
+
+    QWeylAlgebra negative_left(qutrit_space);
+    QWeylAlgebra negative_right(qutrit_space);
+    negative_left.add(QPolarity::Negative, X3);
+    negative_right.add(QPolarity::Negative, Z3);
+    const auto double_negative = negative_left.multiplied(negative_right).project();
+    require(double_negative.receipt.ready && double_negative.terms.size() == 1U &&
+            double_negative.terms.front().coefficient == QRational(1),
+            "negative Weyl coefficients did not multiply to positive structure");
+
+    QWeylAlgebra unresolved_left(qutrit_space);
+    unresolved_left.add(QPolarity::Neutral, X3);
+    const auto unresolved_product = unresolved_left.multiplied(right).project();
+    require(!unresolved_product.receipt.ready && unresolved_product.receipt.unresolved_basis_terms == 1U,
+            "unresolved Weyl coefficient was silently collapsed during multiplication");
+
+    QWeylAlgebra bounded_algebra(qutrit_space, QWeylAlgebraConfig{1U, 4U});
+    bounded_algebra.add(QPolarity::Positive, X3);
+    rejected = false;
+    try { bounded_algebra.add(QPolarity::Positive, Z3); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "Weyl algebra basis-term cap did not fail closed");
 
     std::cout << "QMath core tests passed\n";
 }
