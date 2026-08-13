@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "include/qubit/qcompiler.hpp"
+      - "include/qubit/qcausal_index.hpp"
       - "include/qubit/qfabric.hpp"
       - "tests/test_exact_marginal_compiler.cpp"
       - "benchmarks/exact_marginal_compiler.cpp"
@@ -136,6 +137,15 @@ jobs:
           assert abs(float(values["compiler_probability"]) - 1.0) < 1e-12
           assert float(values["compiler_setup_ms"]) < 10000.0
           assert float(values["compiler_query_us"]) < 10000.0
+          assert int(values["index_estimated_bytes"]) > 0
+          assert float(values["index_build_ms"]) < 10000.0
+          assert int(values["indexed_causal_qubits"]) == 11
+          assert int(values["indexed_causal_operations"]) == 63
+          assert int(values["indexed_estimated_bytes"]) > 0
+          assert abs(float(values["indexed_probability"]) - 1.0) < 1e-12
+          assert float(values["indexed_setup_ms"]) > 0.0
+          assert float(values["indexed_query_us"]) < 10000.0
+          assert float(values["indexed_setup_speedup_over_one_shot"]) > 0.0
           PY
       - name: Hash evidence
         run: sha256sum exact-marginal-compiler-evidence.txt | tee exact-marginal-compiler-evidence.sha256
