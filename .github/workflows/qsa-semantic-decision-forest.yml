@@ -1,0 +1,55 @@
+name: QSA Exact Semantic Decision Forest
+
+on:
+  pull_request:
+    paths:
+      - include/qubit/qsemantic_forest.hpp
+      - tests/test_semantic_decision_forest.cpp
+      - tests/test_semantic_decision_forest_scale.cpp
+      - tests/semantic_decision_forest_driver/CMakeLists.txt
+      - .github/workflows/qsa-semantic-decision-forest.yml
+  workflow_dispatch:
+
+jobs:
+  semantic-decision-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tests/semantic_decision_forest_driver -B semantic-decision-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build semantic-decision-build --config Release --parallel 2
+      - name: Run focused tests
+        shell: bash
+        run: |
+          if [ -x semantic-decision-build/Release/semantic_decision_forest.exe ]; then
+            semantic-decision-build/Release/semantic_decision_forest.exe
+            semantic-decision-build/Release/semantic_decision_forest_scale.exe
+          elif [ -x semantic-decision-build/semantic_decision_forest ]; then
+            semantic-decision-build/semantic_decision_forest
+            semantic-decision-build/semantic_decision_forest_scale
+          else
+            echo "semantic decision executables not found" >&2
+            exit 1
+          fi
+
+  semantic-decision-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S tests/semantic_decision_forest_driver -B semantic-decision-sanitize
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build semantic-decision-sanitize --parallel 2
+      - name: Run
+        run: |
+          ./semantic-decision-sanitize/semantic_decision_forest
+          ./semantic-decision-sanitize/semantic_decision_forest_scale
