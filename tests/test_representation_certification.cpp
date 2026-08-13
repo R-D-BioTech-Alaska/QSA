@@ -56,6 +56,9 @@ void exact_representation_fabric() {
             "representation fabric did not preserve independent islands");
     require(first.receipt.fabric_components == 3U,
             "representation fabric queried excess islands");
+    require(first.receipt.local_dense_islands == 3U &&
+            first.receipt.broker_islands == 0U,
+            "bounded causal islands did not select certified local dense execution");
 
     const auto warm = fabric.marginal_probability(query, zero);
     require(warm.receipt.cache_hits == 3U && warm.receipt.cache_misses == 0U,
@@ -106,6 +109,72 @@ void exact_representation_fabric() {
     const std::array<std::uint8_t, 1> one{1U};
     require(fabric.marginal_probability(untouched, one).value == 0.0,
             "representation fabric reset did not restore exact zero state");
+}
+
+void representation_transition_contract() {
+    qubit::ExactRepresentationFabricConfig config;
+    config.max_local_dense_qubits = 2U;
+    config.max_local_dense_state_scalars = 4U;
+    config.max_local_dense_scalar_sweep_units = 128U;
+    qubit::ExactRepresentationFabric fabric(3U, config);
+    std::vector<Operation> operations;
+    append(fabric, operations, {OperationCode::Ry, 0U, 0U, 0.31});
+    append(fabric, operations, {OperationCode::Cnot, 0U, 1U});
+    append(fabric, operations, {OperationCode::Cnot, 1U, 2U});
+
+    const std::array<QubitId, 1> left_query{0U};
+    const std::array<QubitId, 1> right_query{2U};
+    const std::array<std::uint8_t, 1> zero{0U};
+    const auto global = qubit::ExactPreparedProbabilityPlan::for_marginals(3U, operations);
+
+    const auto local = fabric.marginal_probability(left_query, zero);
+    require(local.islands.size() == 1U &&
+            local.islands[0].execution == qubit::ExactRepresentationExecutionKind::LocalDense,
+            "small causal slice did not select local dense execution");
+    require(local.islands[0].local_dense_eligible &&
+            local.islands[0].local_dense_state_scalars == 4U &&
+            local.islands[0].local_dense_payload_bytes == 4U * sizeof(qubit::QComplex),
+            "local dense resource certificate is incorrect");
+    require_close(
+        local.value,
+        global.marginal_probability(left_query, zero).value,
+        "local dense route differs from exact global control");
+
+    const auto wide = fabric.marginal_probability(right_query, zero);
+    require(wide.islands.size() == 1U &&
+            wide.islands[0].execution == qubit::ExactRepresentationExecutionKind::Broker,
+            "wide causal slice did not fall through to exact broker");
+    require(!wide.islands[0].local_dense_eligible &&
+            wide.islands[0].transition.kind ==
+                qubit::ExactRepresentationTransitionKind::SameGenerationReplay &&
+            wide.islands[0].transition.exact_replay,
+            "same-generation representation transition was not certified");
+    require_close(
+        wide.value,
+        global.marginal_probability(right_query, zero).value,
+        "broker route differs from exact global control after representation transition");
+
+    const auto local_again = fabric.marginal_probability(left_query, zero);
+    require(local_again.islands[0].execution ==
+                qubit::ExactRepresentationExecutionKind::LocalDense &&
+            local_again.islands[0].cache_hits == 1U &&
+            local_again.islands[0].transition.kind ==
+                qubit::ExactRepresentationTransitionKind::SameGenerationReplay,
+            "return transition did not reuse the certified local dense state");
+    require_close(local_again.value, local.value,
+            "representation replay changed the exact local result");
+
+    append(fabric, operations, {OperationCode::Rz, 0U, 0U, 0.19});
+    const auto rebuilt = fabric.marginal_probability(left_query, zero);
+    const auto rebuilt_global = qubit::ExactPreparedProbabilityPlan::for_marginals(3U, operations);
+    require(rebuilt.islands[0].transition.kind ==
+                qubit::ExactRepresentationTransitionKind::GenerationReplay &&
+            rebuilt.islands[0].transition.exact_replay,
+            "numerical generation change did not require exact replay");
+    require_close(
+        rebuilt.value,
+        rebuilt_global.marginal_probability(left_query, zero).value,
+        "generation replay differs from exact global control");
 }
 
 void semantic_tripair_fabric_contract() {
@@ -277,6 +346,7 @@ int main() {
     }
 
     exact_representation_fabric();
+    representation_transition_contract();
     semantic_tripair_fabric_contract();
     std::cout << "representation certification tests passed\n";
     return 0;
