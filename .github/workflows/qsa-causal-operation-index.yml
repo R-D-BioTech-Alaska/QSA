@@ -1,0 +1,144 @@
+name: QSA Exact Causal Operation Index
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qcausal_index.hpp"
+      - "tests/test_causal_index.cpp"
+      - "benchmarks/causal_index.cpp"
+      - ".github/workflows/qsa-causal-operation-index.yml"
+      - "include/qubit/qbroker.hpp"
+      - "src/qbroker.cpp"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  causal-index-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build causal-index driver
+        shell: bash
+        run: |
+          mkdir -p causal-index-driver
+          cat > causal-index-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactCausalIndexCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(causal_index_tests ../tests/test_causal_index.cpp)
+          target_link_libraries(causal_index_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(causal_index_tests PRIVATE /W4)
+          else()
+              target_compile_options(causal_index_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME causal_index_tests COMMAND causal_index_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S causal-index-driver -B causal-index-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build causal-index-build --config Release --target causal_index_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir causal-index-build -C Release --output-on-failure
+
+  causal-index-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p causal-index-driver
+          cat > causal-index-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactCausalIndexSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(causal_index_tests ../tests/test_causal_index.cpp)
+          target_link_libraries(causal_index_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S causal-index-driver -B causal-index-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build causal-index-sanitize-build --target causal_index_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./causal-index-sanitize-build/causal_index_tests
+
+  causal-index-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p causal-index-driver
+          cat > causal-index-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactCausalIndexEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(causal_index_benchmark ../benchmarks/causal_index.cpp)
+          target_link_libraries(causal_index_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S causal-index-driver -B causal-index-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build causal-index-evidence-build --target causal_index_benchmark --parallel 2
+      - name: Run causal-index carrier
+        run: |
+          set -o pipefail
+          ./causal-index-evidence-build/causal_index_benchmark | tee causal-index-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("causal-index-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["index_qubits"]) == 10000
+          assert int(values["index_operations"]) == 999908
+          assert int(values["index_dependency_edges"]) > 0
+          assert int(values["index_estimated_bytes"]) > 0
+          assert int(values["slice_qubits"]) == 101
+          assert int(values["slice_operations"]) == 5058
+          assert int(values["indexed_checksum"]) == 515900
+          assert int(values["naive_checksum"]) == 505800
+          assert float(values["index_build_ms"]) < 30000.0
+          assert float(values["indexed_query_us"]) > 0.0
+          assert float(values["naive_query_us"]) > 0.0
+          assert float(values["indexed_over_naive_speedup"]) > 1.0
+          PY
+      - name: Hash evidence
+        run: sha256sum causal-index-evidence.txt | tee causal-index-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-causal-index-evidence
+          path: |
+            causal-index-evidence.txt
+            causal-index-evidence.sha256
