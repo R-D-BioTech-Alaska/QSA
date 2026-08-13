@@ -216,6 +216,10 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_numeric_tests PRIVATE qstate_core)
     add_test(NAME qstate_numeric_tests COMMAND qstate_numeric_tests)
 
+    add_executable(qstate_math_tests tests/test_qmath.cpp)
+    target_link_libraries(qstate_math_tests PRIVATE qstate_core)
+    add_test(NAME qstate_math_tests COMMAND qstate_math_tests)
+
     add_executable(qstate_tensor_network_tests tests/test_tensor_network.cpp)
     target_link_libraries(qstate_tensor_network_tests PRIVATE qstate_core)
     add_test(NAME qstate_tensor_network_tests COMMAND qstate_tensor_network_tests)
