@@ -14,6 +14,8 @@
 
 namespace qubit {
 
+class ExactAdaptivePreparedAmplitudePlan;
+
 enum class ExactAmplitudeRoute : std::uint8_t {
     None = 0,
     PhaseGraphBranchSum = 1,
@@ -73,34 +75,72 @@ public:
         std::size_t qubit_count,
         std::span<const Operation> operations,
         ExactAmplitudeAdvisorConfig config = {}) {
+        EligibilityScan scan = scan_plus_state(qubit_count, operations, config);
+        if (scan.hpath_candidate) {
+            scan.decision.hpath = build_hpath_certificate(qubit_count, operations, config);
+            scan.decision.hpath_eligible = true;
+        }
+        return finalize(std::move(scan.decision), config);
+    }
+
+private:
+    struct EligibilityScan {
+        ExactAmplitudeDecision decision{};
+        bool hpath_candidate{false};
+    };
+
+    [[nodiscard]] static ExactAmplitudeDecision analyze_plus_state_with_hpath_certificate(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        const ExactHadamardPathWidthCertificate& certificate,
+        ExactAmplitudeAdvisorConfig config) {
+        EligibilityScan scan = scan_plus_state(qubit_count, operations, config);
+        if (!scan.hpath_candidate) {
+            throw QStateError(
+                "Amplitude advisor received an Hpath certificate outside the eligible Hpath contract");
+        }
+        validate_hpath_certificate(
+            qubit_count, operations.size(), scan.decision.phase_h_defects, certificate, config);
+        scan.decision.hpath = certificate;
+        scan.decision.hpath_eligible = true;
+        return finalize(std::move(scan.decision), config);
+    }
+
+    [[nodiscard]] static EligibilityScan scan_plus_state(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        const ExactAmplitudeAdvisorConfig& config) {
         validate_configuration(qubit_count, operations.size(), config);
 
-        ExactAmplitudeDecision decision;
+        EligibilityScan scan;
         bool phase_compatible = true;
         bool hpath_compatible = true;
         for (const Operation& operation : operations) {
             validate_operation(qubit_count, operation);
             if (operation.code == OperationCode::H) {
-                ++decision.phase_h_defects;
+                ++scan.decision.phase_h_defects;
             }
             phase_compatible = phase_compatible && phase_operation(operation.code);
             hpath_compatible = hpath_compatible && hpath_operation(operation.code);
         }
 
-        set_phase_envelope(decision);
-        decision.phase_graph_eligible =
+        set_phase_envelope(scan.decision);
+        scan.decision.phase_graph_eligible =
             phase_compatible &&
-            decision.phase_h_defects <= config.max_phase_h_defects &&
-            decision.phase_branch_envelope_fits_size_t &&
-            decision.phase_branch_envelope <= config.max_phase_branches;
+            scan.decision.phase_h_defects <= config.max_phase_h_defects &&
+            scan.decision.phase_branch_envelope_fits_size_t &&
+            scan.decision.phase_branch_envelope <= config.max_phase_branches;
 
         const std::size_t hpath_event_cap =
             std::min(config.max_hpath_events, config.factor.max_variables);
-        if (hpath_compatible && decision.phase_h_defects <= hpath_event_cap) {
-            decision.hpath = build_hpath_certificate(qubit_count, operations, config);
-            decision.hpath_eligible = true;
-        }
+        scan.hpath_candidate =
+            hpath_compatible && scan.decision.phase_h_defects <= hpath_event_cap;
+        return scan;
+    }
 
+    [[nodiscard]] static ExactAmplitudeDecision finalize(
+        ExactAmplitudeDecision decision,
+        const ExactAmplitudeAdvisorConfig& config) {
         if (!decision.phase_graph_eligible && !decision.hpath_eligible) {
             return decision;
         }
@@ -130,7 +170,6 @@ public:
         return decision;
     }
 
-private:
     [[nodiscard]] static ExactHadamardPathWidthCertificate build_hpath_certificate(
         std::size_t qubit_count,
         std::span<const Operation> operations,
@@ -261,6 +300,38 @@ private:
         };
     }
 
+    static void validate_hpath_certificate(
+        std::size_t qubit_count,
+        std::size_t operation_count,
+        std::size_t h_events,
+        const ExactHadamardPathWidthCertificate& certificate,
+        const ExactAmplitudeAdvisorConfig& config) {
+        if (certificate.qubits != qubit_count ||
+            certificate.operations != operation_count ||
+            certificate.h_events != h_events ||
+            certificate.factor_variables != h_events ||
+            certificate.h_active_qubits > std::min(qubit_count, h_events) ||
+            certificate.factor_count > config.factor.max_factors ||
+            certificate.peak_factor_entries > config.factor.max_factor_entries ||
+            certificate.compiled_index_entries > config.factor.max_compiled_index_entries ||
+            certificate.peak_factor_log2_ceiling !=
+                ceil_log2(std::max<std::size_t>(1U, certificate.peak_factor_entries))) {
+            throw QStateError("Amplitude advisor Hpath certificate is inconsistent with source or caps");
+        }
+        if (h_events == 0U) {
+            if (certificate.factor_count != 0U ||
+                certificate.peak_union_variables != 0U ||
+                certificate.peak_factor_entries != 0U ||
+                certificate.compiled_index_entries != 0U ||
+                certificate.workspace_slots != 0U ||
+                certificate.plan_estimated_bytes != 0U) {
+                throw QStateError("Amplitude advisor zero-H certificate contains compiled factor state");
+            }
+        } else if (certificate.factor_count == 0U || certificate.peak_factor_entries == 0U) {
+            throw QStateError("Amplitude advisor nonzero-H certificate is missing factor structure");
+        }
+    }
+
     static void validate_configuration(
         std::size_t qubit_count,
         std::size_t operation_count,
@@ -360,6 +431,8 @@ private:
             code == OperationCode::Cz ||
             code == OperationCode::Swap;
     }
+
+    friend class ExactAdaptivePreparedAmplitudePlan;
 };
 
 }  // namespace qubit
