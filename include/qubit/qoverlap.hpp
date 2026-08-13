@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -32,6 +33,7 @@ struct ExactStructuredOverlapStats {
 struct ExactStructuredOverlapResult {
     QComplex inner_product{};
     double fidelity{0.0};
+    double log2_fidelity{-std::numeric_limits<double>::infinity()};
     ExactStructuredOverlapStats stats{};
 };
 
@@ -242,6 +244,8 @@ struct OverlapBlock {
     attach_views(right_views, false);
 
     QComplex overlap{1.0, 0.0};
+    double log2_fidelity = 0.0;
+    bool zero_fidelity = false;
     for (const detail::OverlapBlock& block : blocks) {
         const std::size_t dimension = std::size_t{1U} << block.qubits.size();
         QComplex block_overlap{};
@@ -256,15 +260,28 @@ struct OverlapBlock {
             }
             block_overlap += left_amplitude.conjugate() * right_amplitude;
         }
+        const double block_fidelity = block_overlap.norm2();
+        if (!std::isfinite(block_fidelity)) {
+            throw QStateError("Structured overlap block fidelity became non-finite");
+        }
+        if (block_fidelity == 0.0) {
+            zero_fidelity = true;
+        } else if (!zero_fidelity) {
+            log2_fidelity += std::log2(block_fidelity);
+        }
         overlap *= block_overlap;
         if (!std::isfinite(overlap.re) || !std::isfinite(overlap.im)) {
             throw QStateError("Structured overlap became non-finite");
         }
     }
+    if (zero_fidelity) {
+        log2_fidelity = -std::numeric_limits<double>::infinity();
+    }
 
     return ExactStructuredOverlapResult{
         overlap,
         overlap.norm2(),
+        log2_fidelity,
         ExactStructuredOverlapStats{
             qubits,
             left_views.size(),
