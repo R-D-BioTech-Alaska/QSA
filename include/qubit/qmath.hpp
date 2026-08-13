@@ -1,5 +1,7 @@
 #pragma once
 
+#include "qubit/qexact.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -17,138 +19,6 @@
 #include <vector>
 
 namespace qubit {
-
-class QMathError : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
-
-class QRational {
-public:
-    QRational(std::int64_t numerator = 0, std::int64_t denominator = 1) {
-        assign(numerator, denominator);
-    }
-
-    [[nodiscard]] std::int64_t numerator() const noexcept { return numerator_; }
-    [[nodiscard]] std::int64_t denominator() const noexcept { return denominator_; }
-    [[nodiscard]] bool is_zero() const noexcept { return numerator_ == 0; }
-    [[nodiscard]] bool is_one() const noexcept { return numerator_ == denominator_; }
-    [[nodiscard]] bool is_integer() const noexcept { return denominator_ == 1; }
-
-    [[nodiscard]] std::string canonical() const {
-        if (denominator_ == 1) return std::to_string(numerator_);
-        return std::to_string(numerator_) + "/" + std::to_string(denominator_);
-    }
-
-    friend bool operator==(const QRational&, const QRational&) = default;
-    friend bool operator<(const QRational& lhs, const QRational& rhs) {
-        const std::int64_t left = checked_mul(lhs.numerator_, rhs.denominator_);
-        const std::int64_t right = checked_mul(rhs.numerator_, lhs.denominator_);
-        return left < right;
-    }
-
-    friend QRational operator-(const QRational& value) {
-        if (value.numerator_ == std::numeric_limits<std::int64_t>::min()) {
-            throw QMathError("rational negation overflow");
-        }
-        return QRational(-value.numerator_, value.denominator_);
-    }
-
-    friend QRational operator+(const QRational& lhs, const QRational& rhs) {
-        const std::int64_t common = std::gcd(lhs.denominator_, rhs.denominator_);
-        const std::int64_t lhs_scale = rhs.denominator_ / common;
-        const std::int64_t rhs_scale = lhs.denominator_ / common;
-        const std::int64_t numerator = checked_add(
-            checked_mul(lhs.numerator_, lhs_scale),
-            checked_mul(rhs.numerator_, rhs_scale));
-        return QRational(numerator, checked_mul(lhs.denominator_, lhs_scale));
-    }
-
-    friend QRational operator-(const QRational& lhs, const QRational& rhs) {
-        return lhs + (-rhs);
-    }
-
-    friend QRational operator*(const QRational& lhs, const QRational& rhs) {
-        if (lhs.is_zero() || rhs.is_zero()) return QRational{};
-        const std::int64_t g1 = std::gcd(abs_checked(lhs.numerator_), rhs.denominator_);
-        const std::int64_t g2 = std::gcd(abs_checked(rhs.numerator_), lhs.denominator_);
-        return QRational(
-            checked_mul(lhs.numerator_ / g1, rhs.numerator_ / g2),
-            checked_mul(lhs.denominator_ / g2, rhs.denominator_ / g1));
-    }
-
-    friend QRational operator/(const QRational& lhs, const QRational& rhs) {
-        if (rhs.is_zero()) throw QMathError("division by zero rational");
-        if (rhs.numerator_ == std::numeric_limits<std::int64_t>::min()) {
-            throw QMathError("rational reciprocal overflow");
-        }
-        return lhs * QRational(rhs.denominator_, rhs.numerator_);
-    }
-
-private:
-    static std::int64_t abs_checked(std::int64_t value) {
-        if (value == std::numeric_limits<std::int64_t>::min()) {
-            throw QMathError("rational magnitude overflow");
-        }
-        return value < 0 ? -value : value;
-    }
-
-    static std::int64_t checked_add(std::int64_t lhs, std::int64_t rhs) {
-        const auto max = std::numeric_limits<std::int64_t>::max();
-        const auto min = std::numeric_limits<std::int64_t>::min();
-        if ((rhs > 0 && lhs > max - rhs) || (rhs < 0 && lhs < min - rhs)) {
-            throw QMathError("rational addition overflow");
-        }
-        return lhs + rhs;
-    }
-
-    static std::int64_t checked_mul(std::int64_t lhs, std::int64_t rhs) {
-        const auto max = std::numeric_limits<std::int64_t>::max();
-        const auto min = std::numeric_limits<std::int64_t>::min();
-        if (lhs == 0 || rhs == 0) return 0;
-        if (lhs == -1) {
-            if (rhs == min) throw QMathError("rational multiplication overflow");
-            return -rhs;
-        }
-        if (rhs == -1) {
-            if (lhs == min) throw QMathError("rational multiplication overflow");
-            return -lhs;
-        }
-        if (lhs > 0) {
-            if ((rhs > 0 && lhs > max / rhs) || (rhs < 0 && rhs < min / lhs)) {
-                throw QMathError("rational multiplication overflow");
-            }
-        } else {
-            if ((rhs > 0 && lhs < min / rhs) || (rhs < 0 && lhs < max / rhs)) {
-                throw QMathError("rational multiplication overflow");
-            }
-        }
-        return lhs * rhs;
-    }
-
-    void assign(std::int64_t numerator, std::int64_t denominator) {
-        if (denominator == 0) throw QMathError("zero rational denominator");
-        if (numerator == std::numeric_limits<std::int64_t>::min() ||
-            denominator == std::numeric_limits<std::int64_t>::min()) {
-            throw QMathError("rational boundary value is not representable canonically");
-        }
-        if (denominator < 0) {
-            numerator = -numerator;
-            denominator = -denominator;
-        }
-        if (numerator == 0) {
-            numerator_ = 0;
-            denominator_ = 1;
-            return;
-        }
-        const std::int64_t divisor = std::gcd(abs_checked(numerator), denominator);
-        numerator_ = numerator / divisor;
-        denominator_ = denominator / divisor;
-    }
-
-    std::int64_t numerator_{0};
-    std::int64_t denominator_{1};
-};
 
 struct QPhysicalDimension {
     enum Axis : std::size_t {
@@ -313,6 +183,11 @@ public:
         return exact_constant(QRational(numerator, denominator), std::move(type));
     }
 
+    [[nodiscard]] QMathExpr rational(QRational value, QPhysicalDimension dimension = {}) {
+        QMathType type = QMathType::scalar_type(QMathScalar::Rational, std::move(dimension));
+        return exact_constant(value, std::move(type));
+    }
+
     [[nodiscard]] QMathExpr symbol(std::string name, QMathType type, bool commutative = true) {
         if (name.empty()) throw QMathError("empty mathematical symbol");
         if (type.space != QMathSpace::Scalar) commutative = false;
@@ -350,9 +225,7 @@ public:
                 normalized.push_back(term);
             }
         }
-        if (have_scalar_constant && !scalar_constant.is_zero()) {
-            normalized.push_back(exact_constant(scalar_constant, result_type));
-        }
+        if (have_scalar_constant && !scalar_constant.is_zero()) normalized.push_back(exact_constant(scalar_constant, result_type));
         if (normalized.empty()) return zero(result_type);
         if (normalized.size() == 1) return normalized.front();
         std::sort(normalized.begin(), normalized.end(), canonical_less);
@@ -379,9 +252,7 @@ public:
         }
         check_arity(factors.size());
         QMathType result_type = product_type(factors);
-        for (const QMathExpr& factor : factors) {
-            if (is_zero(factor)) return zero(result_type);
-        }
+        for (const QMathExpr& factor : factors) if (is_zero(factor)) return zero(result_type);
 
         QRational coefficient(1);
         QPhysicalDimension coefficient_dimension;
@@ -398,15 +269,10 @@ public:
             normalized.push_back(factor);
         }
         if (normalized.empty()) return exact_constant(coefficient, result_type);
-        if (have_coefficient && (!coefficient.is_one() || !coefficient_dimension.is_dimensionless())) {
-            normalized.push_back(rational(
-                coefficient.numerator(), coefficient.denominator(), coefficient_dimension));
-        }
+        if (have_coefficient && (!coefficient.is_one() || !coefficient_dimension.is_dimensionless())) normalized.push_back(rational(coefficient, coefficient_dimension));
         if (normalized.size() == 1 && normalized.front()->type == result_type) return normalized.front();
 
-        const bool all_commutative = std::all_of(normalized.begin(), normalized.end(), [](const QMathExpr& value) {
-            return value->commutative;
-        });
+        const bool all_commutative = std::all_of(normalized.begin(), normalized.end(), [](const QMathExpr& value) { return value->commutative; });
         if (all_commutative) {
             std::sort(normalized.begin(), normalized.end(), canonical_less);
         } else {
@@ -414,9 +280,7 @@ public:
             std::vector<QMathExpr> ordered;
             commuting.reserve(normalized.size());
             ordered.reserve(normalized.size());
-            for (const QMathExpr& value : normalized) {
-                (value->commutative ? commuting : ordered).push_back(value);
-            }
+            for (const QMathExpr& value : normalized) (value->commutative ? commuting : ordered).push_back(value);
             std::sort(commuting.begin(), commuting.end(), canonical_less);
             commuting.insert(commuting.end(), ordered.begin(), ordered.end());
             normalized = std::move(commuting);
@@ -435,11 +299,11 @@ public:
 
         QMathType result_type = base->type;
         result_type.dimension = base->type.dimension.powered(exponent);
-        if ((base->kind == QMathKind::Rational || base->kind == QMathKind::One) && exponent.is_integer()) {
-            std::int64_t count = exponent.numerator();
+        std::int64_t count = 0;
+        if ((base->kind == QMathKind::Rational || base->kind == QMathKind::One) && exponent.integer_int64(count)) {
             QRational value = base->kind == QMathKind::One ? QRational(1) : base->rational;
             const bool invert = count < 0;
-            if (count == std::numeric_limits<std::int64_t>::min()) throw QMathError("power exponent overflow");
+            if (count == std::numeric_limits<std::int64_t>::min()) return branch(QMathKind::Power, std::move(result_type), {base}, exponent.canonical(), base->commutative);
             if (invert) count = -count;
             QRational result(1);
             QRational factor = value;
@@ -449,16 +313,12 @@ public:
                 if (count != 0) factor = factor * factor;
             }
             if (invert) result = QRational(1) / result;
-            return rational(result.numerator(), result.denominator(), result_type.dimension);
+            return rational(std::move(result), result_type.dimension);
         }
         return branch(QMathKind::Power, std::move(result_type), {base}, exponent.canonical(), base->commutative);
     }
 
-    [[nodiscard]] QMathExpr function(
-        std::string name,
-        std::initializer_list<QMathExpr> args,
-        QMathType result_type,
-        bool commutative = true) {
+    [[nodiscard]] QMathExpr function(std::string name, std::initializer_list<QMathExpr> args, QMathType result_type, bool commutative = true) {
         if (name.empty()) throw QMathError("empty mathematical function name");
         std::vector<QMathExpr> values(args.begin(), args.end());
         for (const QMathExpr& arg : values) require_expr(arg);
@@ -471,20 +331,13 @@ public:
         require_expr(lhs);
         require_expr(rhs);
         (void)add_type(lhs->type, rhs->type);
-        return branch(
-            QMathKind::Equation,
-            QMathType::scalar_type(QMathScalar::Boolean),
-            {lhs, rhs},
-            {},
-            true);
+        return branch(QMathKind::Equation, QMathType::scalar_type(QMathScalar::Boolean), {lhs, rhs}, {}, true);
     }
 
     [[nodiscard]] QMathExpr commutator(const QMathExpr& lhs, const QMathExpr& rhs) {
         require_expr(lhs);
         require_expr(rhs);
-        if (lhs->type.space != QMathSpace::Operator || rhs->type.space != QMathSpace::Operator) {
-            throw QMathError("commutator requires operator expressions");
-        }
+        if (lhs->type.space != QMathSpace::Operator || rhs->type.space != QMathSpace::Operator) throw QMathError("commutator requires operator expressions");
         QMathType result = product_type(std::vector<QMathExpr>{lhs, rhs});
         if (lhs->canonical == rhs->canonical) return zero(std::move(result));
         return branch(QMathKind::Commutator, std::move(result), {lhs, rhs}, {}, false);
@@ -495,12 +348,8 @@ public:
         require_expr(rhs);
         QMathType result;
         result.scalar = promote(lhs->type.scalar, rhs->type.scalar);
-        if (lhs->type.space == rhs->type.space &&
-            (lhs->type.space == QMathSpace::State || lhs->type.space == QMathSpace::Operator)) {
-            result.space = lhs->type.space;
-        } else {
-            result.space = QMathSpace::Tensor;
-        }
+        if (lhs->type.space == rhs->type.space && (lhs->type.space == QMathSpace::State || lhs->type.space == QMathSpace::Operator)) result.space = lhs->type.space;
+        else result.space = QMathSpace::Tensor;
         result.shape = lhs->type.shape;
         result.shape.insert(result.shape.end(), rhs->type.shape.begin(), rhs->type.shape.end());
         result.dimension = lhs->type.dimension.multiplied(rhs->type.dimension);
@@ -523,10 +372,7 @@ public:
         QMathType result_type = expression->type;
         result_type.dimension = expression->type.dimension.divided(variable->type.dimension);
         if (is_zero(expression) || is_one(expression) || expression->kind == QMathKind::Rational) return zero(result_type);
-        if (expression->kind == QMathKind::Symbol) {
-            if (expression->canonical == variable->canonical) return one(result_type);
-            return zero(result_type);
-        }
+        if (expression->kind == QMathKind::Symbol) return expression->canonical == variable->canonical ? one(result_type) : zero(result_type);
         if (expression->kind == QMathKind::Sum) {
             std::vector<QMathExpr> values;
             values.reserve(expression->args.size());
@@ -549,11 +395,7 @@ public:
             const QRational exponent = parse_rational(expression->label);
             const QMathExpr diff = derivative(expression->args.front(), variable);
             if (is_zero(diff)) return zero(result_type);
-            return multiply({
-                rational(exponent.numerator(), exponent.denominator()),
-                power(expression->args.front(), exponent - QRational(1)),
-                diff,
-            });
+            return multiply({rational(exponent), power(expression->args.front(), exponent - QRational(1)), diff});
         }
         return branch(QMathKind::Derivative, std::move(result_type), {expression, variable}, {}, expression->commutative);
     }
@@ -570,17 +412,12 @@ public:
             for (const QMathExpr& term : expression->args) values.push_back(integral(term, variable));
             return add(values);
         }
-        if (expression->kind == QMathKind::Rational || expression->kind == QMathKind::One) {
-            return multiply({expression, variable});
-        }
-        if (expression->kind == QMathKind::Symbol && expression->canonical == variable->canonical) {
-            return multiply({rational(1, 2), power(variable, QRational(2))});
-        }
-        if (expression->kind == QMathKind::Power && expression->args.size() == 1 &&
-            expression->args.front()->canonical == variable->canonical) {
+        if (expression->kind == QMathKind::Rational || expression->kind == QMathKind::One) return multiply({expression, variable});
+        if (expression->kind == QMathKind::Symbol && expression->canonical == variable->canonical) return multiply({rational(1, 2), power(variable, QRational(2))});
+        if (expression->kind == QMathKind::Power && expression->args.size() == 1 && expression->args.front()->canonical == variable->canonical) {
             const QRational exponent = parse_rational(expression->label);
             const QRational next = exponent + QRational(1);
-            if (!next.is_zero()) return multiply({rational(next.denominator(), next.numerator()), power(variable, next)});
+            if (!next.is_zero()) return multiply({rational(QRational(1) / next), power(variable, next)});
         }
         return branch(QMathKind::Integral, std::move(result_type), {expression, variable}, {}, expression->commutative);
     }
@@ -608,35 +445,23 @@ private:
         return leaf(QMathKind::Rational, std::move(type), value, {}, true);
     }
 
-    static void require_expr(const QMathExpr& value) {
-        if (!value) throw QMathError("null mathematical expression");
-    }
-
+    static void require_expr(const QMathExpr& value) { if (!value) throw QMathError("null mathematical expression"); }
     static void require_symbol(const QMathExpr& value) {
         require_expr(value);
         if (value->kind != QMathKind::Symbol) throw QMathError("operation requires symbol variable");
     }
-
     static bool is_zero(const QMathExpr& value) { return value->kind == QMathKind::Zero; }
     static bool is_one(const QMathExpr& value) { return value->kind == QMathKind::One; }
-
-    static bool canonical_less(const QMathExpr& lhs, const QMathExpr& rhs) {
-        return lhs->canonical < rhs->canonical;
-    }
-
+    static bool canonical_less(const QMathExpr& lhs, const QMathExpr& rhs) { return lhs->canonical < rhs->canonical; }
     static QMathScalar promote(QMathScalar lhs, QMathScalar rhs) {
         return static_cast<QMathScalar>(std::max(static_cast<unsigned>(lhs), static_cast<unsigned>(rhs)));
     }
-
     static QMathType add_type(const QMathType& lhs, const QMathType& rhs) {
-        if (lhs.space != rhs.space || lhs.shape != rhs.shape || lhs.dimension != rhs.dimension) {
-            throw QMathError("incompatible mathematical addition");
-        }
+        if (lhs.space != rhs.space || lhs.shape != rhs.shape || lhs.dimension != rhs.dimension) throw QMathError("incompatible mathematical addition");
         QMathType result = lhs;
         result.scalar = promote(lhs.scalar, rhs.scalar);
         return result;
     }
-
     static QMathType product_type(const std::vector<QMathExpr>& factors) {
         if (factors.empty()) return QMathType::scalar_type(QMathScalar::Rational);
         QMathScalar scalar = QMathScalar::Integer;
@@ -660,23 +485,13 @@ private:
             result.dimension = dimension;
             return result;
         }
-        if (!all_operators) {
-            throw QMathError("ambiguous non-scalar multiplication; use tensor_product or apply");
-        }
+        if (!all_operators) throw QMathError("ambiguous non-scalar multiplication; use tensor_product or apply");
         QMathType result = (*non_scalar)->type;
         result.scalar = scalar;
         result.dimension = dimension;
         return result;
     }
-
-    static QRational parse_rational(std::string_view text) {
-        const std::size_t slash = text.find('/');
-        if (slash == std::string_view::npos) return QRational(std::stoll(std::string(text)));
-        return QRational(
-            std::stoll(std::string(text.substr(0, slash))),
-            std::stoll(std::string(text.substr(slash + 1))));
-    }
-
+    static QRational parse_rational(std::string_view text) { return QRational::parse(text); }
     static std::uint64_t hash64(std::string_view text) {
         std::uint64_t hash = 1469598103934665603ULL;
         for (const unsigned char ch : text) {
@@ -685,28 +500,12 @@ private:
         }
         return hash;
     }
-
-    void check_arity(std::size_t arity) const {
-        if (arity > config_.max_arity) throw QMathError("QMath arity limit exceeded");
-    }
-
-    QMathExpr leaf(
-        QMathKind kind,
-        QMathType type,
-        QRational rational_value,
-        std::string label,
-        bool commutative) {
-        std::string canonical = "qmath1:" + std::to_string(static_cast<unsigned>(kind)) + ':' + type.canonical() + ':' +
-                                rational_value.canonical() + ':' + label;
+    void check_arity(std::size_t arity) const { if (arity > config_.max_arity) throw QMathError("QMath arity limit exceeded"); }
+    QMathExpr leaf(QMathKind kind, QMathType type, QRational rational_value, std::string label, bool commutative) {
+        std::string canonical = "qmath1:" + std::to_string(static_cast<unsigned>(kind)) + ':' + type.canonical() + ':' + rational_value.canonical() + ':' + label;
         return intern(kind, std::move(type), rational_value, std::move(label), {}, commutative, 1, std::move(canonical));
     }
-
-    QMathExpr branch(
-        QMathKind kind,
-        QMathType type,
-        std::vector<QMathExpr> args,
-        std::string label,
-        bool commutative) {
+    QMathExpr branch(QMathKind kind, QMathType type, std::vector<QMathExpr> args, std::string label, bool commutative) {
         check_arity(args.size());
         std::size_t depth = 1;
         for (const QMathExpr& arg : args) {
@@ -722,16 +521,7 @@ private:
         canonical += ')';
         return intern(kind, std::move(type), {}, std::move(label), std::move(args), commutative, depth, std::move(canonical));
     }
-
-    QMathExpr intern(
-        QMathKind kind,
-        QMathType type,
-        QRational rational_value,
-        std::string label,
-        std::vector<QMathExpr> args,
-        bool commutative,
-        std::size_t depth,
-        std::string canonical) {
+    QMathExpr intern(QMathKind kind, QMathType type, QRational rational_value, std::string label, std::vector<QMathExpr> args, bool commutative, std::size_t depth, std::string canonical) {
         const auto found = interned_.find(canonical);
         if (found != interned_.end()) {
             if (QMathExpr existing = found->second.lock()) return existing;
@@ -753,7 +543,6 @@ private:
         ++node_count_;
         return result;
     }
-
     static void collect_dependencies(const QMathExpr& expression, std::vector<std::string>& out) {
         if (expression->kind == QMathKind::Symbol) out.push_back(expression->label);
         for (const QMathExpr& arg : expression->args) collect_dependencies(arg, out);
