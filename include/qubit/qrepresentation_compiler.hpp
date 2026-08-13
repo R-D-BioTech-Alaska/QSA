@@ -167,11 +167,6 @@ public:
         stats_.qubits = qubit_count_;
     }
 
-    ExactRepresentationFabric(
-        std::size_t qubit_count,
-        std::span<const Operation> operations,
-        ExactRepresentationFabricConfig config = {});
-
     void append(const Operation& operation) {
         validate_operation(operation);
         if (stats_.operations >= config_.max_operations) {
@@ -481,8 +476,6 @@ private:
     std::vector<std::size_t> component_of_{};
     std::vector<Component> components_{};
     ExactRepresentationFabricStats stats_{};
-
-    void build_initial(std::span<const Operation> operations);
 
     [[nodiscard]] std::vector<QubitId> normalize(
         std::span<const QubitId> support,
