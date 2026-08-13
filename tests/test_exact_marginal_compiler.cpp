@@ -176,6 +176,21 @@ void rejection_cases() {
         rejected = true;
     }
     require(rejected, "marginal compiler ignored its causal operation cap");
+
+    rejected = false;
+    try {
+        const std::vector<Operation> operations{
+            {OperationCode::H, 0U},
+            {OperationCode::AmplitudeDampingTrajectory, 1U, 0U, 0.1, 0.25},
+        };
+        const std::vector<QubitId> query{0U};
+        ExactMarginalCompilerPlan invalid(2U, operations, query);
+        (void)invalid;
+    } catch (const QStateError&) {
+        rejected = true;
+    }
+    require(rejected,
+            "marginal compiler accepted trajectory semantics outside its exact causal contract");
 }
 
 }  // namespace
