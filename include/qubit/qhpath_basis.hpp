@@ -593,7 +593,7 @@ private:
     [[nodiscard]] static std::size_t checked_sum(
         std::size_t left,
         std::size_t right,
-        const char* message) {
+        const char* message = "Basis Hpath metadata overflowed") {
         if (right > std::numeric_limits<std::size_t>::max() - left) {
             throw QStateError(message);
         }
