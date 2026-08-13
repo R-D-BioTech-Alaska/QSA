@@ -1,5 +1,6 @@
 #pragma once
 
+#include "qubit/qcausal_index.hpp"
 #include "qubit/qfabric.hpp"
 
 #include <cstddef>
@@ -276,6 +277,110 @@ private:
                 throw QStateError("Marginal compiler received an unknown opcode");
         }
     }
+
+    [[nodiscard]] static std::size_t checked_product(
+        std::size_t left, std::size_t right, const char* message) {
+        if (left != 0U && right > std::numeric_limits<std::size_t>::max() / left) {
+            throw QStateError(message);
+        }
+        return left * right;
+    }
+
+    [[nodiscard]] static std::size_t checked_sum(
+        std::size_t left, std::size_t right, const char* message) {
+        if (right > std::numeric_limits<std::size_t>::max() - left) {
+            throw QStateError(message);
+        }
+        return left + right;
+    }
+};
+
+class ExactIndexedMarginalCompilerPlan {
+public:
+    ExactIndexedMarginalCompilerPlan(
+        const ExactCausalOperationIndex& index,
+        std::span<const QubitId> query_qubits,
+        ExactMarginalCompilerConfig config = {})
+        : config_(config), slice_(index.slice(query_qubits)) {
+        if (config_.max_causal_operations == 0U) {
+            throw QStateError("Indexed marginal compiler max_causal_operations must be positive");
+        }
+        if (slice_.operations.size() > config_.max_causal_operations ||
+            slice_.operations.size() > config_.fabric.max_operations) {
+            throw QStateError("Indexed marginal compiler causal operation count exceeds configured cap");
+        }
+        if (slice_.global_qubits.size() > config_.fabric.max_qubits) {
+            throw QStateError("Indexed marginal compiler causal qubit count exceeds configured cap");
+        }
+
+        if (!slice_.local_query_qubits.empty()) {
+            fabric_.emplace(ExactComponentProbabilityPlan::for_marginals(
+                slice_.global_qubits.size(),
+                slice_.operations,
+                slice_.local_query_qubits,
+                config_.fabric));
+        }
+
+        const std::size_t components = fabric_ ? fabric_->stats().components : 0U;
+        const std::size_t prepared_components = fabric_ ? fabric_->stats().prepared_components : 0U;
+        std::size_t estimated = fabric_ ? fabric_->stats().estimated_bytes : 0U;
+        estimated = checked_sum(
+            estimated,
+            checked_product(slice_.global_qubits.capacity(), sizeof(QubitId),
+                "Indexed marginal compiler causal qubit storage overflowed"),
+            "Indexed marginal compiler estimated storage overflowed");
+        estimated = checked_sum(
+            estimated,
+            checked_product(slice_.local_query_qubits.capacity(), sizeof(QubitId),
+                "Indexed marginal compiler query storage overflowed"),
+            "Indexed marginal compiler estimated storage overflowed");
+        estimated = checked_sum(
+            estimated,
+            checked_product(slice_.operations.capacity(), sizeof(Operation),
+                "Indexed marginal compiler operation storage overflowed"),
+            "Indexed marginal compiler estimated storage overflowed");
+
+        stats_ = ExactMarginalCompilerStats{
+            index.qubit_count(),
+            index.operation_count(),
+            slice_.global_qubits.size(),
+            slice_.operations.size(),
+            index.qubit_count() - slice_.global_qubits.size(),
+            index.operation_count() - slice_.operations.size(),
+            components,
+            prepared_components,
+            estimated,
+        };
+    }
+
+    [[nodiscard]] double probability(std::span<const std::uint8_t> bits) const {
+        if (bits.size() != slice_.local_query_qubits.size()) {
+            throw QStateError("Indexed marginal compiler query bit count does not match prepared query");
+        }
+        if (slice_.local_query_qubits.empty()) {
+            return 1.0;
+        }
+        return fabric_->marginal_probability(slice_.local_query_qubits, bits);
+    }
+
+    [[nodiscard]] const ExactMarginalCompilerStats& stats() const noexcept { return stats_; }
+    [[nodiscard]] const std::vector<QubitId>& causal_global_qubits() const noexcept {
+        return slice_.global_qubits;
+    }
+    [[nodiscard]] const std::vector<Operation>& causal_operations() const noexcept {
+        return slice_.operations;
+    }
+    [[nodiscard]] const std::vector<ExactComponentReceipt>& component_receipts() const noexcept {
+        return fabric_ ? fabric_->receipts() : empty_receipts_;
+    }
+    [[nodiscard]] const ExactMarginalCompilerConfig& config() const noexcept { return config_; }
+
+private:
+    ExactMarginalCompilerConfig config_{};
+    ExactCausalSlice slice_{};
+    std::optional<ExactComponentProbabilityPlan> fabric_{};
+    ExactMarginalCompilerStats stats_{};
+    std::vector<ExactComponentReceipt> empty_receipts_{};
 
     [[nodiscard]] static std::size_t checked_product(
         std::size_t left, std::size_t right, const char* message) {
