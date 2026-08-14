@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: qsa-qwen35-lct-real-evidence-v1
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   PR65_HEAD: eff0f7c64fd65b0cefce29f2510bab96130e799a
