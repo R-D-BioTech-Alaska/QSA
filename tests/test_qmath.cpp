@@ -2,6 +2,7 @@
 #include "qubit/qsigned.hpp"
 #include "qubit/qweyl.hpp"
 #include "qubit/qweyl_algebra.hpp"
+#include "qubit/qcyclotomic3.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -286,6 +287,42 @@ int main() {
     rejected = false;
     try { bounded_algebra.add(QPolarity::Positive, Z3); } catch (const QMathError&) { rejected = true; }
     require(rejected, "Weyl algebra basis-term cap did not fail closed");
+
+    const QCyclotomic3 one3 = QCyclotomic3::root(0);
+    const QCyclotomic3 omega3 = QCyclotomic3::root(1);
+    const QCyclotomic3 omega3_sq = QCyclotomic3::root(2);
+    require((one3 + omega3 + omega3_sq).is_zero(), "qutrit cyclotomic root orbit did not cancel exactly");
+    require(omega3 * omega3 * omega3 == one3, "qutrit cyclotomic omega^3 identity failed");
+    require(omega3.conjugate() == omega3_sq && omega3.norm() == QRational(1) && omega3.inverse() == omega3_sq,
+            "qutrit cyclotomic conjugate, norm, or inverse is wrong");
+    require(QCyclotomic3::from_turns(QRational(1, 3)) == omega3 &&
+            QCyclotomic3::from_turns(QRational(2, 3)) == omega3_sq,
+            "exact third-turn phase conversion failed");
+    rejected = false;
+    try { (void)QCyclotomic3::from_turns(QRational(1, 6)); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "non-third-turn qutrit phase did not fail closed");
+
+    QWeyl3Algebra cyclotomic_x(qutrit_space);
+    QWeyl3Algebra cyclotomic_z(qutrit_space);
+    cyclotomic_x.add(X3);
+    cyclotomic_z.add(Z3);
+    const auto cyclotomic_commutator = cyclotomic_x.commutator(cyclotomic_z);
+    require(cyclotomic_commutator.term_count() == 1U &&
+            cyclotomic_commutator.coefficient(XZ3) == one3 - omega3,
+            "qutrit Weyl commutator did not collapse to exact (1-omega) coefficient");
+
+    QWeyl3Algebra phase_orbit(qutrit_space);
+    phase_orbit.add(X3);
+    phase_orbit.add(QWeylOperator(qutrit_space, QRational(1, 3), X3.exponents()));
+    phase_orbit.add(QWeylOperator(qutrit_space, QRational(2, 3), X3.exponents()));
+    require(phase_orbit.empty(), "qutrit Weyl phase orbit did not cancel exactly");
+
+    rejected = false;
+    try { (void)QWeyl3Algebra::from_projection(qutrit_space, opposed_projection); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "unresolved signed Weyl state entered qutrit cyclotomic algebra");
+    rejected = false;
+    try { (void)QWeyl3Algebra(qubit_space); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "qutrit cyclotomic algebra accepted non-qutrit local space");
 
     std::cout << "QMath core tests passed\n";
 }
