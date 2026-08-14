@@ -1,11 +1,17 @@
 #include "qubit/c_api.h"
+#include "qubit/qbehavior.hpp"
+#include "qubit/qbehavior_c_api.h"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -24,6 +30,75 @@ void require(bool condition, const std::string& message) {
 
 void require_near(double actual, double expected, double tolerance, const std::string& message) {
     require(std::abs(actual - expected) <= tolerance, message);
+}
+
+struct BehaviorControlState {
+    qubit::BehaviorFoldPlan plan{};
+    std::size_t last_index{0U};
+};
+
+std::uint64_t behavior_join(
+    std::uint64_t left,
+    std::uint64_t right,
+    qubit::BehaviorJoin join) {
+    if (join == qubit::BehaviorJoin::And) return left & right;
+    if (join == qubit::BehaviorJoin::Or) return left | right;
+    return left ^ right;
+}
+
+bool behavior_plan_less(
+    const qubit::BehaviorFoldPlan& left,
+    const qubit::BehaviorFoldPlan& right) {
+    if (left.leaf_count() != right.leaf_count()) return left.leaf_count() < right.leaf_count();
+    if (left.branch_indices != right.branch_indices) return left.branch_indices < right.branch_indices;
+    return left.joins < right.joins;
+}
+
+std::vector<std::map<std::uint64_t, BehaviorControlState>> behavior_control(
+    const std::vector<std::uint64_t>& masks,
+    std::size_t max_leaves) {
+    const std::array<qubit::BehaviorJoin, 3> joins{
+        qubit::BehaviorJoin::And,
+        qubit::BehaviorJoin::Or,
+        qubit::BehaviorJoin::Xor,
+    };
+    std::vector<std::map<std::uint64_t, BehaviorControlState>> levels(max_leaves);
+    for (std::size_t index = 0U; index < masks.size(); ++index) {
+        qubit::BehaviorFoldPlan plan{{static_cast<std::uint32_t>(index)}, {}};
+        const auto found = levels[0].find(masks[index]);
+        if (found == levels[0].end() || index < found->second.last_index ||
+            (index == found->second.last_index && behavior_plan_less(plan, found->second.plan))) {
+            levels[0][masks[index]] = BehaviorControlState{std::move(plan), index};
+        }
+    }
+    for (std::size_t leaf_count = 2U; leaf_count <= max_leaves; ++leaf_count) {
+        for (const auto& [behavior, state] : levels[leaf_count - 2U]) {
+            for (std::size_t branch = state.last_index + 1U; branch < masks.size(); ++branch) {
+                for (const qubit::BehaviorJoin join : joins) {
+                    const std::uint64_t output = behavior_join(behavior, masks[branch], join);
+                    qubit::BehaviorFoldPlan plan = state.plan;
+                    plan.branch_indices.push_back(static_cast<std::uint32_t>(branch));
+                    plan.joins.push_back(join);
+                    const auto found = levels[leaf_count - 1U].find(output);
+                    if (found == levels[leaf_count - 1U].end() || branch < found->second.last_index ||
+                        (branch == found->second.last_index && behavior_plan_less(plan, found->second.plan))) {
+                        levels[leaf_count - 1U][output] = BehaviorControlState{std::move(plan), branch};
+                    }
+                }
+            }
+        }
+    }
+    return levels;
+}
+
+std::optional<qubit::BehaviorFoldPlan> behavior_canonical(
+    const std::vector<std::map<std::uint64_t, BehaviorControlState>>& levels,
+    std::uint64_t behavior) {
+    for (const auto& level : levels) {
+        const auto found = level.find(behavior);
+        if (found != level.end()) return found->second.plan;
+    }
+    return std::nullopt;
 }
 
 }  // namespace
@@ -238,6 +313,152 @@ int main() {
     require(qstate_symmetry_class_size(hamming, 30U) == 118264581564861424ULL,
             "Hamming-weight central binomial class size");
     qstate_symmetry_destroy(hamming);
+
+    const std::vector<std::uint64_t> behavior_masks{
+        0b0011U,
+        0b0101U,
+        0b1110U,
+        0b1001U,
+        0b0110U,
+        0b1100U,
+    };
+    const auto control = behavior_control(behavior_masks, 4U);
+    const std::array<qubit::BehaviorJoin, 3> behavior_joins{
+        qubit::BehaviorJoin::And,
+        qubit::BehaviorJoin::Or,
+        qubit::BehaviorJoin::Xor,
+    };
+    qubit::ExactBehaviorFoldUniverse behavior_universe(behavior_masks, 4U, 4U, behavior_joins);
+    const auto& behavior_stats = behavior_universe.stats();
+    require(behavior_stats.depth_state_counts == std::vector<std::size_t>({
+                control[0].size(), control[1].size(), control[2].size(), control[3].size()}),
+            "qbehavior optimized depth counts must match exhaustive control");
+    require(behavior_stats.structural_count_by_leaf ==
+                std::vector<std::uint64_t>({6U, 45U, 180U, 405U}),
+            "qbehavior structural counts");
+
+    std::size_t expected_behavior_count = 0U;
+    std::size_t expected_deep_count = 0U;
+    std::optional<std::uint64_t> behavior_target;
+    std::optional<qubit::BehaviorFoldPlan> behavior_target_plan;
+    for (std::uint64_t behavior = 0U; behavior < 16U; ++behavior) {
+        const auto expected = behavior_canonical(control, behavior);
+        const auto actual = behavior_universe.canonical_plan(behavior);
+        require(actual == expected, "qbehavior canonical plan must match exhaustive control");
+        if (expected.has_value()) {
+            ++expected_behavior_count;
+            if (!behavior_target.has_value()) {
+                behavior_target = behavior;
+                behavior_target_plan = expected;
+            }
+        }
+        if (control[3].contains(behavior) && !control[0].contains(behavior) &&
+            !control[1].contains(behavior) && !control[2].contains(behavior)) {
+            ++expected_deep_count;
+        }
+        for (std::size_t depth = 1U; depth <= 4U; ++depth) {
+            require(
+                behavior_universe.contains_at_depth(depth, behavior) == control[depth - 1U].contains(behavior),
+                "qbehavior depth membership must match exhaustive control");
+        }
+    }
+    require(behavior_stats.behavior_class_count == expected_behavior_count &&
+                behavior_stats.deep_behavior_count == expected_deep_count,
+            "qbehavior canonical population metrics");
+    require(behavior_target.has_value() && behavior_target_plan.has_value(),
+            "qbehavior exhaustive control must contain a target");
+
+    const std::array<std::size_t, 4> behavior_positions{0U, 1U, 2U, 3U};
+    for (std::uint64_t behavior = 0U; behavior < 16U; ++behavior) {
+        const auto expected = behavior_canonical(control, behavior);
+        if (!expected.has_value()) continue;
+        const std::array<std::uint8_t, 4> observed{
+            static_cast<std::uint8_t>((behavior >> 0U) & 1U),
+            static_cast<std::uint8_t>((behavior >> 1U) & 1U),
+            static_cast<std::uint8_t>((behavior >> 2U) & 1U),
+            static_cast<std::uint8_t>((behavior >> 3U) & 1U),
+        };
+        const qubit::BehaviorFoldUniqueMatch match =
+            behavior_universe.conditioned_unique(behavior_positions, observed);
+        require(match.count == 1U && match.behavior == behavior && match.plan == expected,
+                "qbehavior full observation must recover canonical behavior");
+    }
+
+    qubit::detail::BehaviorSha256 behavior_sha;
+    const std::string abc = "abc";
+    behavior_sha.update(abc.data(), abc.size());
+    require(
+        behavior_sha.finish() == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "qbehavior portable SHA-256");
+    for (std::size_t depth = 1U; depth <= 4U; ++depth) {
+        const std::string digest = behavior_universe.state_digest(depth);
+        require(digest.size() == 64U && digest == behavior_universe.state_digest(depth),
+                "qbehavior depth digest determinism");
+    }
+
+    require(qbehavior_api_version_major() == 0U && qbehavior_api_version_minor() == 1U,
+            "qbehavior experimental API version");
+    const std::array<std::uint8_t, 3> behavior_join_codes{
+        QBEHAVIOR_JOIN_AND,
+        QBEHAVIOR_JOIN_OR,
+        QBEHAVIOR_JOIN_XOR,
+    };
+    qbehavior_fold_handle behavior_handle = qbehavior_fold_create(
+        behavior_masks.data(),
+        behavior_masks.size(),
+        4U,
+        4U,
+        behavior_join_codes.data(),
+        behavior_join_codes.size(),
+        nullptr);
+    require(behavior_handle != nullptr, "qbehavior C bridge creation");
+    qbehavior_fold_stats behavior_c_stats{};
+    require(qbehavior_fold_stats_read(behavior_handle, &behavior_c_stats) == 0 &&
+                behavior_c_stats.behavior_class_count == behavior_stats.behavior_class_count &&
+                behavior_c_stats.deep_behavior_count == behavior_stats.deep_behavior_count,
+            "qbehavior C bridge stats");
+
+    std::array<std::uint32_t, 4> behavior_branches{};
+    std::array<std::uint8_t, 3> behavior_plan_joins{};
+    std::size_t behavior_leaf_count = 0U;
+    int behavior_found = 0;
+    require(qbehavior_fold_canonical_plan(
+                behavior_handle,
+                *behavior_target,
+                behavior_branches.data(),
+                behavior_branches.size(),
+                behavior_plan_joins.data(),
+                behavior_plan_joins.size(),
+                &behavior_leaf_count,
+                &behavior_found) == 0 &&
+                behavior_found == 1 &&
+                behavior_leaf_count == behavior_target_plan->leaf_count(),
+            "qbehavior C bridge canonical plan");
+    for (std::size_t i = 0U; i < behavior_leaf_count; ++i) {
+        require(behavior_branches[i] == behavior_target_plan->branch_indices[i],
+                "qbehavior C bridge branch index");
+    }
+    for (std::size_t i = 0U; i + 1U < behavior_leaf_count; ++i) {
+        require(behavior_plan_joins[i] == static_cast<std::uint8_t>(behavior_target_plan->joins[i]),
+                "qbehavior C bridge join code");
+    }
+
+    std::array<char, 65> behavior_digest{};
+    require(qbehavior_fold_canonical_digest(
+                behavior_handle, behavior_digest.data(), behavior_digest.size()) == 0 &&
+                std::string(behavior_digest.data()) == behavior_universe.canonical_digest(),
+            "qbehavior C bridge canonical digest");
+    const std::array<std::size_t, 2> repeated_positions{0U, 0U};
+    const std::array<std::uint8_t, 2> repeated_bits{1U, 1U};
+    std::size_t repeated_count = 0U;
+    require(qbehavior_fold_conditioned_count(
+                behavior_handle,
+                repeated_positions.data(),
+                repeated_bits.data(),
+                repeated_positions.size(),
+                &repeated_count) != 0,
+            "qbehavior repeated observation must fail closed");
+    qbehavior_fold_destroy(behavior_handle);
 
     std::cout << "QSA C ABI compatibility tests passed.\n";
     return 0;
