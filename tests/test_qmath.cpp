@@ -4,6 +4,7 @@
 #include "qubit/qweyl_algebra.hpp"
 #include "qubit/qcyclotomic3.hpp"
 #include "qubit/qclifford3.hpp"
+#include "qubit/qmath_language.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -388,6 +389,74 @@ int main() {
     rejected = false;
     try { bounded_clifford.append_phase(0U); } catch (const QMathError&) { rejected = true; }
     require(rejected, "qutrit Clifford step cap did not fail closed");
+
+    const QMathLanguageCompilation symbolic_language = QMathLanguageCompiler::compile(f, math);
+    require(symbolic_language.receipt.route == QMathLanguageRoute::Symbolic &&
+            symbolic_language.receipt.type.has_value() &&
+            *symbolic_language.receipt.type == f->type &&
+            symbolic_language.receipt.dependencies == std::vector<std::string>({"z"}) &&
+            symbolic_language.receipt.canonical == f->canonical &&
+            symbolic_language.receipt.exact && symbolic_language.receipt.symbolic_ready &&
+            !symbolic_language.receipt.native_lowering_ready,
+            "QMath language lost symbolic identity, type, or dependency structure");
+
+    const QMathLanguageCompilation qubit_language = QMathLanguageCompiler::compile(XZ, math);
+    require(qubit_language.receipt.route == QMathLanguageRoute::QubitWeylNative &&
+            qubit_language.receipt.local_dimensions == std::vector<std::uint32_t>({2U}) &&
+            qubit_language.receipt.native_lowering_ready && qubit_language.receipt.symbolic_ready &&
+            qubit_language.qubit_lowering.has_value() &&
+            qubit_language.qubit_lowering->operations.size() == 1U &&
+            qubit_language.qubit_lowering->operations.front().code == OperationCode::Y &&
+            qubit_language.receipt.global_phase_turns == QRational(3, 4),
+            "QMath language qubit route lost native lowering or exact phase receipt");
+
+    const QWeylOperator mixed_weyl = mixed_x.multiplied(mixed_z);
+    const QMathLanguageCompilation mixed_language = QMathLanguageCompiler::compile(mixed_weyl, math);
+    require(mixed_language.receipt.route == QMathLanguageRoute::WeylStructural &&
+            mixed_language.receipt.local_dimensions == std::vector<std::uint32_t>({2U, 3U, 5U}) &&
+            mixed_language.receipt.symbolic_ready && !mixed_language.receipt.native_lowering_ready &&
+            !mixed_language.qutrit_algebra.has_value(),
+            "QMath language silently forced mixed-dimensional Weyl structure into a local backend");
+
+    const QMathLanguageCompilation qutrit_language = QMathLanguageCompiler::compile(X3, math);
+    require(qutrit_language.receipt.route == QMathLanguageRoute::QutritCyclotomicWeyl &&
+            qutrit_language.qutrit_algebra.has_value() &&
+            qutrit_language.qutrit_algebra->term_count() == 1U &&
+            qutrit_language.receipt.transform_ready && !qutrit_language.receipt.native_lowering_ready,
+            "QMath language did not route exact qutrit Weyl structure through cyclotomic algebra");
+
+    const QWeylOperator sixth_phase(qutrit_space, QRational(1, 6), X3.exponents());
+    const QMathLanguageCompilation sixth_language = QMathLanguageCompiler::compile(sixth_phase, math);
+    require(sixth_language.receipt.route == QMathLanguageRoute::WeylStructural &&
+            sixth_language.receipt.global_phase_turns == QRational(1, 6) &&
+            sixth_language.receipt.symbolic_ready && !sixth_language.qutrit_algebra.has_value(),
+            "QMath language silently coerced a non-cyclotomic qutrit phase");
+
+    const QMathLanguageCompilation algebra_language = QMathLanguageCompiler::compile(cyclotomic_commutator, math);
+    require(algebra_language.receipt.route == QMathLanguageRoute::QutritCyclotomicWeyl &&
+            algebra_language.receipt.source_terms == cyclotomic_commutator.term_count() &&
+            algebra_language.receipt.type.has_value() &&
+            algebra_language.receipt.type->space == QMathSpace::Operator &&
+            algebra_language.qutrit_algebra.has_value() &&
+            algebra_language.qutrit_algebra->canonical() == cyclotomic_commutator.canonical(),
+            "QMath language did not preserve exact qutrit algebra identity");
+
+    const QMathLanguageCompilation clifford_language = QMathLanguageCompiler::compile(fourier3, math);
+    require(clifford_language.receipt.route == QMathLanguageRoute::QutritClifford &&
+            clifford_language.receipt.generator_images == 2U &&
+            clifford_language.receipt.transform_ready && clifford_language.qutrit_clifford.has_value() &&
+            clifford_language.qutrit_clifford->canonical() == fourier3.canonical(),
+            "QMath language did not preserve exact qutrit Clifford transform identity");
+
+    const QMathLanguageCompilation program_language = QMathLanguageCompiler::compile(clifford_program, math);
+    const QMathLanguageCompilation program_language_repeat = QMathLanguageCompiler::compile(clifford_program, math);
+    require(program_language.receipt.route == QMathLanguageRoute::QutritClifford &&
+            program_language.receipt.program_steps == 3U && program_language.receipt.generator_images == 4U &&
+            program_language.qutrit_clifford.has_value() &&
+            program_language.receipt.canonical == compiled_clifford.canonical() &&
+            program_language_repeat.receipt.canonical == program_language.receipt.canonical &&
+            std::string(qmath_language_route_name(program_language.receipt.route)) == "QutritClifford",
+            "QMath language program compilation is not deterministic or lost route identity");
 
     std::cout << "QMath core tests passed\n";
 }
