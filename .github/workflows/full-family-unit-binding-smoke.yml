@@ -3,7 +3,9 @@ name: Full Family Unit Binding Smoke
 on:
   push:
     branches: [qsa/full-family-unit-binding-v1]
-    paths: [".github/workflows/full-family-unit-binding-smoke.yml"]
+    paths:
+      - ".github/workflows/full-family-unit-binding-smoke.yml"
+      - "tools/qwen35_full_family_unit_binding.cpp"
   workflow_dispatch:
 
 permissions:
@@ -54,5 +56,5 @@ jobs:
             14 273685376 $output
           if($LASTEXITCODE -ne 0){throw 'QSA full-family source-bound smoke rejected'}
           $r=Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
-          if($r.schema -ne 'qsa.qwen35-full-family-unit-operator.v1' -or $r.operator_program_instantiated -ne $true -or $r.operator_mismatch_count -ne 0){throw 'QSA full-family source-bound smoke receipt is not positive'}
+          if($r.schema -ne 'qsa.qwen35-full-family-unit-operator.v1' -or $r.accepted_role_cir_verified -ne $true -or $r.operator_program_instantiated -ne $true -or $r.operator_mismatch_count -ne 0){throw 'QSA full-family source-bound smoke receipt is not positive'}
           Write-Host ("QSA_FULL_FAMILY_SMOKE_OPERATOR="+$r.operator_receipt_identity)
