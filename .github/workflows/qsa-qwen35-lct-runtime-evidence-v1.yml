@@ -1,0 +1,128 @@
+name: QSA Qwen35 LCT Runtime Evidence V1
+
+on:
+  push:
+    branches: [qsa/lct-qwen35-runtime-evidence-v1]
+    paths:
+      - "tools/qwen35_lct_runtime_evidence.cpp"
+      - ".github/workflows/qsa-qwen35-lct-runtime-evidence-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-qwen35-lct-runtime-evidence-v1
+  cancel-in-progress: false
+
+jobs:
+  representative:
+    runs-on: [self-hosted, Windows, X64, qelm]
+    timeout-minutes: 90
+    steps:
+      - name: Bind PR65 and frozen reference inputs
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $root='C:\QELM-Rebuild'
+          $source=Join-Path $env:RUNNER_TEMP ("qsa-lct-runtime-"+$env:GITHUB_RUN_ID)
+          if(Test-Path -LiteralPath $source){throw 'fresh QSA source path already exists'}
+          git clone --no-checkout https://github.com/R-D-BioTech-Alaska/QSA.git $source
+          if($LASTEXITCODE -ne 0){throw 'QSA clone failed'}
+          git -C $source checkout --detach $env:GITHUB_SHA
+          if($LASTEXITCODE -ne 0 -or (git -C $source rev-parse HEAD).Trim() -ne $env:GITHUB_SHA){throw 'QSA runtime source head mismatch'}
+          git -C $source merge-base --is-ancestor eff0f7c64fd65b0cefce29f2510bab96130e799a $env:GITHUB_SHA
+          if($LASTEXITCODE -ne 0){throw 'QSA runtime child is not descended from exact PR65'}
+          if((git -C $source rev-parse 'eff0f7c64fd65b0cefce29f2510bab96130e799a:include/qubit/qlct_qwen35.hpp').Trim() -ne 'e421a35261e3bf40b375e96435b624195d7d1449'){throw 'accepted PR65 header identity changed'}
+
+          $atlas=Join-Path $root 'QMirrorLab\qwen_language_learning\run-20260811\lct-v1\activation-atlas-v1'
+          $sourceSet=Join-Path $root 'QMirrorLab\qwen_language_learning\run-20260811\lct-v1\source-fragments-v1.json'
+          $binding=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\qsa-pr65-binding-input.json'
+          $referenceFit=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\fit-receipt.json'
+          $referenceHoldout=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\holdout-receipt.json'
+          $reconstruction=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\reconstruction-receipt.json'
+          $summary=Join-Path $atlas 'atlas-summary.tsv'
+          $contract=Join-Path $atlas 'atlas-summary.txt'
+          foreach($path in @($atlas,$sourceSet,$binding,$referenceFit,$referenceHoldout,$reconstruction,$summary,$contract)){if(-not (Test-Path -LiteralPath $path)){throw "QSA LCT frozen input missing: $path"}}
+          if((Get-FileHash -Algorithm SHA256 -LiteralPath $sourceSet).Hash.ToLowerInvariant() -ne 'ec3a6c03cdb1bd88dc01a2cd745e6aed6a582512543c66088eb6e1193dfab0b2'){throw 'representative source set changed'}
+          if((Get-FileHash -Algorithm SHA256 -LiteralPath $binding).Hash.ToLowerInvariant() -ne '209127b22a18828f40b77be419055eebd04f1ca489aac0fbf433c0ace79f12f9'){throw 'PR65 binding input changed'}
+          if((Get-FileHash -Algorithm SHA256 -LiteralPath $referenceFit).Hash.ToLowerInvariant() -ne 'a7c66691e9a798379a39a2e49795fbe6844f9065e33bfc58604634e094a4e08a'){throw 'reference fit changed'}
+          if((Get-FileHash -Algorithm SHA256 -LiteralPath $referenceHoldout).Hash.ToLowerInvariant() -ne 'c92a2042370c3e2db2780260762136c02a88a7ecc9f92553fb06d6d3c3816f4b'){throw 'reference holdout changed'}
+          if((Get-FileHash -Algorithm SHA256 -LiteralPath $reconstruction).Hash.ToLowerInvariant() -ne '041e571f4466543c06b900ab83150445ae2968bc65ef562079923dfd27e37699'){throw 'reference reconstruction changed'}
+          if((Get-FileHash -Algorithm SHA256 -LiteralPath $summary).Hash.ToLowerInvariant() -ne 'd3f59577d19a65eabca5ef1bfa13c8a37036531dd710bcf17ded1c1f33019036'){throw 'atlas summary changed'}
+          if((Get-FileHash -Algorithm SHA256 -LiteralPath $contract).Hash.ToLowerInvariant() -ne '4f15e40f54fe1f58c7831f036fb88fd7a9968aa72d9ac9a081f859502c68fc2d'){throw 'atlas contract changed'}
+          $resRoot=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\reconstruction'
+          $residuals=@{
+            'ssm_recurrent.residual.bin'='1f195afa0bb8f7a33e604d5a2ae6e9356d87aae86459ff1dcef8778594406ea7';
+            'full_attention.residual.bin'='b63392ff00da8a063c62cc21ce12ee1ea6570627384f2848ab32595163e0f244'
+          }
+          foreach($item in $residuals.GetEnumerator()){$p=Join-Path $resRoot $item.Key;if(-not (Test-Path -LiteralPath $p) -or (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant() -ne $item.Value){throw "QSA residual binding changed: $($item.Key)"}}
+          $out=Join-Path $root "BrainRuntime\learning\qsa-pr65-runtime-evidence-v1\run-$env:GITHUB_RUN_ID"
+          if(Test-Path -LiteralPath $out){throw 'refusing to replace QSA LCT evidence run'}
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          @("QSA_SOURCE=$source","ATLAS=$atlas","OUT=$out") | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build QSA PR65 runtime executor
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $driver=Join-Path $env:QSA_SOURCE 'lct-runtime-driver'
+          New-Item -ItemType Directory -Force -Path $driver | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAQwen35RuntimeEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          add_executable(qwen35_lct_runtime_evidence ../tools/qwen35_lct_runtime_evidence.cpp)
+          target_include_directories(qwen35_lct_runtime_evidence PRIVATE ../include)
+          target_link_libraries(qwen35_lct_runtime_evidence PRIVATE bcrypt)
+          if(MSVC)
+            target_compile_options(qwen35_lct_runtime_evidence PRIVATE /W4 /O2)
+          endif()
+          '@ | Set-Content -LiteralPath (Join-Path $driver 'CMakeLists.txt') -Encoding utf8
+          $build=Join-Path $env:QSA_SOURCE 'lct-runtime-build'
+          cmake -S $driver -B $build -A x64
+          if($LASTEXITCODE -ne 0){throw 'QSA LCT runtime configure failed'}
+          cmake --build $build --config Release --target qwen35_lct_runtime_evidence --parallel 4
+          if($LASTEXITCODE -ne 0){throw 'QSA LCT runtime build failed'}
+          $exe=Get-ChildItem -LiteralPath $build -Recurse -Filter qwen35_lct_runtime_evidence.exe | Select-Object -First 1
+          if($null -eq $exe){throw 'QSA LCT runtime executable missing'}
+          "QSA_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Execute fit-only QSA semantics on f001-f048
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          & $env:QSA_EXE fit $env:ATLAS $env:OUT
+          if($LASTEXITCODE -ne 0){throw "QSA fit operator gate rejected: $LASTEXITCODE"}
+          $fit=Join-Path $env:OUT 'qsa-fit-receipt.json'
+          $r=Get-Content -LiteralPath $fit -Raw | ConvertFrom-Json
+          if($r.fit_pass -ne $true -or $r.roles.ssm_recurrent.operator_equivalence_verified -ne $true -or $r.roles.full_attention.operator_equivalence_verified -ne $true){throw 'QSA fit receipt is not decision-bearing positive'}
+          Write-Host ("QSA_FIT_MECHANISM="+$r.mechanism_identity)
+          Write-Host ("QSA_SSM_CIR="+$r.qsa_cir.ssm_recurrent)
+          Write-Host ("QSA_ATTENTION_CIR="+$r.qsa_cir.full_attention)
+
+      - name: Freeze QSA holdout claim before first h-context read
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $fit=Join-Path $env:OUT 'qsa-fit-receipt.json'
+          $claim=Join-Path $env:OUT 'qsa-holdout-claim.json'
+          if(Test-Path -LiteralPath $claim){throw 'QSA holdout was already claimed'}
+          $fitHash=(Get-FileHash -Algorithm SHA256 -LiteralPath $fit).Hash.ToLowerInvariant()
+          $r=Get-Content -LiteralPath $fit -Raw | ConvertFrom-Json
+          [ordered]@{schema='qsa.qwen35-lct-holdout-claim.v1';status='CLAIMED_BEFORE_FIRST_HOLDOUT_READ';fit_receipt_sha256=$fitHash;mechanism_identity=$r.mechanism_identity;contexts='h001-h016'} | ConvertTo-Json -Compress | Set-Content -LiteralPath $claim -Encoding ascii
+          Write-Host ("QSA_HOLDOUT_CLAIM_SHA256="+(Get-FileHash -Algorithm SHA256 -LiteralPath $claim).Hash.ToLowerInvariant())
+
+      - name: Execute one-shot sealed QSA holdout h001-h016
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $fit=Join-Path $env:OUT 'qsa-fit-receipt.json'
+          & $env:QSA_EXE holdout $env:ATLAS $env:OUT $fit
+          if($LASTEXITCODE -ne 0){throw "QSA sealed holdout rejected: $LASTEXITCODE"}
+          $holdout=Join-Path $env:OUT 'qsa-holdout-receipt.json'
+          $r=Get-Content -LiteralPath $holdout -Raw | ConvertFrom-Json
+          if($r.holdout_pass -ne $true -or $r.qsa_runtime_equivalence_verified -ne $true){throw 'QSA sealed holdout did not close runtime equivalence'}
+          foreach($role in @('ssm_recurrent','full_attention')){$p=Join-Path $env:OUT ($role+'.qsa.json');if(-not (Test-Path -LiteralPath $p)){throw "missing finalized QSA fragment: $role"};Write-Host ("QSA_FRAGMENT_"+$role.ToUpperInvariant()+"_SHA256="+(Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLowerInvariant())}
