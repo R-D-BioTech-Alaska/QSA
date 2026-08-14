@@ -244,7 +244,7 @@ std::string receipt(std::string_view phase, const qubit::NumericExecutor& numeri
 bool fit_receipt_allows_holdout(const fs::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) return false;
-    const std::string text(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    const std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
     return text.find("\"passed\":true") != std::string::npos && text.find(std::string(MechanismIdentity)) != std::string::npos;
 }
 
