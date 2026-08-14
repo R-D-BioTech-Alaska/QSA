@@ -3,6 +3,7 @@
 #include "qubit/qweyl.hpp"
 #include "qubit/qweyl_algebra.hpp"
 #include "qubit/qcyclotomic3.hpp"
+#include "qubit/qclifford3.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -323,6 +324,70 @@ int main() {
     rejected = false;
     try { (void)QWeyl3Algebra(qubit_space); } catch (const QMathError&) { rejected = true; }
     require(rejected, "qutrit cyclotomic algebra accepted non-qutrit local space");
+
+    const QClifford3Map fourier3 = QClifford3Map::fourier(qutrit_space, 0U);
+    require(fourier3.transform(X3) == Z3 && fourier3.transform(Z3) == X3.inverse(),
+            "qutrit Fourier Clifford map is not exact on Weyl generators");
+    require(fourier3.symplectic().inverse().composed(fourier3.symplectic()).identity_exact(),
+            "qutrit Fourier symplectic inverse failed exact identity");
+
+    const QClifford3Map phase3 = QClifford3Map::phase(qutrit_space, 0U);
+    require(phase3.transform(X3) == XZ3 && phase3.transform(Z3) == Z3,
+            "qutrit phase Clifford map is not exact on Weyl generators");
+
+    QClifford3Map fourier_power = QClifford3Map::identity(qutrit_space);
+    for (std::size_t i = 0U; i < 4U; ++i) fourier_power = fourier3.composed(fourier_power);
+    require(fourier_power.transform(X3) == X3 && fourier_power.transform(Z3) == Z3,
+            "four qutrit Fourier maps did not return the exact generator map to identity");
+
+    const QWeylSpace qutrit_pair{3U, 3U};
+    const QWeylOperator Xc = QWeylOperator::local(qutrit_pair, 0U, 1, 0);
+    const QWeylOperator Xt = QWeylOperator::local(qutrit_pair, 1U, 1, 0);
+    const QWeylOperator Zc = QWeylOperator::local(qutrit_pair, 0U, 0, 1);
+    const QWeylOperator Zt = QWeylOperator::local(qutrit_pair, 1U, 0, 1);
+    const QClifford3Map sum3 = QClifford3Map::sum(qutrit_pair, 0U, 1U);
+    require(sum3.transform(Xc) == Xc.multiplied(Xt) && sum3.transform(Xt) == Xt &&
+            sum3.transform(Zc) == Zc && sum3.transform(Zt) == Zc.inverse().multiplied(Zt),
+            "qutrit SUM Clifford map is not exact on two-site Weyl generators");
+
+    QClifford3Program clifford_program(qutrit_pair);
+    clifford_program.append_fourier(0U);
+    clifford_program.append_phase(1U);
+    clifford_program.append_sum(0U, 1U);
+    QClifford3CompileReceipt clifford_receipt;
+    const QClifford3Map compiled_clifford = clifford_program.compile(&clifford_receipt);
+    require(clifford_receipt.ready && clifford_receipt.exact && clifford_receipt.steps == 3U &&
+            clifford_receipt.generator_images == 4U,
+            "qutrit Clifford program receipt lost exact compilation state");
+    const QClifford3Map inverse_clifford = compiled_clifford.inverse();
+    const QClifford3Map clifford_identity = inverse_clifford.composed(compiled_clifford);
+    require(clifford_identity.transform(Xc) == Xc && clifford_identity.transform(Xt) == Xt &&
+            clifford_identity.transform(Zc) == Zc && clifford_identity.transform(Zt) == Zt,
+            "qutrit Clifford inverse did not restore canonical generators exactly");
+
+    QWeyl3Algebra clifford_algebra(qutrit_space);
+    clifford_algebra.add(X3, omega3);
+    const QWeyl3Algebra fourier_algebra = fourier3.transform(clifford_algebra);
+    require(fourier_algebra.term_count() == 1U && fourier_algebra.coefficient(Z3) == omega3,
+            "qutrit Clifford transform lost exact cyclotomic coefficient");
+
+    rejected = false;
+    try { (void)QClifford3Map::identity(qubit_space); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "qutrit Clifford map accepted non-qutrit local space");
+    rejected = false;
+    try { (void)QClifford3Map::sum(qutrit_pair, 0U, 0U); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "qutrit SUM accepted identical control and target");
+    rejected = false;
+    try { (void)QSymplectic3(1U, std::vector<std::uint8_t>{1U, 0U, 0U, 0U}); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "nonsymplectic qutrit matrix was accepted");
+    rejected = false;
+    try { (void)QSymplectic3::identity(2U, QSymplectic3Config{4U}); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "qutrit symplectic resource cap did not fail closed");
+    QClifford3Program bounded_clifford(qutrit_space, QClifford3Config{1U, QSymplectic3Config{16U}});
+    bounded_clifford.append_fourier(0U);
+    rejected = false;
+    try { bounded_clifford.append_phase(0U); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "qutrit Clifford step cap did not fail closed");
 
     std::cout << "QMath core tests passed\n";
 }
