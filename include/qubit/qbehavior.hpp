@@ -569,7 +569,7 @@ private:
                             slices_.capacity() * sizeof(std::uint64_t);
         for (const auto& level : levels_) {
             bytes += level.bucket_count() * sizeof(void*);
-            bytes += level.size() * sizeof(typename decltype(level)::value_type);
+            bytes += level.size() * sizeof(std::pair<const std::uint64_t, State>);
         }
         stats_.estimated_bytes = bytes;
     }
