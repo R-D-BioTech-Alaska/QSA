@@ -167,11 +167,16 @@ int main(int argc, char** argv) {
         }
         const auto program = qubit::Qwen35LctCompiler::compile(role);
         const auto program_id = program_identity(program);
+        const std::string decoder_text =
+            "qsa.qwen35-full-family-unit-decoder.v1|" + role_name + '|' + unit_source_identity + '|' +
+            program_id + '|' + std::to_string(component_count) + '|' + std::to_string(source_bytes) +
+            "|sequential-exact-source-spans";
+        const std::string decoder_identity = "sha256:" + sha256(decoder_text);
         const std::string operator_text =
             "qsa.qwen35-full-family-unit-operator.v1|" + role_name + '|' + family_key + '|' +
             planned_unit_identity + '|' + unit_source_identity + '|' + family_cir_identity + '|' +
-            representative_operator_root + '|' + program_id + '|' + std::to_string(component_count) + '|' +
-            std::to_string(source_bytes);
+            representative_operator_root + '|' + program_id + '|' + decoder_identity + '|' +
+            std::to_string(component_count) + '|' + std::to_string(source_bytes);
         const std::string operator_identity = "sha256:" + sha256(operator_text);
         const std::string producer_identity = "sha256:" + sha256("qsa.qwen35-full-family-unit-producer.v1|" + operator_identity);
 
@@ -183,11 +188,13 @@ int main(int argc, char** argv) {
              << ",\"unit_source_identity\":" << quote(unit_source_identity)
              << ",\"family_cir_identity\":" << quote(family_cir_identity)
              << ",\"operator_program_identity\":" << quote(program_id)
+             << ",\"decoder_identity\":" << quote(decoder_identity)
              << ",\"representative_operator_receipt_root\":" << quote(representative_operator_root)
              << ",\"component_count\":" << component_count
              << ",\"source_bytes\":" << source_bytes
              << ",\"accepted_role_cir_verified\":true"
              << ",\"accepted_operator_root_verified\":true"
+             << ",\"unit_decoder_identity_derived\":true"
              << ",\"operator_program_instantiated\":true"
              << ",\"representative_numerical_equivalence_parent_bound\":true"
              << ",\"unit_numerical_holdout_reexecuted\":false"
@@ -198,6 +205,7 @@ int main(int argc, char** argv) {
         write_receipt(output, json.str());
         std::cout << "QSA_UNIT_OPERATOR_RECEIPT=" << output.string() << '\n';
         std::cout << "QSA_UNIT_OPERATOR_IDENTITY=" << operator_identity << '\n';
+        std::cout << "QSA_UNIT_DECODER_IDENTITY=" << decoder_identity << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
