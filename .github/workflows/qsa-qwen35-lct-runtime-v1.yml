@@ -10,22 +10,21 @@ permissions:
 
 concurrency:
   group: qsa-qwen35-lct-runtime-v1
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   runtime:
-    runs-on: [self-hosted, Windows, X64, qelm]
+    runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
-      - name: Verify exact PR65 parent
+          fetch-depth: 0
+      - name: Verify exact PR65 ancestry
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          $parent=(git rev-parse HEAD^).Trim()
-          if($parent -ne '329ea45d3f1b52265306f6656bc789b237219a94' -and (git merge-base HEAD eff0f7c64fd65b0cefce29f2510bab96130e799a).Trim() -ne 'eff0f7c64fd65b0cefce29f2510bab96130e799a'){throw 'runtime branch lost exact PR65 ancestry'}
+          if((git merge-base HEAD eff0f7c64fd65b0cefce29f2510bab96130e799a).Trim() -ne 'eff0f7c64fd65b0cefce29f2510bab96130e799a'){throw 'runtime branch lost exact PR65 ancestry'}
           if((git show eff0f7c64fd65b0cefce29f2510bab96130e799a:include/qubit/qlct_qwen35.hpp | git hash-object --stdin).Trim() -ne 'e421a35261e3bf40b375e96435b624195d7d1449'){throw 'PR65 header authority changed'}
       - name: Build bounded runtime test
         shell: powershell
