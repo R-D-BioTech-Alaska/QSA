@@ -22,6 +22,8 @@ env:
   FIT_SHA: a7c66691e9a798379a39a2e49795fbe6844f9065e33bfc58604634e094a4e08a
   HOLDOUT_SHA: c92a2042370c3e2db2780260762136c02a88a7ecc9f92553fb06d6d3c3816f4b
   RECONSTRUCTION_SHA: 041e571f4466543c06b900ab83150445ae2968bc65ef562079923dfd27e37699
+  TOKENIZER_FIT_SHA: 30f0b8b7646409b9ae27570b03c4ed8fdd25be8f77acbef2d5a81f205a6af1e6
+  TOKENIZER_HOLDOUT_SHA: 76600dcb15df27428ef1a043ca0d76ece07b6e82baef4d37fce6aaa88dea25d4
   V22_SHA: 3ff889aaeaf991e762f0431e5b82457bdb8a4bad10971faa5f5bbdc8fb011bc7
 
 jobs:
@@ -50,8 +52,10 @@ jobs:
           $fit=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\fit-receipt.json'
           $holdout=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\holdout-receipt.json'
           $reconstruction=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\reconstruction\reconstruction-receipt.json'
+          $tokenizerFit=Join-Path $root 'BrainRuntime\learning\tokenizer-output-reference-v2\run-31768330005\fit-receipt.json'
+          $tokenizerHoldout=Join-Path $root 'BrainRuntime\learning\tokenizer-output-reference-v2\run-31768330005\holdout-receipt.json'
           $v22=Join-Path $root 'BrainRuntime\learning\v22-compiled-corpus\cortex-checkpoint.pt'
-          foreach($pair in @(@($source,$env:SOURCE_SET_SHA),@($fit,$env:FIT_SHA),@($holdout,$env:HOLDOUT_SHA),@($reconstruction,$env:RECONSTRUCTION_SHA),@($v22,$env:V22_SHA))){
+          foreach($pair in @(@($source,$env:SOURCE_SET_SHA),@($fit,$env:FIT_SHA),@($holdout,$env:HOLDOUT_SHA),@($reconstruction,$env:RECONSTRUCTION_SHA),@($tokenizerFit,$env:TOKENIZER_FIT_SHA),@($tokenizerHoldout,$env:TOKENIZER_HOLDOUT_SHA),@($v22,$env:V22_SHA))){
             if(-not (Test-Path -LiteralPath $pair[0])){throw "bound evidence is missing: $($pair[0])"}
             if((Get-FileHash -Algorithm SHA256 -LiteralPath $pair[0]).Hash.ToLowerInvariant() -ne $pair[1]){throw "bound evidence changed: $($pair[0])"}
           }
@@ -59,7 +63,7 @@ jobs:
           if(-not (Test-Path -LiteralPath $python)){throw 'validated Python harness is missing'}
           $output=Join-Path $root "BrainRuntime\learning\qsa-qwen35-lct-real-evidence-v1\run-$env:GITHUB_RUN_ID"
           if(Test-Path -LiteralPath $output){throw 'refusing to replace QSA real-evidence output'}
-          @("SOURCE=$source","FIT=$fit","HOLDOUT=$holdout","RECONSTRUCTION=$reconstruction","V22=$v22","PYTHON=$python","OUTPUT=$output","CHILD_HEAD=$head") | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          @("SOURCE=$source","FIT=$fit","HOLDOUT=$holdout","RECONSTRUCTION=$reconstruction","TOKENIZER_FIT=$tokenizerFit","TOKENIZER_HOLDOUT=$tokenizerHoldout","V22=$v22","PYTHON=$python","OUTPUT=$output","CHILD_HEAD=$head") | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           & $python -m py_compile tools\qwen35_lct_real_evidence.py
           if($LASTEXITCODE -ne 0){throw 'real-evidence producer does not compile'}
 
@@ -94,21 +98,22 @@ jobs:
           "HELPER=$($helper.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "QSA_REAL_EVIDENCE_HELPER_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $helper.FullName).Hash.ToLowerInvariant())"
 
-      - name: Produce real source-bound QSA fragments
+      - name: Produce three real source-bound QSA fragments
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          & $env:PYTHON tools\qwen35_lct_real_evidence.py --helper $env:HELPER --source-fragments $env:SOURCE --fit-receipt $env:FIT --holdout-receipt $env:HOLDOUT --reconstruction-receipt $env:RECONSTRUCTION --output-dir $env:OUTPUT
-          if($LASTEXITCODE -ne 0){throw 'QSA real-evidence production failed'}
+          & $env:PYTHON tools\qwen35_lct_real_evidence.py --helper $env:HELPER --source-fragments $env:SOURCE --fit-receipt $env:FIT --holdout-receipt $env:HOLDOUT --reconstruction-receipt $env:RECONSTRUCTION --tokenizer-fit-receipt $env:TOKENIZER_FIT --tokenizer-holdout-receipt $env:TOKENIZER_HOLDOUT --output-dir $env:OUTPUT
+          if($LASTEXITCODE -ne 0){throw 'QSA three-role real-evidence production failed'}
           $set=Join-Path $env:OUTPUT 'qsa-representative-evidence-set.json'
           $r=Get-Content -LiteralPath $set -Raw | ConvertFrom-Json
-          if(@($r.native_equivalent_roles).Count -ne 2 -or $r.native_equivalent_roles -notcontains 'ssm_recurrent' -or $r.native_equivalent_roles -notcontains 'full_attention'){throw 'QSA native role set changed'}
-          if(@($r.residual_only_roles).Count -ne 1 -or $r.residual_only_roles[0] -ne 'tokenizer_embedding'){throw 'QSA tokenizer residual-only decision changed'}
-          if($r.authority.qsa_operator_equivalence_verified_for_native_roles -ne $true -or $r.authority.tokenizer_operator_equivalence_verified -ne $false -or $r.authority.residual_retirement_authorized -ne $false){throw 'QSA real-evidence authority changed'}
-          foreach($role in @('ssm_recurrent','full_attention')){
+          if(@($r.native_equivalent_roles).Count -ne 3){throw 'QSA native role count changed'}
+          foreach($role in @('ssm_recurrent','full_attention','tokenizer_embedding')){
+            if($r.native_equivalent_roles -notcontains $role){throw "QSA native role missing: $role"}
             $f=Get-Content -LiteralPath (Join-Path $env:OUTPUT "$role.qsa-fragment.json") -Raw | ConvertFrom-Json
             if($f.operator_equivalence_verified -ne $true -or $f.exact_reconstruction_verified -ne $true -or $f.reconstruction_mismatch_count -ne 0){throw "QSA fragment failed: $role"}
           }
+          if(@($r.residual_only_roles).Count -ne 0){throw 'QSA representative set retained a residual-only role'}
+          if($r.authority.qsa_operator_equivalence_verified_for_native_roles -ne $true -or $r.authority.all_representative_roles_native_equivalent -ne $true -or $r.authority.residual_retirement_authorized -ne $false){throw 'QSA real-evidence authority changed'}
           "QSA_SET=$set" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "QSA_REAL_EVIDENCE_SET_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $set).Hash.ToLowerInvariant())"
 
@@ -125,11 +130,11 @@ jobs:
             parent_pr65_head=$env:PR65_HEAD
             evidence_set_identity=$set.identity
             evidence_set_sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $env:QSA_SET).Hash.ToLowerInvariant()
-            native_equivalent_roles=@('ssm_recurrent','full_attention')
-            residual_only_roles=@('tokenizer_embedding')
-            equivalence_basis='PR65 C++ CIR exact match to independently executed frozen source reference plus exact reconstruction'
+            native_equivalent_roles=@('ssm_recurrent','full_attention','tokenizer_embedding')
+            residual_only_roles=@()
+            equivalence_basis='PR65 C++ CIR exact match to independently executed frozen source references plus exact reconstruction; tokenizer output uses sealed CUDA MMVQ source reference'
             native_qsa_numeric_executor_used=$false
-            tokenizer_operator_equivalence_verified=$false
+            all_representative_roles_native_equivalent=$true
             protected_v22_sha256=$env:V22_SHA
             residual_retirement_authorized=$false
             brain_admission_authorized=$false
