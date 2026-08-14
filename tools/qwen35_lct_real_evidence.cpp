@@ -40,7 +40,7 @@ std::string sha256(std::string_view value) {
         throw std::runtime_error("cannot create SHA-256 hash");
     }
     auto close_hash = [&]() { if (hash != nullptr) BCryptDestroyHash(hash); };
-    const auto* data = reinterpret_cast<PUCHAR>(const_cast<char*>(value.data()));
+    auto* data = reinterpret_cast<PUCHAR>(const_cast<char*>(value.data()));
     if (value.size() > static_cast<std::size_t>(UINT32_MAX) ||
         BCryptHashData(hash, data, static_cast<ULONG>(value.size()), 0) != 0 ||
         BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) != 0) {
