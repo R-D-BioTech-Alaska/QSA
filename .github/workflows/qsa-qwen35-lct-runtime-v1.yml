@@ -1,0 +1,50 @@
+name: QSA Qwen35 LCT Runtime v1
+
+on:
+  push:
+    branches: [qsa/lct-qwen35-runtime-equivalence-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-qwen35-lct-runtime-v1
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    runs-on: [self-hosted, Windows, X64, qelm]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Verify exact PR65 parent
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $parent=(git rev-parse HEAD^).Trim()
+          if($parent -ne '329ea45d3f1b52265306f6656bc789b237219a94' -and (git merge-base HEAD eff0f7c64fd65b0cefce29f2510bab96130e799a).Trim() -ne 'eff0f7c64fd65b0cefce29f2510bab96130e799a'){throw 'runtime branch lost exact PR65 ancestry'}
+          if((git show eff0f7c64fd65b0cefce29f2510bab96130e799a:include/qubit/qlct_qwen35.hpp | git hash-object --stdin).Trim() -ne 'e421a35261e3bf40b375e96435b624195d7d1449'){throw 'PR65 header authority changed'}
+      - name: Build bounded runtime test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+
+          add_executable(qwen35_lct_runtime_tests tests/test_qwen35_lct_runtime.cpp)
+          target_link_libraries(qwen35_lct_runtime_tests PRIVATE qstate_core)
+          '@ | Add-Content -LiteralPath CMakeLists.txt -Encoding UTF8
+          cmake -S . -B build-qwen35-runtime -DQSTATE_BUILD_TESTS=OFF -DQSTATE_BUILD_EXAMPLES=OFF -DQSTATE_BUILD_BENCHMARKS=OFF -DQSTATE_ENABLE_IPO=OFF
+          if($LASTEXITCODE -ne 0){throw 'Qwen35 runtime configure failed'}
+          cmake --build build-qwen35-runtime --config Release --target qwen35_lct_runtime_tests --parallel 8
+          if($LASTEXITCODE -ne 0){throw 'Qwen35 runtime build failed'}
+      - name: Run bounded runtime test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe=Get-ChildItem -LiteralPath build-qwen35-runtime -Recurse -Filter qwen35_lct_runtime_tests.exe | Select-Object -First 1
+          if($null -eq $exe){throw 'Qwen35 runtime test executable missing'}
+          & $exe.FullName
+          if($LASTEXITCODE -ne 0){throw 'Qwen35 runtime operator tests failed'}
