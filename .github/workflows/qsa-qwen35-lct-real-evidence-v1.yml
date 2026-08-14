@@ -1,0 +1,140 @@
+name: QSA Qwen35 LCT Real Evidence V1
+
+on:
+  push:
+    branches: [qsa/qwen35-lct-real-evidence-v1]
+    paths:
+      - "tools/qwen35_lct_real_evidence.cpp"
+      - "tools/qwen35_lct_real_evidence.py"
+      - ".github/workflows/qsa-qwen35-lct-real-evidence-v1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qsa-qwen35-lct-real-evidence-v1
+  cancel-in-progress: false
+
+env:
+  PR65_HEAD: eff0f7c64fd65b0cefce29f2510bab96130e799a
+  SOURCE_SET_SHA: ec3a6c03cdb1bd88dc01a2cd745e6aed6a582512543c66088eb6e1193dfab0b2
+  FIT_SHA: a7c66691e9a798379a39a2e49795fbe6844f9065e33bfc58604634e094a4e08a
+  HOLDOUT_SHA: c92a2042370c3e2db2780260762136c02a88a7ecc9f92553fb06d6d3c3816f4b
+  RECONSTRUCTION_SHA: 041e571f4466543c06b900ab83150445ae2968bc65ef562079923dfd27e37699
+  V22_SHA: 3ff889aaeaf991e762f0431e5b82457bdb8a4bad10971faa5f5bbdc8fb011bc7
+
+jobs:
+  real-evidence:
+    runs-on: [self-hosted, Windows, X64, qelm]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bind exact PR65 child and frozen evidence
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $head=(git rev-parse HEAD).Trim()
+          $mergeBase=(git merge-base $env:PR65_HEAD $head).Trim()
+          if($mergeBase -ne $env:PR65_HEAD){throw "real-evidence child does not descend exactly from PR65: $mergeBase"}
+          $changed=@(git diff --name-only "$env:PR65_HEAD..$head") | Sort-Object
+          $allowed=@('.github/workflows/qsa-qwen35-lct-real-evidence-v1.yml','tools/qwen35_lct_real_evidence.cpp','tools/qwen35_lct_real_evidence.py') | Sort-Object
+          if(@(Compare-Object -ReferenceObject $allowed -DifferenceObject $changed).Count -ne 0){throw 'real-evidence child escaped exact three-file scope'}
+
+          $root='C:\QELM-Rebuild'
+          $lct=Join-Path $root 'QMirrorLab\qwen_language_learning\run-20260811\lct-v1'
+          $source=Join-Path $lct 'source-fragments-v1.json'
+          $fit=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\fit-receipt.json'
+          $holdout=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\holdout-receipt.json'
+          $reconstruction=Join-Path $root 'BrainRuntime\learning\representative-lct-reference-v2\run-31765463070\reconstruction\reconstruction-receipt.json'
+          $v22=Join-Path $root 'BrainRuntime\learning\v22-compiled-corpus\cortex-checkpoint.pt'
+          foreach($pair in @(@($source,$env:SOURCE_SET_SHA),@($fit,$env:FIT_SHA),@($holdout,$env:HOLDOUT_SHA),@($reconstruction,$env:RECONSTRUCTION_SHA),@($v22,$env:V22_SHA))){
+            if(-not (Test-Path -LiteralPath $pair[0])){throw "bound evidence is missing: $($pair[0])"}
+            if((Get-FileHash -Algorithm SHA256 -LiteralPath $pair[0]).Hash.ToLowerInvariant() -ne $pair[1]){throw "bound evidence changed: $($pair[0])"}
+          }
+          $python=Join-Path $root 'BrainRuntime\benchmarks\phase37y\harness\.venv\Scripts\python.exe'
+          if(-not (Test-Path -LiteralPath $python)){throw 'validated Python harness is missing'}
+          $output=Join-Path $root "BrainRuntime\learning\qsa-qwen35-lct-real-evidence-v1\run-$env:GITHUB_RUN_ID"
+          if(Test-Path -LiteralPath $output){throw 'refusing to replace QSA real-evidence output'}
+          @("SOURCE=$source","FIT=$fit","HOLDOUT=$holdout","RECONSTRUCTION=$reconstruction","V22=$v22","PYTHON=$python","OUTPUT=$output","CHILD_HEAD=$head") | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $python -m py_compile tools\qwen35_lct_real_evidence.py
+          if($LASTEXITCODE -ne 0){throw 'real-evidence producer does not compile'}
+
+      - name: Build exact PR65 C++ compiler finalizer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $driver=Join-Path $env:RUNNER_TEMP "qsa-qwen35-real-driver-$env:GITHUB_RUN_ID"
+          $build=Join-Path $env:RUNNER_TEMP "qsa-qwen35-real-build-$env:GITHUB_RUN_ID"
+          if((Test-Path -LiteralPath $driver) -or (Test-Path -LiteralPath $build)){throw 'fresh QSA real-evidence build path already exists'}
+          New-Item -ItemType Directory -Path $driver | Out-Null
+          $root=(Get-Location).Path.Replace('\','/')
+          @"
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAQwen35RealEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          add_executable(qwen35_lct_real_evidence "$root/tools/qwen35_lct_real_evidence.cpp")
+          target_include_directories(qwen35_lct_real_evidence PRIVATE "$root/include")
+          target_link_libraries(qwen35_lct_real_evidence PRIVATE bcrypt)
+          if(MSVC)
+            target_compile_options(qwen35_lct_real_evidence PRIVATE /W4)
+          endif()
+          "@ | Set-Content -LiteralPath (Join-Path $driver 'CMakeLists.txt') -Encoding UTF8
+          cmake -S $driver -B $build -DCMAKE_BUILD_TYPE=Release
+          if($LASTEXITCODE -ne 0){throw 'QSA real-evidence configure failed'}
+          cmake --build $build --config Release --target qwen35_lct_real_evidence --parallel 2
+          if($LASTEXITCODE -ne 0){throw 'QSA real-evidence helper build failed'}
+          $helper=Get-ChildItem -LiteralPath $build -Recurse -Filter qwen35_lct_real_evidence.exe | Select-Object -First 1
+          if($null -eq $helper){throw 'QSA real-evidence helper is missing'}
+          "HELPER=$($helper.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "QSA_REAL_EVIDENCE_HELPER_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $helper.FullName).Hash.ToLowerInvariant())"
+
+      - name: Produce real source-bound QSA fragments
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          & $env:PYTHON tools\qwen35_lct_real_evidence.py --helper $env:HELPER --source-fragments $env:SOURCE --fit-receipt $env:FIT --holdout-receipt $env:HOLDOUT --reconstruction-receipt $env:RECONSTRUCTION --output-dir $env:OUTPUT
+          if($LASTEXITCODE -ne 0){throw 'QSA real-evidence production failed'}
+          $set=Join-Path $env:OUTPUT 'qsa-representative-evidence-set.json'
+          $r=Get-Content -LiteralPath $set -Raw | ConvertFrom-Json
+          if(@($r.native_equivalent_roles).Count -ne 2 -or $r.native_equivalent_roles -notcontains 'ssm_recurrent' -or $r.native_equivalent_roles -notcontains 'full_attention'){throw 'QSA native role set changed'}
+          if(@($r.residual_only_roles).Count -ne 1 -or $r.residual_only_roles[0] -ne 'tokenizer_embedding'){throw 'QSA tokenizer residual-only decision changed'}
+          if($r.authority.qsa_operator_equivalence_verified_for_native_roles -ne $true -or $r.authority.tokenizer_operator_equivalence_verified -ne $false -or $r.authority.residual_retirement_authorized -ne $false){throw 'QSA real-evidence authority changed'}
+          foreach($role in @('ssm_recurrent','full_attention')){
+            $f=Get-Content -LiteralPath (Join-Path $env:OUTPUT "$role.qsa-fragment.json") -Raw | ConvertFrom-Json
+            if($f.operator_equivalence_verified -ne $true -or $f.exact_reconstruction_verified -ne $true -or $f.reconstruction_mismatch_count -ne 0){throw "QSA fragment failed: $role"}
+          }
+          "QSA_SET=$set" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "QSA_REAL_EVIDENCE_SET_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $set).Hash.ToLowerInvariant())"
+
+      - name: Freeze decision receipt
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-FileHash -Algorithm SHA256 -LiteralPath $env:V22).Hash.ToLowerInvariant() -ne $env:V22_SHA){throw 'protected V22 changed during QSA evidence run'}
+          $set=Get-Content -LiteralPath $env:QSA_SET -Raw | ConvertFrom-Json
+          $receipt=[ordered]@{
+            schema='qsa.qwen35-lct-real-evidence-execution.v1'
+            run_id=[int64]$env:GITHUB_RUN_ID
+            child_head=$env:CHILD_HEAD
+            parent_pr65_head=$env:PR65_HEAD
+            evidence_set_identity=$set.identity
+            evidence_set_sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $env:QSA_SET).Hash.ToLowerInvariant()
+            native_equivalent_roles=@('ssm_recurrent','full_attention')
+            residual_only_roles=@('tokenizer_embedding')
+            equivalence_basis='PR65 C++ CIR exact match to independently executed frozen source reference plus exact reconstruction'
+            native_qsa_numeric_executor_used=$false
+            tokenizer_operator_equivalence_verified=$false
+            protected_v22_sha256=$env:V22_SHA
+            residual_retirement_authorized=$false
+            brain_admission_authorized=$false
+            production='legacy_only'
+          }
+          $path=Join-Path $env:OUTPUT 'execution-receipt.json'
+          $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+          Write-Host "QSA_REAL_EVIDENCE_RECEIPT_SHA256=$((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant())"
