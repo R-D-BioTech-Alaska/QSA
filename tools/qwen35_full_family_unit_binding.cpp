@@ -87,6 +87,18 @@ qubit::Qwen35LctRole role_from(std::string_view value) {
     throw std::runtime_error("unsupported Qwen35 LCT role");
 }
 
+std::string_view accepted_cir(qubit::Qwen35LctRole role) {
+    switch (role) {
+        case qubit::Qwen35LctRole::SsmRecurrent:
+            return "sha256:be6c04a161458f5c6bf15681bd543de5d57b77a2395e10503959edfe3418fa0f";
+        case qubit::Qwen35LctRole::FullAttention:
+            return "sha256:6db6bd50c2abb8aa8f1e0ca360c5c728b91cbe70afe821c91423735753728672";
+        case qubit::Qwen35LctRole::TokenizerEmbedding:
+            return "sha256:f3b244d5be92439281f9999344e6ebfbe5c30eabdd5f17f7b622f3b86027ae74";
+    }
+    throw std::runtime_error("unsupported Qwen35 LCT role");
+}
+
 std::string program_identity(const qubit::Qwen35OperatorProgram& program) {
     std::ostringstream text;
     text << "qsa.qwen35-full-family-program.v1|" << qubit::qwen35_role_name(program.role)
@@ -135,6 +147,9 @@ int main(int argc, char** argv) {
         if (component_count != topology.component_count || source_bytes != topology.source_bytes) {
             throw std::runtime_error("QSA unit source topology differs from the verified family topology");
         }
+        if (family_cir_identity != accepted_cir(role)) {
+            throw std::runtime_error("QSA unit CIR differs from the accepted role-specific CIR");
+        }
         const auto program = qubit::Qwen35LctCompiler::compile(role);
         const auto program_id = program_identity(program);
         const std::string operator_text =
@@ -156,6 +171,7 @@ int main(int argc, char** argv) {
              << ",\"representative_operator_receipt_root\":" << quote(representative_operator_root)
              << ",\"component_count\":" << component_count
              << ",\"source_bytes\":" << source_bytes
+             << ",\"accepted_role_cir_verified\":true"
              << ",\"operator_program_instantiated\":true"
              << ",\"representative_numerical_equivalence_parent_bound\":true"
              << ",\"unit_numerical_holdout_reexecuted\":false"
