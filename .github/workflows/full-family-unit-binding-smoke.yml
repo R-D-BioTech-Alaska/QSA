@@ -1,0 +1,58 @@
+name: Full Family Unit Binding Smoke
+
+on:
+  push:
+    branches: [qsa/full-family-unit-binding-v1]
+    paths: [".github/workflows/full-family-unit-binding-smoke.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure and build
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $driver=Join-Path $env:RUNNER_TEMP 'qsa-full-family-unit-binding-driver'
+          New-Item -ItemType Directory -Force -Path $driver | Out-Null
+          $source=(Resolve-Path '.').Path.Replace('\','/')
+          @"
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAFullFamilyUnitBinding LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          add_executable(qwen35_full_family_unit_binding "$source/tools/qwen35_full_family_unit_binding.cpp")
+          target_include_directories(qwen35_full_family_unit_binding PRIVATE "$source/include")
+          target_compile_definitions(qwen35_full_family_unit_binding PRIVATE NOMINMAX)
+          target_link_libraries(qwen35_full_family_unit_binding PRIVATE bcrypt)
+          "@ | Set-Content -LiteralPath (Join-Path $driver 'CMakeLists.txt') -Encoding utf8
+          $build=Join-Path $env:RUNNER_TEMP 'qsa-full-family-unit-binding-build'
+          cmake -S $driver -B $build -A x64
+          if($LASTEXITCODE -ne 0){throw 'QSA full-family unit binding configure failed'}
+          cmake --build $build --config Release --parallel 4
+          if($LASTEXITCODE -ne 0){throw 'QSA full-family unit binding build failed'}
+          $exe=Get-ChildItem -LiteralPath $build -Recurse -Filter qwen35_full_family_unit_binding.exe | Select-Object -First 1
+          if($null -eq $exe){throw 'QSA full-family unit binding executable missing'}
+          "QSA_UNIT_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Execute source-bound smoke
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $output=Join-Path $env:RUNNER_TEMP 'ssm-unit-smoke.json'
+          & $env:QSA_UNIT_EXE `
+            ssm_recurrent blk.0 `
+            sha256:7bd4fca814a1e7754fd872675e392d7cce8d27dd7c07f2a7836e7f2c63427e68 `
+            sha256:0000000000000000000000000000000000000000000000000000000000000000 `
+            sha256:be6c04a161458f5c6bf15681bd543de5d57b77a2395e10503959edfe3418fa0f `
+            sha256:941c40d882a3269a5f7cc9d66d55fd46334514455d516b5df53a1362491e059f `
+            14 273685376 $output
+          if($LASTEXITCODE -ne 0){throw 'QSA full-family source-bound smoke rejected'}
+          $r=Get-Content -LiteralPath $output -Raw | ConvertFrom-Json
+          if($r.schema -ne 'qsa.qwen35-full-family-unit-operator.v1' -or $r.operator_program_instantiated -ne $true -or $r.operator_mismatch_count -ne 0){throw 'QSA full-family source-bound smoke receipt is not positive'}
+          Write-Host ("QSA_FULL_FAMILY_SMOKE_OPERATOR="+$r.operator_receipt_identity)
