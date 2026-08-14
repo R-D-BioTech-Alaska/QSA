@@ -99,6 +99,18 @@ std::string_view accepted_cir(qubit::Qwen35LctRole role) {
     throw std::runtime_error("unsupported Qwen35 LCT role");
 }
 
+std::string_view accepted_operator_root(qubit::Qwen35LctRole role) {
+    switch (role) {
+        case qubit::Qwen35LctRole::SsmRecurrent:
+            return "sha256:941c40d882a3269a5f7cc9d66d55fd46334514455d516b5df53a1362491e059f";
+        case qubit::Qwen35LctRole::FullAttention:
+            return "sha256:2bf551a33df9fe8821054f28aae3ed89a8a445fcf5836046ade651aefd334d22";
+        case qubit::Qwen35LctRole::TokenizerEmbedding:
+            return "sha256:5b9bb1b1cb6063c42f6618f591e8aa65d70f659cc07587379c82aee1be7342fb";
+    }
+    throw std::runtime_error("unsupported Qwen35 LCT role");
+}
+
 std::string program_identity(const qubit::Qwen35OperatorProgram& program) {
     std::ostringstream text;
     text << "qsa.qwen35-full-family-program.v1|" << qubit::qwen35_role_name(program.role)
@@ -150,6 +162,9 @@ int main(int argc, char** argv) {
         if (family_cir_identity != accepted_cir(role)) {
             throw std::runtime_error("QSA unit CIR differs from the accepted role-specific CIR");
         }
+        if (representative_operator_root != accepted_operator_root(role)) {
+            throw std::runtime_error("QSA unit operator parent differs from the accepted representative root");
+        }
         const auto program = qubit::Qwen35LctCompiler::compile(role);
         const auto program_id = program_identity(program);
         const std::string operator_text =
@@ -172,6 +187,7 @@ int main(int argc, char** argv) {
              << ",\"component_count\":" << component_count
              << ",\"source_bytes\":" << source_bytes
              << ",\"accepted_role_cir_verified\":true"
+             << ",\"accepted_operator_root_verified\":true"
              << ",\"operator_program_instantiated\":true"
              << ",\"representative_numerical_equivalence_parent_bound\":true"
              << ",\"unit_numerical_holdout_reexecuted\":false"
