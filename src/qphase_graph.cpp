@@ -22,6 +22,18 @@ struct PhaseGraphSplitMix64 {
     }
 };
 
+struct PhaseGraphInternalEdge {
+    std::size_t first{0U};
+    std::size_t second{0U};
+    double angle{0.0};
+};
+
+struct PhaseGraphBoundaryEdge {
+    std::size_t flip{0U};
+    std::size_t external{0U};
+    double angle{0.0};
+};
+
 void require_finite(double value, const char* label) {
     if (!std::isfinite(value)) {
         throw QStateError(std::string(label) + " must be finite");
@@ -34,6 +46,13 @@ void require_finite(double value, const char* label) {
         throw QStateError(std::string(label) + " overflowed");
     }
     return value;
+}
+
+[[nodiscard]] QComplex half_phase_factor(double angle, bool negative) {
+    const QComplex phase = QComplex::from_polar(1.0, angle);
+    return negative
+        ? QComplex{0.5 * (1.0 - phase.re), -0.5 * phase.im}
+        : QComplex{0.5 * (1.0 + phase.re), 0.5 * phase.im};
 }
 
 }  // namespace
@@ -227,6 +246,162 @@ void PhaseGraphState::apply_swap(QubitId first, QubitId second) {
 double PhaseGraphState::probability_one(QubitId qubit) const {
     validate_qubit(qubit);
     return 0.5;
+}
+
+PhaseGraphCoherenceResult PhaseGraphState::equatorial_coherence() const {
+    PhaseGraphCoherenceResult result;
+    result.values.reserve(qubit_count_);
+    for (double angle : local_phases_) {
+        result.values.push_back(QComplex::from_polar(1.0, angle));
+    }
+    for (const auto& [key, angle] : edge_phases_) {
+        const auto [first, second] = decode_edge(key);
+        const QComplex factor = half_phase_factor(angle, false);
+        result.values[first] *= factor;
+        result.values[second] *= factor;
+    }
+    result.receipt.qubits = qubit_count_;
+    result.receipt.phase_edges = edge_phases_.size();
+    result.receipt.structural_factors = qubit_count_ + 2U * edge_phases_.size();
+    return result;
+}
+
+PhaseGraphPauliResult PhaseGraphState::pauli_expectation(
+    std::span<const PauliFactor> factors,
+    PhaseGraphPauliConfig config) const {
+    if (config.max_flip_qubits >= std::numeric_limits<std::size_t>::digits ||
+        config.max_enumerated_assignments == 0U) {
+        throw QStateError("Phase-graph Pauli configuration is invalid");
+    }
+
+    std::vector<PauliAxis> axes(qubit_count_, PauliAxis::I);
+    std::vector<bool> seen(qubit_count_, false);
+    std::vector<QubitId> flips;
+    std::size_t active_factors = 0U;
+    for (const PauliFactor& factor : factors) {
+        validate_qubit(factor.qubit);
+        const std::size_t qubit = static_cast<std::size_t>(factor.qubit);
+        if (seen[qubit]) {
+            throw QStateError("Phase-graph Pauli observable contains a duplicate qubit");
+        }
+        seen[qubit] = true;
+        axes[qubit] = factor.axis;
+        if (factor.axis == PauliAxis::X || factor.axis == PauliAxis::Y) {
+            flips.push_back(factor.qubit);
+        }
+        if (factor.axis != PauliAxis::I) {
+            ++active_factors;
+        }
+    }
+    if (flips.size() > config.max_flip_qubits) {
+        throw QStateError("Phase-graph Pauli flip support exceeds the configured limit");
+    }
+    const std::size_t assignments = std::size_t{1} << flips.size();
+    if (assignments > config.max_enumerated_assignments) {
+        throw QStateError("Phase-graph Pauli enumeration exceeds the configured limit");
+    }
+
+    std::vector<int> flip_position(qubit_count_, -1);
+    for (std::size_t index = 0U; index < flips.size(); ++index) {
+        flip_position[flips[index]] = static_cast<int>(index);
+    }
+
+    std::vector<QubitId> external_qubits;
+    std::vector<int> external_position(qubit_count_, -1);
+    const auto ensure_external = [&](QubitId qubit) -> std::size_t {
+        const std::size_t value = static_cast<std::size_t>(qubit);
+        if (external_position[value] >= 0) {
+            return static_cast<std::size_t>(external_position[value]);
+        }
+        const std::size_t index = external_qubits.size();
+        external_qubits.push_back(qubit);
+        external_position[value] = static_cast<int>(index);
+        return index;
+    };
+
+    std::vector<PhaseGraphInternalEdge> internal_edges;
+    std::vector<PhaseGraphBoundaryEdge> boundary_edges;
+    internal_edges.reserve(edge_phases_.size());
+    boundary_edges.reserve(edge_phases_.size());
+    for (const auto& [key, angle] : edge_phases_) {
+        const auto [first, second] = decode_edge(key);
+        const int first_position = flip_position[first];
+        const int second_position = flip_position[second];
+        if (first_position >= 0 && second_position >= 0) {
+            internal_edges.push_back({
+                static_cast<std::size_t>(first_position),
+                static_cast<std::size_t>(second_position),
+                angle,
+            });
+        } else if (first_position >= 0 || second_position >= 0) {
+            const std::size_t flip = first_position >= 0
+                ? static_cast<std::size_t>(first_position)
+                : static_cast<std::size_t>(second_position);
+            const QubitId external = first_position >= 0 ? second : first;
+            boundary_edges.push_back({flip, ensure_external(external), angle});
+        }
+    }
+    for (const PauliFactor& factor : factors) {
+        if (factor.axis == PauliAxis::Z) {
+            (void)ensure_external(factor.qubit);
+        }
+    }
+
+    std::vector<double> external_angles(external_qubits.size(), 0.0);
+    QComplex total{};
+    for (std::size_t assignment = 0U; assignment < assignments; ++assignment) {
+        double phase = 0.0;
+        QComplex pauli_phase{1.0, 0.0};
+        for (std::size_t index = 0U; index < flips.size(); ++index) {
+            const bool bit = ((assignment >> index) & 1U) != 0U;
+            const double sign = bit ? 1.0 : -1.0;
+            phase = checked_sum(
+                phase,
+                sign * local_phases_[flips[index]],
+                "Phase-graph Pauli local phase");
+            if (axes[flips[index]] == PauliAxis::Y) {
+                pauli_phase *= QComplex{0.0, bit ? -1.0 : 1.0};
+            }
+        }
+        for (const PhaseGraphInternalEdge& edge : internal_edges) {
+            const double first = ((assignment >> edge.first) & 1U) != 0U ? 1.0 : 0.0;
+            const double second = ((assignment >> edge.second) & 1U) != 0U ? 1.0 : 0.0;
+            phase = checked_sum(
+                phase,
+                edge.angle * (first + second - 1.0),
+                "Phase-graph Pauli internal phase");
+        }
+
+        std::fill(external_angles.begin(), external_angles.end(), 0.0);
+        for (const PhaseGraphBoundaryEdge& edge : boundary_edges) {
+            const bool bit = ((assignment >> edge.flip) & 1U) != 0U;
+            const double sign = bit ? 1.0 : -1.0;
+            external_angles[edge.external] = checked_sum(
+                external_angles[edge.external],
+                sign * edge.angle,
+                "Phase-graph Pauli boundary phase");
+        }
+
+        QComplex term = QComplex::from_polar(1.0, phase) * pauli_phase;
+        for (std::size_t index = 0U; index < external_qubits.size(); ++index) {
+            const bool negative = axes[external_qubits[index]] == PauliAxis::Z;
+            term *= half_phase_factor(external_angles[index], negative);
+        }
+        total += term;
+    }
+    total /= static_cast<double>(assignments);
+
+    PhaseGraphPauliResult result;
+    result.value = total;
+    result.receipt.qubits = qubit_count_;
+    result.receipt.phase_edges = edge_phases_.size();
+    result.receipt.pauli_factors = active_factors;
+    result.receipt.flipped_qubits = flips.size();
+    result.receipt.internal_phase_edges = internal_edges.size();
+    result.receipt.boundary_phase_edges = boundary_edges.size();
+    result.receipt.external_factors = external_qubits.size();
+    result.receipt.enumerated_assignments = assignments;
+    return result;
 }
 
 QComplex PhaseGraphState::unit_phase(BasisIndex basis) const {
