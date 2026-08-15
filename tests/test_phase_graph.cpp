@@ -1,5 +1,6 @@
 #include "qubit/qphase_graph.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -11,13 +12,18 @@
 
 namespace {
 
+using qubit::PauliAxis;
+using qubit::PauliFactor;
+using qubit::PauliObservable;
 using qubit::PhaseGraphConfig;
+using qubit::PhaseGraphPauliConfig;
 using qubit::PhaseGraphState;
 using qubit::QComplex;
 using qubit::QMatrix4;
 using qubit::QRegister;
 using qubit::QStateError;
 using qubit::QubitId;
+using qubit::almost_equal;
 
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -58,6 +64,48 @@ void compare(
         "phase-graph state differs from QRegister");
 }
 
+void compare_pauli(
+    const PhaseGraphState& graph,
+    const QRegister& reference,
+    const std::vector<PauliFactor>& factors,
+    double tolerance = 5e-10) {
+    PauliObservable observable(graph.qubit_count());
+    observable.add_term({1.0, 0.0}, factors);
+    const QComplex expected = observable.expectation(reference);
+    const auto actual = graph.pauli_expectation(factors);
+    require(
+        almost_equal(actual.value, expected, tolerance),
+        "factorized phase-graph Pauli expectation differs from dense control");
+    require(actual.receipt.factorized && !actual.receipt.dense_materialization,
+            "phase-graph Pauli expectation lost structural receipt");
+}
+
+void compare_equatorial(
+    const PhaseGraphState& graph,
+    const QRegister& reference,
+    double tolerance = 5e-10) {
+    const auto result = graph.equatorial_coherence();
+    require(result.values.size() == graph.qubit_count(),
+            "phase-graph coherence width is wrong");
+    require(result.receipt.qubits == graph.qubit_count() &&
+            result.receipt.phase_edges == graph.edge_count() &&
+            result.receipt.factorized && !result.receipt.dense_materialization,
+            "phase-graph coherence receipt is wrong");
+    for (QubitId qubit = 0U; qubit < graph.qubit_count(); ++qubit) {
+        const std::vector<PauliFactor> x{{qubit, PauliAxis::X}};
+        const std::vector<PauliFactor> y{{qubit, PauliAxis::Y}};
+        PauliObservable x_observable(graph.qubit_count());
+        PauliObservable y_observable(graph.qubit_count());
+        x_observable.add_term({1.0, 0.0}, x);
+        y_observable.add_term({1.0, 0.0}, y);
+        const QComplex expected_x = x_observable.expectation(reference);
+        const QComplex expected_y = y_observable.expectation(reference);
+        require(std::abs(result.values[qubit].re - expected_x.re) <= tolerance &&
+                std::abs(result.values[qubit].im - expected_y.re) <= tolerance,
+                "phase-graph equatorial coherence differs from dense X/Y control");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -80,6 +128,17 @@ int main() {
         graph.apply_swap(0, 2);
         reference.apply_swap(0, 2);
         compare(graph, reference);
+        compare_equatorial(graph, reference);
+        const std::vector<PauliFactor> tripair{
+            {0U, PauliAxis::X},
+            {1U, PauliAxis::X},
+            {2U, PauliAxis::X},
+        };
+        compare_pauli(graph, reference, tripair);
+        const auto tripair_result = graph.pauli_expectation(tripair);
+        require(tripair_result.receipt.flipped_qubits == 3U &&
+                tripair_result.receipt.enumerated_assignments == 8U,
+                "Tripair XXX correlation did not use bounded factorized readout");
         require(graph.validate(), "basic phase graph failed validation");
     }
 
@@ -151,6 +210,21 @@ int main() {
             }
         }
         compare(graph, reference);
+        compare_equatorial(graph, reference);
+
+        std::vector<QubitId> selected(qubits);
+        for (std::size_t index = 0U; index < qubits; ++index) {
+            selected[index] = static_cast<QubitId>(index);
+        }
+        std::shuffle(selected.begin(), selected.end(), generator);
+        const std::size_t support = 1U + static_cast<std::size_t>(generator() % std::min<std::size_t>(4U, qubits));
+        std::vector<PauliFactor> factors;
+        factors.reserve(support);
+        for (std::size_t index = 0U; index < support; ++index) {
+            const auto axis = static_cast<PauliAxis>(1U + generator() % 3U);
+            factors.push_back({selected[index], axis});
+        }
+        compare_pauli(graph, reference, factors);
     }
 
     {
@@ -167,8 +241,73 @@ int main() {
         require(large.edge_count() == 99'999U, "large phase graph edge count is wrong");
         require(large.estimated_bytes() < 20ULL * 1024ULL * 1024ULL,
                 "large phase graph exceeded memory gate");
+        const auto coherence = large.equatorial_coherence();
+        require(coherence.values.size() == 100'000U &&
+                coherence.receipt.structural_factors == 299'998U &&
+                !coherence.receipt.dense_materialization,
+                "large phase graph coherence did not remain structural");
+        const std::vector<PauliFactor> local_tripair{
+            {49'999U, PauliAxis::X},
+            {50'000U, PauliAxis::X},
+            {50'001U, PauliAxis::X},
+        };
+        const auto correlation = large.pauli_expectation(local_tripair);
+        require(correlation.receipt.qubits == 100'000U &&
+                correlation.receipt.flipped_qubits == 3U &&
+                correlation.receipt.enumerated_assignments == 8U &&
+                correlation.receipt.internal_phase_edges == 2U &&
+                correlation.receipt.boundary_phase_edges == 2U &&
+                !correlation.receipt.dense_materialization &&
+                std::isfinite(correlation.value.re) && std::isfinite(correlation.value.im),
+                "large phase graph Tripair correlation lost factorized execution");
         const auto sample = large.sample_bits(0x123456789ABCDEF0ULL);
         require(sample.size() == 100'000U, "large phase graph sample has the wrong size");
+    }
+
+    {
+        PhaseGraphState graph(4);
+        bool duplicate_rejected = false;
+        try {
+            const std::vector<PauliFactor> duplicate{
+                {1U, PauliAxis::X},
+                {1U, PauliAxis::Z},
+            };
+            (void)graph.pauli_expectation(duplicate);
+        } catch (const QStateError&) {
+            duplicate_rejected = true;
+        }
+        require(duplicate_rejected, "phase graph accepted duplicate Pauli support");
+
+        bool support_rejected = false;
+        try {
+            const std::vector<PauliFactor> tripair{
+                {0U, PauliAxis::X},
+                {1U, PauliAxis::X},
+                {2U, PauliAxis::X},
+            };
+            PhaseGraphPauliConfig pauli_config;
+            pauli_config.max_flip_qubits = 2U;
+            (void)graph.pauli_expectation(tripair, pauli_config);
+        } catch (const QStateError&) {
+            support_rejected = true;
+        }
+        require(support_rejected, "phase graph ignored the Pauli flip-support cap");
+
+        bool enumeration_rejected = false;
+        try {
+            const std::vector<PauliFactor> tripair{
+                {0U, PauliAxis::X},
+                {1U, PauliAxis::X},
+                {2U, PauliAxis::X},
+            };
+            PhaseGraphPauliConfig pauli_config;
+            pauli_config.max_flip_qubits = 3U;
+            pauli_config.max_enumerated_assignments = 4U;
+            (void)graph.pauli_expectation(tripair, pauli_config);
+        } catch (const QStateError&) {
+            enumeration_rejected = true;
+        }
+        require(enumeration_rejected, "phase graph ignored the Pauli enumeration cap");
     }
 
     {
