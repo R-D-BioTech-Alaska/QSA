@@ -28,6 +28,15 @@ enum class QMathFidelity : std::uint8_t {
     BoundedNumerical = 3,
 };
 
+enum class QMathComparison : std::uint8_t {
+    Equal = 0,
+    NotEqual = 1,
+    Less = 2,
+    LessEqual = 3,
+    Greater = 4,
+    GreaterEqual = 5,
+};
+
 struct QMathErrorBounds {
     double absolute{0.0};
     double relative{0.0};
@@ -130,6 +139,7 @@ struct QMathLanguageReceipt {
 struct QMathLanguageCompilation {
     QMathLanguageReceipt receipt{};
     QMathExpr symbolic{};
+    std::optional<QRational> exact_scalar{};
     std::optional<QWeylQubitLowering> qubit_lowering{};
     std::optional<QWeyl3Algebra> qutrit_algebra{};
     std::optional<QClifford3Map> qutrit_clifford{};
@@ -143,8 +153,9 @@ public:
         if (!expression) throw QMathError("mathematical language cannot compile a null expression");
         QMathLanguageCompilation result;
         result.symbolic = expression;
+        result.exact_scalar = exact_rational_value(expression);
         result.receipt.route = QMathLanguageRoute::Symbolic;
-        result.receipt.evidence = exact_algebraic_expression(expression)
+        result.receipt.evidence = result.exact_scalar.has_value()
             ? QMathEvidence::exact_algebraic()
             : QMathEvidence::exact_structural();
         result.receipt.type = expression->type;
@@ -246,21 +257,57 @@ public:
         return result;
     }
 
+    [[nodiscard]] static bool compare_exact(
+        const QRational& lhs,
+        const QRational& rhs,
+        QMathComparison comparison) {
+        switch (comparison) {
+            case QMathComparison::Equal:
+                return lhs == rhs;
+            case QMathComparison::NotEqual:
+                return !(lhs == rhs);
+            case QMathComparison::Less:
+                return lhs < rhs;
+            case QMathComparison::LessEqual:
+                return !(rhs < lhs);
+            case QMathComparison::Greater:
+                return rhs < lhs;
+            case QMathComparison::GreaterEqual:
+                return !(lhs < rhs);
+        }
+        throw QMathError("unknown exact comparison");
+    }
+
 private:
-    [[nodiscard]] static bool exact_algebraic_expression(const QMathExpr& expression) noexcept {
+    [[nodiscard]] static std::optional<QRational> exact_rational_value(
+        const QMathExpr& expression) {
         switch (expression->kind) {
             case QMathKind::Zero:
+                return QRational(0);
             case QMathKind::One:
+                return QRational(1);
             case QMathKind::Rational:
-                return true;
-            case QMathKind::Sum:
-            case QMathKind::Product:
-                return std::all_of(
-                    expression->args.begin(),
-                    expression->args.end(),
-                    [](const QMathExpr& value) { return exact_algebraic_expression(value); });
+                return expression->rational;
+            case QMathKind::Sum: {
+                QRational result(0);
+                for (const QMathExpr& value : expression->args) {
+                    const std::optional<QRational> term = exact_rational_value(value);
+                    if (!term.has_value()) return std::nullopt;
+                    result = result + *term;
+                }
+                return result;
+            }
+            case QMathKind::Product: {
+                QRational result(1);
+                for (const QMathExpr& value : expression->args) {
+                    const std::optional<QRational> factor = exact_rational_value(value);
+                    if (!factor.has_value()) return std::nullopt;
+                    result = result * *factor;
+                }
+                return result;
+            }
             default:
-                return false;
+                return std::nullopt;
         }
     }
 
