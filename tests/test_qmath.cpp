@@ -513,6 +513,92 @@ int main() {
             std::string(qmath_language_route_name(order_language.receipt.route)) == "StrictOrder",
             "QMath language lost strict-order identity, dependencies, or exact structural evidence");
 
+    QAffineRelationSpace affine(3U, length);
+    const auto affine_a = affine.add_symbol("marker:A");
+    const auto affine_b = affine.add_symbol("marker:B");
+    const auto affine_c = affine.add_symbol("marker:C");
+    const auto affine_d = affine.add_symbol("marker:D");
+    const QAffineRelationSpace::Displacement east{QRational(1), QRational(0), QRational(0)};
+    const QAffineRelationSpace::Displacement north{QRational(0), QRational(1), QRational(0)};
+    const QAffineRelationSpace::Displacement east_north{QRational(1), QRational(1), QRational(0)};
+    const QAffineRelationSpace::Displacement southwest{QRational(-1), QRational(-1), QRational(0)};
+    require(affine.add_difference(affine_a, affine_b, east) &&
+            affine.add_difference(affine_b, affine_c, north),
+            "affine exact relation admission failed");
+    require(affine.displacement(affine_a, affine_c) == east_north &&
+            affine.displacement(affine_c, affine_a) == southwest &&
+            !affine.displacement(affine_a, affine_d).has_value(),
+            "affine exact composition, inversion, or disconnected-state handling failed");
+    require(!affine.add_difference(affine_a, affine_c, east_north) &&
+            affine.independent_constraint_count() == 2U,
+            "affine redundant exact constraint changed independent state");
+
+    const std::string affine_before_conflict = affine.canonical();
+    rejected = false;
+    try { (void)affine.add_difference(affine_a, affine_c, east); } catch (const QMathError&) { rejected = true; }
+    require(rejected && affine.canonical() == affine_before_conflict,
+            "affine contradiction rejection mutated accepted state");
+
+    QAffineRelationSpace affine_reordered(3U, length);
+    const auto affine_reordered_c = affine_reordered.add_symbol("marker:C");
+    const auto affine_reordered_d = affine_reordered.add_symbol("marker:D");
+    const auto affine_reordered_b = affine_reordered.add_symbol("marker:B");
+    const auto affine_reordered_a = affine_reordered.add_symbol("marker:A");
+    require(affine_reordered.add_difference(affine_reordered_b, affine_reordered_c, north) &&
+            affine_reordered.add_difference(affine_reordered_a, affine_reordered_b, east) &&
+            affine_reordered.canonical() == affine.canonical() &&
+            !affine_reordered.displacement(affine_reordered_a, affine_reordered_d).has_value(),
+            "affine canonical identity depends on symbol or constraint insertion order");
+
+    QAffineRelationSpace fractional_affine(2U);
+    const auto fractional_a = fractional_affine.add_symbol("fraction:A");
+    const auto fractional_b = fractional_affine.add_symbol("fraction:B");
+    const auto fractional_c = fractional_affine.add_symbol("fraction:C");
+    const QAffineRelationSpace::Displacement half_x{QRational(1, 2), QRational(0)};
+    const QAffineRelationSpace::Displacement third_y{QRational(0), QRational(1, 3)};
+    const QAffineRelationSpace::Displacement composed_fraction{QRational(1, 2), QRational(1, 3)};
+    require(fractional_affine.add_difference(fractional_a, fractional_b, half_x) &&
+            fractional_affine.add_difference(fractional_b, fractional_c, third_y) &&
+            fractional_affine.displacement(fractional_a, fractional_c) == composed_fraction,
+            "affine relation lost exact rational displacement arithmetic");
+
+    rejected = false;
+    try {
+        const QAffineRelationSpace::Displacement wrong_dimension{QRational(1), QRational(2)};
+        (void)affine.add_difference(affine_a, affine_b, wrong_dimension);
+    } catch (const QMathError&) {
+        rejected = true;
+    }
+    require(rejected, "affine relation accepted a displacement with the wrong dimension");
+
+    QAffineRelationSpace capped_affine(1U, {}, QAffineRelationConfig{2U, 1U, 1U});
+    (void)capped_affine.add_symbol("cap-affine:A");
+    (void)capped_affine.add_symbol("cap-affine:B");
+    rejected = false;
+    try { (void)capped_affine.add_symbol("cap-affine:C"); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "affine relation symbol cap did not fail closed");
+
+    const QAffineRelationReceipt affine_receipt = affine.receipt();
+    require(affine_receipt.dimensions == 3U && affine_receipt.symbols == 4U &&
+            affine_receipt.independent_constraints == 2U && affine_receipt.components == 2U &&
+            affine_receipt.coordinate_dimension == length && affine_receipt.exact && affine_receipt.consistent,
+            "affine relation receipt lost dimensions, component state, or exactness");
+    const QMathLanguageCompilation affine_language = QMathLanguageCompiler::compile(affine);
+    require(affine_language.receipt.route == QMathLanguageRoute::AffineRelation &&
+            affine_language.receipt.evidence.fidelity == QMathFidelity::ExactAlgebraic &&
+            affine_language.receipt.evidence.exact_math() && affine_language.receipt.type.has_value() &&
+            affine_language.receipt.type->space == QMathSpace::Vector &&
+            affine_language.receipt.type->scalar == QMathScalar::Rational &&
+            affine_language.receipt.type->shape == std::vector<std::size_t>({3U}) &&
+            affine_language.receipt.type->dimension == length &&
+            affine_language.receipt.sites == 4U && affine_language.receipt.source_terms == 2U &&
+            affine_language.receipt.support_terms == 2U && affine_language.receipt.transform_ready &&
+            affine_language.affine_relation.has_value() &&
+            affine_language.affine_relation->canonical == affine.canonical() &&
+            affine_language.receipt.dependencies == std::vector<std::string>({"marker:A", "marker:B", "marker:C", "marker:D"}) &&
+            std::string(qmath_language_route_name(affine_language.receipt.route)) == "AffineRelation",
+            "QMath language lost affine exact rational identity, physical type, or evidence");
+
     const QMathLanguageCompilation qubit_language = QMathLanguageCompiler::compile(XZ, math);
     require(qubit_language.receipt.route == QMathLanguageRoute::QubitWeylNative &&
             qubit_language.receipt.local_dimensions == std::vector<std::uint32_t>({2U}) &&
