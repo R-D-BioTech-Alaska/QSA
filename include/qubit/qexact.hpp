@@ -189,6 +189,16 @@ public:
     }
 
     [[nodiscard]] static QInteger gcd(QInteger lhs, QInteger rhs) {
+        if (lhs.is_small() && rhs.is_small()) {
+            std::uint64_t left = magnitude(lhs.small_);
+            std::uint64_t right = magnitude(rhs.small_);
+            while (right != 0U) {
+                const std::uint64_t remainder = left % right;
+                left = right;
+                right = remainder;
+            }
+            return from_magnitude(left, false);
+        }
         lhs = lhs.abs();
         rhs = rhs.abs();
         while (!rhs.is_zero()) {
@@ -210,6 +220,31 @@ private:
     static std::uint64_t magnitude(std::int64_t value) noexcept {
         if (value >= 0) return static_cast<std::uint64_t>(value);
         return static_cast<std::uint64_t>(-(value + 1)) + 1ULL;
+    }
+
+    [[nodiscard]] static QInteger from_magnitude(std::uint64_t value, bool negative) {
+        if (value == 0U) return QInteger{};
+        const std::uint64_t positive_limit =
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        const std::uint64_t negative_limit = positive_limit + 1ULL;
+        if (!negative && value <= positive_limit) {
+            return QInteger(static_cast<std::int64_t>(value));
+        }
+        if (negative && value <= negative_limit) {
+            if (value == negative_limit) {
+                return QInteger(std::numeric_limits<std::int64_t>::min());
+            }
+            return QInteger(-static_cast<std::int64_t>(value));
+        }
+        QInteger result;
+        Big big;
+        big.negative = negative;
+        while (value != 0U) {
+            big.limbs.push_back(static_cast<std::uint32_t>(value % Base));
+            value /= Base;
+        }
+        result.assign_big(std::move(big));
+        return result;
     }
 
     static std::vector<std::uint32_t> magnitude_limbs(std::int64_t value) {
@@ -395,6 +430,16 @@ private:
     static std::pair<QInteger, QInteger> divmod(const QInteger& lhs, const QInteger& rhs) {
         if (rhs.is_zero()) throw QMathError("integer division by zero");
         if (lhs.is_zero()) return {QInteger{}, QInteger{}};
+        if (lhs.is_small() && rhs.is_small()) {
+            const std::uint64_t left = magnitude(lhs.small_);
+            const std::uint64_t right = magnitude(rhs.small_);
+            const std::uint64_t quotient = left / right;
+            const std::uint64_t remainder = left % right;
+            return {
+                from_magnitude(quotient, lhs.is_negative() != rhs.is_negative()),
+                from_magnitude(remainder, lhs.is_negative()),
+            };
+        }
         Big a = lhs.abs().as_big();
         Big b = rhs.abs().as_big();
         const int cmp = compare_magnitude(a.limbs, b.limbs);
