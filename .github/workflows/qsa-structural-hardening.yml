@@ -22,10 +22,10 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DQSTATE_BUILD_EXAMPLES=OFF -DQSTATE_BUILD_BENCHMARKS=OFF
       - name: Build hardening targets
-        run: >-
-          cmake --build build --config Release --parallel 2
-          --target qstate_transition_invariant_tests qstate_representation_certification_tests qstate_representation_advisor_tests
+        run: |
+          cmake --build build --config Release --parallel 2 --target qstate_transition_invariant_tests qstate_representation_certification_tests qstate_representation_advisor_tests
+          c++ -std=c++20 -O2 -Wall -Wextra -Wpedantic -Iinclude tests/test_qpolynomial.cpp -o build/qstate_polynomial_test
       - name: Run hardening gates
-        run: >-
-          ctest --test-dir build --output-on-failure
-          -R "qstate_(transition_invariant|representation_certification|representation_advisor|architecture_layers)"
+        run: |
+          ctest --test-dir build --output-on-failure -R "qstate_(transition_invariant|representation_certification|representation_advisor|architecture_layers)"
+          ./build/qstate_polynomial_test
