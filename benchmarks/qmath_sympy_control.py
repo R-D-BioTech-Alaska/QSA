@@ -80,6 +80,7 @@ def main() -> int:
     if not math.isfinite(qsa_seconds) or qsa_seconds <= 0.0 or not math.isfinite(median) or median <= 0.0:
         raise RuntimeError("exact benchmark timing is invalid")
     ratio = median / qsa_seconds
+    speed_claim_accepted = bool(exact_match and ratio > 1.0)
 
     result = {
         "schema": "qsa.qmath-sympy-control.v1",
@@ -101,13 +102,22 @@ def main() -> int:
         },
         "exact_outputs_match": exact_match,
         "sympy_over_qsa_median_time_ratio": ratio,
-        "speed_claim_accepted": bool(exact_match and ratio > 1.0),
+        "speed_claim_accepted": speed_claim_accepted,
         "claim_boundary": "Narrow in-process exact-rational platform workload only. This does not establish general CAS superiority or a universal QSA speed advantage.",
     }
     if not exact_match:
         raise RuntimeError("QSA and SymPy exact-rational observations differ")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(
+        "::notice title=QSA exact rational vs SymPy::"
+        f"exact_outputs_match={str(exact_match).lower()} "
+        f"qsa_median_seconds={qsa_seconds:.17g} "
+        f"sympy_median_seconds={median:.17g} "
+        f"sympy_over_qsa_median_time_ratio={ratio:.17g} "
+        f"speed_claim_accepted={str(speed_claim_accepted).lower()} "
+        f"checksum={checksums[0]}"
+    )
     print(json.dumps(result, sort_keys=True))
     return 0
 
