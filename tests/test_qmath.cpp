@@ -438,6 +438,81 @@ int main() {
     }
     require(rejected, "QMath bounded numerical evidence accepted a nonfinite error bound");
 
+    QStrictOrder strict_order;
+    const auto order_a_id = strict_order.add_symbol("event:A");
+    const auto order_b_id = strict_order.add_symbol("event:B");
+    const auto order_c_id = strict_order.add_symbol("event:C");
+    const auto order_d_id = strict_order.add_symbol("event:D");
+    require(strict_order.add_before(order_a_id, order_b_id) &&
+            strict_order.add_before(order_a_id, order_c_id) &&
+            strict_order.add_before(order_b_id, order_d_id) &&
+            strict_order.add_before(order_c_id, order_d_id),
+            "strict-order direct relation admission failed");
+    require(strict_order.relation(order_a_id, order_d_id) == QOrderRelation::Before &&
+            strict_order.relation(order_d_id, order_a_id) == QOrderRelation::After &&
+            strict_order.relation(order_b_id, order_c_id) == QOrderRelation::Unresolved &&
+            strict_order.relation(order_a_id, order_a_id) == QOrderRelation::Same,
+            "strict-order exact closure relation is wrong");
+    require(strict_order.unique_minimum() == order_a_id && strict_order.unique_maximum() == order_d_id,
+            "strict-order unique extrema are wrong");
+    const QStrictOrderReceipt strict_receipt = strict_order.receipt();
+    require(strict_receipt.symbols == 4U && strict_receipt.direct_relations == 4U &&
+            strict_receipt.closure_relations == 5U && strict_receipt.inferred_relations == 1U &&
+            strict_receipt.minima == 1U && strict_receipt.maxima == 1U &&
+            strict_receipt.exact && strict_receipt.acyclic,
+            "strict-order receipt lost exact closure structure");
+    require(!strict_order.add_before(order_a_id, order_d_id) && strict_order.direct_relation_count() == 4U,
+            "strict-order admitted a redundant transitive relation");
+
+    QStrictOrder strict_order_reordered;
+    const auto reordered_d = strict_order_reordered.add_symbol("event:D");
+    const auto reordered_c = strict_order_reordered.add_symbol("event:C");
+    const auto reordered_b = strict_order_reordered.add_symbol("event:B");
+    const auto reordered_a = strict_order_reordered.add_symbol("event:A");
+    require(strict_order_reordered.add_before(reordered_c, reordered_d) &&
+            strict_order_reordered.add_before(reordered_a, reordered_c) &&
+            strict_order_reordered.add_before(reordered_b, reordered_d) &&
+            strict_order_reordered.add_before(reordered_a, reordered_b),
+            "reordered strict-order fixture admission failed");
+    require(strict_order_reordered.canonical() == strict_order.canonical(),
+            "strict-order canonical identity depends on insertion order");
+
+    const std::string before_cycle = strict_order.canonical();
+    rejected = false;
+    try { (void)strict_order.add_before(order_d_id, order_a_id); } catch (const QMathError&) { rejected = true; }
+    require(rejected && strict_order.canonical() == before_cycle,
+            "strict-order cycle rejection mutated accepted state");
+
+    QStrictOrder ambiguous_order;
+    const auto ambiguous_a = ambiguous_order.add_symbol("left:A");
+    const auto ambiguous_b = ambiguous_order.add_symbol("left:B");
+    const auto ambiguous_c = ambiguous_order.add_symbol("right:C");
+    const auto ambiguous_d = ambiguous_order.add_symbol("right:D");
+    require(ambiguous_order.add_before(ambiguous_a, ambiguous_b) &&
+            ambiguous_order.add_before(ambiguous_c, ambiguous_d) &&
+            !ambiguous_order.unique_minimum().has_value() &&
+            !ambiguous_order.unique_maximum().has_value(),
+            "strict-order ambiguity did not remain explicit");
+
+    QStrictOrder capped_order(QStrictOrderConfig{2U, 2U, 8U});
+    (void)capped_order.add_symbol("cap:A");
+    (void)capped_order.add_symbol("cap:B");
+    rejected = false;
+    try { (void)capped_order.add_symbol("cap:C"); } catch (const QMathError&) { rejected = true; }
+    require(rejected, "strict-order symbol cap did not fail closed");
+
+    const QMathLanguageCompilation order_language = QMathLanguageCompiler::compile(strict_order);
+    require(order_language.receipt.route == QMathLanguageRoute::StrictOrder &&
+            order_language.receipt.evidence.fidelity == QMathFidelity::ExactStructural &&
+            order_language.receipt.evidence.exact_structure() && !order_language.receipt.evidence.exact_math() &&
+            order_language.receipt.sites == 4U && order_language.receipt.source_terms == 4U &&
+            order_language.receipt.support_terms == 5U && order_language.receipt.transform_ready &&
+            order_language.strict_order.has_value() &&
+            order_language.strict_order->canonical == strict_order.canonical() &&
+            order_language.receipt.dependencies == std::vector<std::string>({"event:A", "event:B", "event:C", "event:D"}) &&
+            std::string(qmath_language_route_name(order_language.receipt.route)) == "StrictOrder",
+            "QMath language lost strict-order identity, dependencies, or exact structural evidence");
+
     const QMathLanguageCompilation qubit_language = QMathLanguageCompiler::compile(XZ, math);
     require(qubit_language.receipt.route == QMathLanguageRoute::QubitWeylNative &&
             qubit_language.receipt.local_dimensions == std::vector<std::uint32_t>({2U}) &&

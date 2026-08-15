@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qclifford3.hpp"
+#include "qubit/qrelation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,7 @@ enum class QMathLanguageRoute : std::uint8_t {
     QubitWeylNative = 2,
     QutritCyclotomicWeyl = 3,
     QutritClifford = 4,
+    StrictOrder = 5,
 };
 
 enum class QMathFidelity : std::uint8_t {
@@ -143,6 +145,7 @@ struct QMathLanguageCompilation {
     std::optional<QWeylQubitLowering> qubit_lowering{};
     std::optional<QWeyl3Algebra> qutrit_algebra{};
     std::optional<QClifford3Map> qutrit_clifford{};
+    std::optional<QStrictOrderReceipt> strict_order{};
 };
 
 class QMathLanguageCompiler {
@@ -257,6 +260,23 @@ public:
         return result;
     }
 
+    [[nodiscard]] static QMathLanguageCompilation compile(const QStrictOrder& order) {
+        QMathLanguageCompilation result;
+        const QStrictOrderReceipt source = order.receipt();
+        result.receipt.route = QMathLanguageRoute::StrictOrder;
+        result.receipt.evidence = QMathEvidence::exact_structural();
+        result.receipt.dependencies.assign(order.symbols().begin(), order.symbols().end());
+        std::sort(result.receipt.dependencies.begin(), result.receipt.dependencies.end());
+        result.receipt.sites = source.symbols;
+        result.receipt.source_terms = source.direct_relations;
+        result.receipt.support_terms = source.closure_relations;
+        result.receipt.canonical = source.canonical;
+        result.receipt.exact = result.receipt.evidence.exact_structure();
+        result.receipt.transform_ready = true;
+        result.strict_order = source;
+        return result;
+    }
+
     [[nodiscard]] static bool compare_exact(
         const QRational& lhs,
         const QRational& rhs,
@@ -345,6 +365,8 @@ private:
             return "QutritCyclotomicWeyl";
         case QMathLanguageRoute::QutritClifford:
             return "QutritClifford";
+        case QMathLanguageRoute::StrictOrder:
+            return "StrictOrder";
     }
     return "unknown";
 }
