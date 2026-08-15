@@ -121,6 +121,8 @@ public:
                 return 0x514D415448000002ULL;
             case QMathLanguageRoute::HornLogic:
                 return 0x514D415448000003ULL;
+            case QMathLanguageRoute::ExactLinear:
+                return 0x514D415448000004ULL;
             default:
                 throw QMathError("QMath language route has no persistent fabric dependency contract");
         }

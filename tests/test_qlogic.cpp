@@ -283,6 +283,38 @@ int main() {
             solved.variable_type == length_scalar && solved.exact,
             "exact linear unique solve failed");
 
+    const QMathLanguageCompilation linear_language = QMathLanguageCompiler::compile(unique);
+    require(linear_language.receipt.route == QMathLanguageRoute::ExactLinear &&
+            linear_language.receipt.evidence.fidelity == QMathFidelity::ExactAlgebraic &&
+            linear_language.receipt.evidence.exact_math() &&
+            linear_language.receipt.type.has_value() && *linear_language.receipt.type == length_scalar &&
+            linear_language.receipt.dependencies == std::vector<std::string>({"x", "y"}) &&
+            linear_language.receipt.sites == 2U && linear_language.receipt.source_terms == 2U &&
+            linear_language.receipt.support_terms == 2U && linear_language.receipt.transform_ready &&
+            linear_language.receipt.exact && linear_language.exact_linear.has_value() &&
+            linear_language.exact_linear->canonical == solved.canonical &&
+            linear_language.exact_linear->solution == solved.solution &&
+            std::string(qmath_language_route_name(linear_language.receipt.route)) == "ExactLinear",
+            "QMath language lost exact linear type, dependencies, solution or evidence");
+
+    ExactRepresentationFabric linear_fabric(4U);
+    const std::vector<QMathFabricChannelBinding> linear_bindings{
+        {"x", 0U},
+        {"y", 1U},
+    };
+    const QMathFabricBindingReceipt linear_binding =
+        QMathRepresentationFabricBridge::bind(linear_fabric, linear_language, linear_bindings);
+    require(linear_binding.route == QMathLanguageRoute::ExactLinear &&
+            linear_binding.fidelity == QMathFidelity::ExactAlgebraic &&
+            linear_binding.dependency_type ==
+                QMathRepresentationFabricBridge::dependency_type(QMathLanguageRoute::ExactLinear) &&
+            linear_binding.declared_dependencies_before == 0U &&
+            linear_binding.declared_dependencies_after == 1U &&
+            linear_binding.component_merges == 0U && linear_binding.exact &&
+            linear_binding.source_canonical == solved.canonical &&
+            linear_fabric.stats().active_components == 1U,
+            "QMath fabric lost exact linear dependency identity or receipt");
+
     QExactLinearSystem reordered_linear({"x", "y"}, length_scalar);
     reordered_linear.add_equation(std::vector<QRational>{QRational(2), QRational(-1)}, QRational(1));
     reordered_linear.add_equation(std::vector<QRational>{QRational(1), QRational(1)}, QRational(5));

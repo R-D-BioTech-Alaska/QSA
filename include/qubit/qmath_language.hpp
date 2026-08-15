@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qclifford3.hpp"
+#include "qubit/qlinear.hpp"
 #include "qubit/qlogic.hpp"
 #include "qubit/qrelation.hpp"
 
@@ -24,6 +25,7 @@ enum class QMathLanguageRoute : std::uint8_t {
     StrictOrder = 5,
     AffineRelation = 6,
     HornLogic = 7,
+    ExactLinear = 8,
 };
 
 enum class QMathFidelity : std::uint8_t {
@@ -151,6 +153,7 @@ struct QMathLanguageCompilation {
     std::optional<QStrictOrderReceipt> strict_order{};
     std::optional<QAffineRelationReceipt> affine_relation{};
     std::optional<QHornLogicReceipt> horn_logic{};
+    std::optional<QExactLinearResult> exact_linear{};
 };
 
 class QMathLanguageCompiler {
@@ -318,6 +321,23 @@ public:
         return result;
     }
 
+    [[nodiscard]] static QMathLanguageCompilation compile(const QExactLinearSystem& system) {
+        QMathLanguageCompilation result;
+        const QExactLinearResult source = system.solve();
+        result.receipt.route = QMathLanguageRoute::ExactLinear;
+        result.receipt.evidence = QMathEvidence::exact_algebraic();
+        result.receipt.type = source.variable_type;
+        result.receipt.dependencies = source.variables;
+        result.receipt.sites = source.variables.size();
+        result.receipt.source_terms = source.equations;
+        result.receipt.support_terms = source.rank;
+        result.receipt.canonical = source.canonical;
+        result.receipt.exact = source.exact && result.receipt.evidence.exact_math();
+        result.receipt.transform_ready = true;
+        result.exact_linear = source;
+        return result;
+    }
+
     [[nodiscard]] static bool compare_exact(
         const QRational& lhs,
         const QRational& rhs,
@@ -412,6 +432,8 @@ private:
             return "AffineRelation";
         case QMathLanguageRoute::HornLogic:
             return "HornLogic";
+        case QMathLanguageRoute::ExactLinear:
+            return "ExactLinear";
     }
     return "unknown";
 }
