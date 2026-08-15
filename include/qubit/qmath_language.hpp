@@ -1,6 +1,7 @@
 #pragma once
 
 #include "qubit/qclifford3.hpp"
+#include "qubit/qlogic.hpp"
 #include "qubit/qrelation.hpp"
 
 #include <algorithm>
@@ -22,6 +23,7 @@ enum class QMathLanguageRoute : std::uint8_t {
     QutritClifford = 4,
     StrictOrder = 5,
     AffineRelation = 6,
+    HornLogic = 7,
 };
 
 enum class QMathFidelity : std::uint8_t {
@@ -148,6 +150,7 @@ struct QMathLanguageCompilation {
     std::optional<QClifford3Map> qutrit_clifford{};
     std::optional<QStrictOrderReceipt> strict_order{};
     std::optional<QAffineRelationReceipt> affine_relation{};
+    std::optional<QHornLogicReceipt> horn_logic{};
 };
 
 class QMathLanguageCompiler {
@@ -297,6 +300,24 @@ public:
         return result;
     }
 
+    [[nodiscard]] static QMathLanguageCompilation compile(const QHornLogic& logic) {
+        QMathLanguageCompilation result;
+        const QHornLogicReceipt source = logic.receipt();
+        result.receipt.route = QMathLanguageRoute::HornLogic;
+        result.receipt.evidence = QMathEvidence::exact_structural();
+        result.receipt.type = QMathType::scalar_type(QMathScalar::Boolean);
+        result.receipt.dependencies.assign(logic.atoms().begin(), logic.atoms().end());
+        std::sort(result.receipt.dependencies.begin(), result.receipt.dependencies.end());
+        result.receipt.sites = source.atoms;
+        result.receipt.source_terms = source.input_facts + source.rules;
+        result.receipt.support_terms = source.known_literals;
+        result.receipt.canonical = source.canonical;
+        result.receipt.exact = result.receipt.evidence.exact_structure();
+        result.receipt.transform_ready = true;
+        result.horn_logic = source;
+        return result;
+    }
+
     [[nodiscard]] static bool compare_exact(
         const QRational& lhs,
         const QRational& rhs,
@@ -389,6 +410,8 @@ private:
             return "StrictOrder";
         case QMathLanguageRoute::AffineRelation:
             return "AffineRelation";
+        case QMathLanguageRoute::HornLogic:
+            return "HornLogic";
     }
     return "unknown";
 }
