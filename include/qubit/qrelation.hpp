@@ -338,6 +338,314 @@ private:
     }
 };
 
+struct QAffineRelationConfig {
+    std::size_t max_symbols{1U << 16U};
+    std::size_t max_dimensions{64U};
+    std::size_t max_independent_constraints{1U << 20U};
+};
+
+struct QAffineRelationReceipt {
+    std::size_t dimensions{0U};
+    std::size_t symbols{0U};
+    std::size_t independent_constraints{0U};
+    std::size_t components{0U};
+    QPhysicalDimension coordinate_dimension{};
+    std::string canonical{};
+    bool exact{true};
+    bool consistent{true};
+};
+
+class QAffineRelationSpace {
+public:
+    using SymbolId = std::size_t;
+    using Displacement = std::vector<QRational>;
+
+    explicit QAffineRelationSpace(
+        std::size_t dimensions,
+        QPhysicalDimension coordinate_dimension = {},
+        QAffineRelationConfig config = {})
+        : dimensions_(dimensions),
+          coordinate_dimension_(std::move(coordinate_dimension)),
+          config_(config) {
+        if (dimensions_ == 0U || dimensions_ > config_.max_dimensions ||
+            config_.max_symbols == 0U || config_.max_independent_constraints == 0U) {
+            throw QMathError("affine-relation limits are invalid");
+        }
+    }
+
+    [[nodiscard]] SymbolId add_symbol(std::string identity) {
+        if (identity.empty()) throw QMathError("affine-relation symbol identity is empty");
+        const auto found = index_.find(identity);
+        if (found != index_.end()) return found->second;
+        if (symbols_.size() >= config_.max_symbols) {
+            throw QMathError("affine-relation symbol cap exceeded");
+        }
+        const SymbolId id = symbols_.size();
+        symbols_.push_back(std::move(identity));
+        index_.emplace(symbols_.back(), id);
+        parent_.push_back(id);
+        rank_.push_back(0U);
+        potential_.insert(potential_.end(), dimensions_, QRational(0));
+        return id;
+    }
+
+    [[nodiscard]] std::optional<SymbolId> find_symbol(std::string_view identity) const {
+        const auto found = index_.find(std::string(identity));
+        if (found == index_.end()) return std::nullopt;
+        return found->second;
+    }
+
+    [[nodiscard]] bool add_difference(
+        SymbolId lhs,
+        SymbolId rhs,
+        std::span<const QRational> lhs_minus_rhs) {
+        require_symbol(lhs);
+        require_symbol(rhs);
+        require_displacement(lhs_minus_rhs);
+        const Trace left = trace(lhs);
+        const Trace right = trace(rhs);
+        if (left.root == right.root) {
+            if (subtract(left.offset, right.offset) != Displacement(lhs_minus_rhs.begin(), lhs_minus_rhs.end())) {
+                throw QMathError("affine-relation constraint contradicts accepted state");
+            }
+            return false;
+        }
+        if (independent_constraints_ >= config_.max_independent_constraints) {
+            throw QMathError("affine-relation independent-constraint cap exceeded");
+        }
+        const Displacement delta(lhs_minus_rhs.begin(), lhs_minus_rhs.end());
+        Displacement root_delta = add(subtract(delta, left.offset), right.offset);
+        if (rank_[left.root] <= rank_[right.root]) {
+            parent_[left.root] = right.root;
+            set_potential(left.root, root_delta);
+            if (rank_[left.root] == rank_[right.root]) ++rank_[right.root];
+        } else {
+            parent_[right.root] = left.root;
+            set_potential(right.root, negate(root_delta));
+        }
+        ++independent_constraints_;
+        return true;
+    }
+
+    [[nodiscard]] bool add_difference(
+        std::string_view lhs,
+        std::string_view rhs,
+        std::span<const QRational> lhs_minus_rhs) {
+        return add_difference(require_symbol(lhs), require_symbol(rhs), lhs_minus_rhs);
+    }
+
+    [[nodiscard]] std::optional<Displacement> displacement(SymbolId lhs, SymbolId rhs) const {
+        require_symbol(lhs);
+        require_symbol(rhs);
+        const Trace left = trace(lhs);
+        const Trace right = trace(rhs);
+        if (left.root != right.root) return std::nullopt;
+        return subtract(left.offset, right.offset);
+    }
+
+    [[nodiscard]] std::optional<Displacement> displacement(
+        std::string_view lhs,
+        std::string_view rhs) const {
+        return displacement(require_symbol(lhs), require_symbol(rhs));
+    }
+
+    [[nodiscard]] bool connected(SymbolId lhs, SymbolId rhs) const {
+        require_symbol(lhs);
+        require_symbol(rhs);
+        return trace(lhs).root == trace(rhs).root;
+    }
+
+    [[nodiscard]] const std::string& symbol(SymbolId id) const {
+        require_symbol(id);
+        return symbols_[id];
+    }
+
+    [[nodiscard]] std::span<const std::string> symbols() const noexcept {
+        return symbols_;
+    }
+
+    [[nodiscard]] std::size_t dimensions() const noexcept {
+        return dimensions_;
+    }
+
+    [[nodiscard]] std::size_t symbol_count() const noexcept {
+        return symbols_.size();
+    }
+
+    [[nodiscard]] std::size_t independent_constraint_count() const noexcept {
+        return independent_constraints_;
+    }
+
+    [[nodiscard]] const QPhysicalDimension& coordinate_dimension() const noexcept {
+        return coordinate_dimension_;
+    }
+
+    [[nodiscard]] QMathType coordinate_type() const {
+        return QMathType{
+            QMathScalar::Rational,
+            QMathSpace::Vector,
+            {dimensions_},
+            coordinate_dimension_,
+        };
+    }
+
+    [[nodiscard]] std::string canonical() const {
+        return canonical_state().first;
+    }
+
+    [[nodiscard]] QAffineRelationReceipt receipt() const {
+        const auto [identity, components] = canonical_state();
+        return QAffineRelationReceipt{
+            dimensions_,
+            symbols_.size(),
+            independent_constraints_,
+            components,
+            coordinate_dimension_,
+            identity,
+            true,
+            true,
+        };
+    }
+
+    [[nodiscard]] std::size_t estimated_bytes() const noexcept {
+        std::size_t bytes = sizeof(*this) +
+                            symbols_.capacity() * sizeof(std::string) +
+                            parent_.capacity() * sizeof(SymbolId) +
+                            rank_.capacity() * sizeof(std::uint8_t) +
+                            potential_.capacity() * sizeof(QRational);
+        for (const std::string& value : symbols_) bytes += value.capacity();
+        return bytes;
+    }
+
+private:
+    struct Trace {
+        SymbolId root{0U};
+        Displacement offset{};
+    };
+
+    std::size_t dimensions_{0U};
+    QPhysicalDimension coordinate_dimension_{};
+    QAffineRelationConfig config_{};
+    std::vector<std::string> symbols_{};
+    std::unordered_map<std::string, SymbolId> index_{};
+    std::vector<SymbolId> parent_{};
+    std::vector<std::uint8_t> rank_{};
+    std::vector<QRational> potential_{};
+    std::size_t independent_constraints_{0U};
+
+    void require_symbol(SymbolId id) const {
+        if (id >= symbols_.size()) throw QMathError("affine-relation symbol id is out of range");
+    }
+
+    [[nodiscard]] SymbolId require_symbol(std::string_view identity) const {
+        const std::optional<SymbolId> id = find_symbol(identity);
+        if (!id.has_value()) throw QMathError("affine-relation symbol identity is unknown");
+        return *id;
+    }
+
+    void require_displacement(std::span<const QRational> value) const {
+        if (value.size() != dimensions_) {
+            throw QMathError("affine-relation displacement dimension mismatch");
+        }
+    }
+
+    [[nodiscard]] Trace trace(SymbolId id) const {
+        Displacement offset(dimensions_, QRational(0));
+        SymbolId current = id;
+        std::size_t steps = 0U;
+        while (parent_[current] != current) {
+            for (std::size_t axis = 0U; axis < dimensions_; ++axis) {
+                offset[axis] = offset[axis] + potential_[current * dimensions_ + axis];
+            }
+            current = parent_[current];
+            if (++steps > symbols_.size()) {
+                throw QMathError("affine-relation parent structure is cyclic");
+            }
+        }
+        return Trace{current, std::move(offset)};
+    }
+
+    void set_potential(SymbolId id, std::span<const QRational> value) {
+        require_displacement(value);
+        for (std::size_t axis = 0U; axis < dimensions_; ++axis) {
+            potential_[id * dimensions_ + axis] = value[axis];
+        }
+    }
+
+    [[nodiscard]] static Displacement add(
+        std::span<const QRational> lhs,
+        std::span<const QRational> rhs) {
+        Displacement result(lhs.size());
+        for (std::size_t axis = 0U; axis < lhs.size(); ++axis) {
+            result[axis] = lhs[axis] + rhs[axis];
+        }
+        return result;
+    }
+
+    [[nodiscard]] static Displacement subtract(
+        std::span<const QRational> lhs,
+        std::span<const QRational> rhs) {
+        Displacement result(lhs.size());
+        for (std::size_t axis = 0U; axis < lhs.size(); ++axis) {
+            result[axis] = lhs[axis] - rhs[axis];
+        }
+        return result;
+    }
+
+    [[nodiscard]] static Displacement negate(std::span<const QRational> value) {
+        Displacement result(value.size());
+        for (std::size_t axis = 0U; axis < value.size(); ++axis) {
+            result[axis] = QRational(0) - value[axis];
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::pair<std::string, std::size_t> canonical_state() const {
+        std::vector<SymbolId> order(symbols_.size());
+        std::iota(order.begin(), order.end(), 0U);
+        std::sort(order.begin(), order.end(), [&](SymbolId lhs, SymbolId rhs) {
+            return symbols_[lhs] < symbols_[rhs];
+        });
+
+        const SymbolId none = std::numeric_limits<SymbolId>::max();
+        std::vector<SymbolId> anchor_for_root(symbols_.size(), none);
+        std::vector<Trace> traces;
+        traces.reserve(symbols_.size());
+        for (SymbolId id = 0U; id < symbols_.size(); ++id) traces.push_back(trace(id));
+        for (const SymbolId id : order) {
+            const SymbolId root = traces[id].root;
+            if (anchor_for_root[root] == none) anchor_for_root[root] = id;
+        }
+
+        std::size_t components = 0U;
+        for (const SymbolId anchor : anchor_for_root) {
+            if (anchor != none) ++components;
+        }
+
+        std::string out = "affine-relation:v1:d=" + std::to_string(dimensions_) +
+                          ":u=" + coordinate_dimension_.canonical() + ':';
+        for (const SymbolId id : order) {
+            const Trace& item = traces[id];
+            const SymbolId anchor = anchor_for_root[item.root];
+            const Displacement relative = subtract(item.offset, traces[anchor].offset);
+            out += std::to_string(symbols_[id].size());
+            out += ':';
+            out += symbols_[id];
+            out += '@';
+            out += std::to_string(symbols_[anchor].size());
+            out += ':';
+            out += symbols_[anchor];
+            out += '=';
+            for (std::size_t axis = 0U; axis < dimensions_; ++axis) {
+                if (axis != 0U) out += ',';
+                out += relative[axis].canonical();
+            }
+            out += ';';
+        }
+        return {std::move(out), components};
+    }
+};
+
 [[nodiscard]] inline const char* qorder_relation_name(QOrderRelation relation) noexcept {
     switch (relation) {
         case QOrderRelation::Same:
