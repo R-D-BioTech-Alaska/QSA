@@ -31,6 +31,7 @@ struct PhaseGraphCoherenceResult {
 
 struct PhaseGraphPauliConfig {
     std::size_t max_flip_qubits{16};
+    std::size_t max_enumerated_assignments{1U << 16U};
 };
 
 struct PhaseGraphPauliReceipt {
