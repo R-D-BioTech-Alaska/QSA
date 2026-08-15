@@ -1,4 +1,4 @@
-#include "qubit/qmath_language.hpp"
+#include "qubit/qmath_fabric.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -152,5 +152,122 @@ int main() {
     }
     require(rejected, "Horn rule cap did not fail closed");
 
-    std::cout << "QHorn logic tests passed\n";
+    QStrictOrder order;
+    const auto order_a = order.add_symbol("A");
+    const auto order_b = order.add_symbol("B");
+    const auto order_c = order.add_symbol("C");
+    require(order.add_before(order_a, order_b) && order.add_before(order_b, order_c),
+            "fabric strict-order fixture was not admitted");
+    const QMathLanguageCompilation order_language = QMathLanguageCompiler::compile(order);
+
+    ExactRepresentationFabric fabric(8U);
+    const std::vector<QMathFabricChannelBinding> order_bindings{
+        {"A", 0U},
+        {"B", 1U},
+        {"C", 2U},
+    };
+    const QMathFabricBindingReceipt order_binding =
+        QMathRepresentationFabricBridge::bind(fabric, order_language, order_bindings);
+    require(order_binding.route == QMathLanguageRoute::StrictOrder &&
+            order_binding.dependency_type == QMathRepresentationFabricBridge::dependency_type(QMathLanguageRoute::StrictOrder) &&
+            order_binding.declared_dependencies_before == 0U &&
+            order_binding.declared_dependencies_after == 1U &&
+            !order_binding.prior_component_known && !order_binding.numerical_generation_preserved &&
+            order_binding.exact && order_binding.structural_dependency &&
+            order_binding.source_canonical == order_language.receipt.canonical,
+            "QMath fabric lost strict-order binding identity or first-bind receipt");
+
+    QHornLogic shared_logic;
+    const auto logic_a = shared_logic.add_atom("A");
+    const auto logic_b = shared_logic.add_atom("B");
+    const auto logic_c = shared_logic.add_atom("C");
+    require(shared_logic.add_fact(logic_a, true), "fabric Horn fixture fact was not admitted");
+    const std::vector<QHornLogic::Literal> logic_rule_ab{{logic_a, true}};
+    const std::vector<QHornLogic::Literal> logic_rule_bc{{logic_b, true}};
+    require(shared_logic.add_rule(logic_rule_ab, {logic_b, true}) &&
+            shared_logic.add_rule(logic_rule_bc, {logic_c, true}),
+            "fabric Horn fixture rules were not admitted");
+    const QMathLanguageCompilation shared_logic_language = QMathLanguageCompiler::compile(shared_logic);
+    const QMathFabricBindingReceipt logic_binding =
+        QMathRepresentationFabricBridge::bind(fabric, shared_logic_language, order_bindings);
+    require(logic_binding.route == QMathLanguageRoute::HornLogic &&
+            logic_binding.component == order_binding.component &&
+            logic_binding.prior_component_known && logic_binding.numerical_generation_preserved &&
+            logic_binding.numerical_generation == order_binding.numerical_generation &&
+            logic_binding.generation > order_binding.generation &&
+            logic_binding.component_merges == 0U &&
+            logic_binding.declared_dependencies_after == 2U,
+            "QMath fabric metadata-only typed dependency changed numerical generation");
+
+    QAffineRelationSpace separate_relation(2U);
+    const auto relation_x = separate_relation.add_symbol("X");
+    const auto relation_y = separate_relation.add_symbol("Y");
+    const QAffineRelationSpace::Displacement relation_delta{QRational(1), QRational(-1)};
+    require(separate_relation.add_difference(relation_x, relation_y, relation_delta),
+            "fabric affine fixture relation was not admitted");
+    const QMathLanguageCompilation relation_language = QMathLanguageCompiler::compile(separate_relation);
+    const std::vector<QMathFabricChannelBinding> relation_bindings{
+        {"X", 3U},
+        {"Y", 4U},
+    };
+    const QMathFabricBindingReceipt relation_binding =
+        QMathRepresentationFabricBridge::bind(fabric, relation_language, relation_bindings);
+    require(relation_binding.component != order_binding.component &&
+            fabric.stats().active_components == 2U && relation_binding.component_merges == 0U,
+            "QMath fabric failed to preserve independent mathematical islands");
+
+    QHornLogic bridge_logic;
+    const auto bridge_a = bridge_logic.add_atom("A");
+    const auto bridge_x = bridge_logic.add_atom("X");
+    require(bridge_logic.add_fact(bridge_a, true), "fabric bridge fact was not admitted");
+    const std::vector<QHornLogic::Literal> bridge_rule{{bridge_a, true}};
+    require(bridge_logic.add_rule(bridge_rule, {bridge_x, true}),
+            "fabric bridge rule was not admitted");
+    const QMathLanguageCompilation bridge_language = QMathLanguageCompiler::compile(bridge_logic);
+    const std::vector<QMathFabricChannelBinding> bridge_bindings{
+        {"A", 0U},
+        {"X", 3U},
+    };
+    const QMathFabricBindingReceipt bridge_binding =
+        QMathRepresentationFabricBridge::bind(fabric, bridge_language, bridge_bindings);
+    require(bridge_binding.component_merges == 1U &&
+            !bridge_binding.prior_component_known && !bridge_binding.numerical_generation_preserved &&
+            fabric.stats().active_components == 1U,
+            "QMath fabric did not merge exactly the typed cross-island dependency closure");
+
+    rejected = false;
+    try {
+        (void)QMathRepresentationFabricBridge::bind(fabric, order_language, order_bindings);
+    } catch (const QMathError&) {
+        rejected = true;
+    }
+    require(rejected, "QMath fabric accepted a duplicate typed dependency binding");
+
+    const std::vector<QMathFabricChannelBinding> aliased_bindings{
+        {"A", 5U},
+        {"B", 5U},
+        {"C", 6U},
+    };
+    rejected = false;
+    try {
+        ExactRepresentationFabric alias_fabric(8U);
+        (void)QMathRepresentationFabricBridge::bind(alias_fabric, order_language, aliased_bindings);
+    } catch (const QMathError&) {
+        rejected = true;
+    }
+    require(rejected, "QMath fabric accepted an aliased semantic dependency channel mapping");
+
+    QMathArena symbolic_math;
+    const auto symbolic = symbolic_math.symbol("z", QMathType::scalar_type());
+    const QMathLanguageCompilation symbolic_language = QMathLanguageCompiler::compile(symbolic, symbolic_math);
+    const std::vector<QMathFabricChannelBinding> symbolic_bindings{{"z", 7U}};
+    rejected = false;
+    try {
+        (void)QMathRepresentationFabricBridge::bind(fabric, symbolic_language, symbolic_bindings);
+    } catch (const QMathError&) {
+        rejected = true;
+    }
+    require(rejected, "QMath fabric accepted an unsupported symbolic route as a dependency fabric program");
+
+    std::cout << "QHorn logic and mathematical fabric tests passed\n";
 }
