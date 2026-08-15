@@ -21,6 +21,7 @@ enum class QMathLanguageRoute : std::uint8_t {
     QutritCyclotomicWeyl = 3,
     QutritClifford = 4,
     StrictOrder = 5,
+    AffineRelation = 6,
 };
 
 enum class QMathFidelity : std::uint8_t {
@@ -146,6 +147,7 @@ struct QMathLanguageCompilation {
     std::optional<QWeyl3Algebra> qutrit_algebra{};
     std::optional<QClifford3Map> qutrit_clifford{};
     std::optional<QStrictOrderReceipt> strict_order{};
+    std::optional<QAffineRelationReceipt> affine_relation{};
 };
 
 class QMathLanguageCompiler {
@@ -277,6 +279,24 @@ public:
         return result;
     }
 
+    [[nodiscard]] static QMathLanguageCompilation compile(const QAffineRelationSpace& relation) {
+        QMathLanguageCompilation result;
+        const QAffineRelationReceipt source = relation.receipt();
+        result.receipt.route = QMathLanguageRoute::AffineRelation;
+        result.receipt.evidence = QMathEvidence::exact_algebraic();
+        result.receipt.type = relation.coordinate_type();
+        result.receipt.dependencies.assign(relation.symbols().begin(), relation.symbols().end());
+        std::sort(result.receipt.dependencies.begin(), result.receipt.dependencies.end());
+        result.receipt.sites = source.symbols;
+        result.receipt.source_terms = source.independent_constraints;
+        result.receipt.support_terms = source.symbols - source.components;
+        result.receipt.canonical = source.canonical;
+        result.receipt.exact = result.receipt.evidence.exact_math();
+        result.receipt.transform_ready = true;
+        result.affine_relation = source;
+        return result;
+    }
+
     [[nodiscard]] static bool compare_exact(
         const QRational& lhs,
         const QRational& rhs,
@@ -367,6 +387,8 @@ private:
             return "QutritClifford";
         case QMathLanguageRoute::StrictOrder:
             return "StrictOrder";
+        case QMathLanguageRoute::AffineRelation:
+            return "AffineRelation";
     }
     return "unknown";
 }
