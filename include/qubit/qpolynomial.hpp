@@ -262,9 +262,8 @@ public:
         left.require_same_variable(right);
         const QPolynomialConfig bounded = restrictive(left.config_, right.config_);
         if (left.is_zero() || right.is_zero()) return QPolynomial(left.variable_, {}, bounded);
-        if (left.degree() > bounded.max_degree ||
-            right.degree() > bounded.max_degree - std::min(right.degree(), bounded.max_degree) ||
-            left.degree() + right.degree() > bounded.max_degree) {
+        if (left.degree() > bounded.max_degree || right.degree() > bounded.max_degree ||
+            left.degree() > bounded.max_degree - right.degree()) {
             throw QMathError("polynomial multiplication exceeds configured degree cap");
         }
         std::vector<QRational> result(
