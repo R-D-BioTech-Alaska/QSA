@@ -18,6 +18,8 @@
 
 **QSA keeps quantum work in the smallest exact representation the mathematics permits.**
 
+**Massive upgrade next week.**
+
 </div>
 
 ---
