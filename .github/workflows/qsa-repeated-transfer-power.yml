@@ -1,0 +1,147 @@
+name: QSA Exact Repeated Transfer Power
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qtransfer_power.hpp"
+      - "tests/test_repeated_transfer_power.cpp"
+      - "benchmarks/repeated_transfer_power.cpp"
+      - ".github/workflows/qsa-repeated-transfer-power.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transfer-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build transfer driver
+        shell: bash
+        run: |
+          mkdir -p transfer-driver
+          cat > transfer-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactRepeatedTransferCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(repeated_transfer_tests ../tests/test_repeated_transfer_power.cpp)
+          target_link_libraries(repeated_transfer_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(repeated_transfer_tests PRIVATE /W4)
+          else()
+              target_compile_options(repeated_transfer_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME repeated_transfer_tests COMMAND repeated_transfer_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S transfer-driver -B transfer-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build transfer-build --config Release --target repeated_transfer_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir transfer-build -C Release --output-on-failure
+
+  transfer-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p transfer-driver
+          cat > transfer-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactRepeatedTransferSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(repeated_transfer_tests ../tests/test_repeated_transfer_power.cpp)
+          target_link_libraries(repeated_transfer_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S transfer-driver -B transfer-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build transfer-sanitize-build --target repeated_transfer_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./transfer-sanitize-build/repeated_transfer_tests
+
+  transfer-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p transfer-driver
+          cat > transfer-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactRepeatedTransferEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(repeated_transfer_benchmark ../benchmarks/repeated_transfer_power.cpp)
+          target_link_libraries(repeated_transfer_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S transfer-driver -B transfer-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build transfer-evidence-build --target repeated_transfer_benchmark --parallel 2
+      - name: Run transfer carrier
+        run: |
+          set -o pipefail
+          ./transfer-evidence-build/repeated_transfer_benchmark | tee repeated-transfer-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("repeated-transfer-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          for b in (8, 12, 16, 18, 20):
+              assert int(values[f"b{b}_repetitions"]) == 1 << b
+              assert float(values[f"b{b}_powered_seconds"]) > 0.0
+              assert float(values[f"b{b}_sequential_seconds"]) > 0.0
+              assert float(values[f"b{b}_max_error"]) < 1e-8
+              assert int(values[f"b{b}_physical"]) == 1
+          assert float(values["maximum_sequential_error"]) < 1e-8
+          assert float(values["b20_speedup"]) > 50.0
+          assert float(values["b20_scalar_work_ratio"]) > 10000.0
+          assert int(values["huge_description_bits"]) == 256
+          assert int(values["huge_repetitions_log2"]) == 256
+          assert int(values["huge_matrix_multiplications"]) == 257
+          assert int(values["huge_scalar_multiply_accumulates"]) == 16464
+          assert int(values["huge_physical"]) == 1
+          assert int(values["huge_trace_coordinate_exact"]) == 1
+          assert int(values["expanded_schedule_materialized"]) == 0
+          assert int(values["varying_schedule_rejected"]) == 1
+          PY
+      - name: Hash evidence
+        run: sha256sum repeated-transfer-evidence.txt | tee repeated-transfer-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-repeated-transfer-evidence
+          path: |
+            repeated-transfer-evidence.txt
+            repeated-transfer-evidence.sha256

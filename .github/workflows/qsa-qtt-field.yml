@@ -1,0 +1,108 @@
+name: QSA Exact QTT Field Hamiltonian
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qqtt.hpp"
+      - "include/qubit/qqtt_operator.hpp"
+      - "include/qubit/qqtt_field.hpp"
+      - "tests/test_exact_qtt_field.cpp"
+      - "benchmarks/qtt_field.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-qtt-field.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qtt-field-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact QTT field test
+        shell: bash
+        run: |
+          mkdir -p qtt-field-driver
+          cat > qtt-field-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAQTTFieldCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(qtt_field_tests ../tests/test_exact_qtt_field.cpp)
+          target_include_directories(qtt_field_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(qtt_field_tests PRIVATE /W4)
+          else()
+              target_compile_options(qtt_field_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME qtt_field_tests COMMAND qtt_field_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S qtt-field-driver -B qtt-field-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build qtt-field-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir qtt-field-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  qtt-field-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_exact_qtt_field.cpp -o qtt-field-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./qtt-field-sanitize
+
+  qtt-field-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/qtt_field.cpp -o qtt-field-benchmark
+      - name: Run structured field carrier
+        run: |
+          set -o pipefail
+          ./qtt-field-benchmark | tee qtt-field-evidence.txt
+      - name: Enforce exact bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("qtt-field-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          def number(name):
+              return float(values[name])
+          assert int(values["qtt_field_bits"]) == 4096
+          assert int(values["qtt_field_logical_domain_exponent"]) == 4096
+          assert int(values["qtt_field_linear_operator_rank"]) == 4
+          assert int(values["qtt_field_rhs_rank"]) == 5
+          assert int(values["qtt_field_linear_operator_scalars"]) < 300000
+          assert int(values["qtt_field_rhs_descriptor_scalars"]) < 300000
+          assert number("qtt_field_selected_error") <= 1e-8
+          assert number("qtt_field_build_ms") < 10000.0
+          assert number("qtt_field_apply_ms") < 10000.0
+          assert number("qtt_field_query_ms") < 10000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum qtt-field-evidence.txt | tee qtt-field-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-qtt-field-evidence
+          path: |
+            qtt-field-evidence.txt
+            qtt-field-evidence.sha256

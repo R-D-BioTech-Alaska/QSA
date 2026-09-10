@@ -1,0 +1,62 @@
+name: QSA Exact QTT
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qqtt.hpp"
+      - "tests/test_exact_qtt.cpp"
+      - "benchmarks/qtt.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-qtt.yml"
+      - ".github/workflows/qsa-qtt-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qtt-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create standalone QTT build
+        shell: bash
+        run: |
+          mkdir -p qtt-driver
+          cat > qtt-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactQTTCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(qtt_tests ../tests/test_exact_qtt.cpp)
+          target_include_directories(qtt_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(qtt_tests PRIVATE /W4)
+          else()
+              target_compile_options(qtt_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME qtt_tests COMMAND qtt_tests)
+          EOF
+      - name: Configure
+        run: cmake -S qtt-driver -B qtt-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build qtt-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir qtt-build -C Release --output-on-failure
+
+  qtt-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_exact_qtt.cpp -o exact-qtt-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./exact-qtt-sanitize

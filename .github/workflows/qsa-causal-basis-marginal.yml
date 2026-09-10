@@ -1,0 +1,167 @@
+name: QSA Causal Basis Marginal Broker
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qlightcone.hpp"
+      - "include/qubit/qcausal_basis_marginal.hpp"
+      - "include/qubit/qhpath_basis_born.hpp"
+      - "include/qubit/qfactor.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_causal_basis_marginal.cpp"
+      - "benchmarks/causal_basis_marginal.cpp"
+      - ".github/workflows/qsa-causal-basis-marginal.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  causal-basis-marginal-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build causal marginal broker driver
+        shell: bash
+        run: |
+          mkdir -p causal-basis-marginal-driver
+          cat > causal-basis-marginal-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSACausalBasisMarginalCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(causal_basis_marginal_tests ../tests/test_causal_basis_marginal.cpp)
+          target_link_libraries(causal_basis_marginal_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(causal_basis_marginal_tests PRIVATE /W4)
+          else()
+              target_compile_options(causal_basis_marginal_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME causal_basis_marginal_tests COMMAND causal_basis_marginal_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S causal-basis-marginal-driver -B causal-basis-marginal-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build causal-basis-marginal-build --config Release --target causal_basis_marginal_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir causal-basis-marginal-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  causal-basis-marginal-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p causal-basis-marginal-driver
+          cat > causal-basis-marginal-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSACausalBasisMarginalSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(causal_basis_marginal_tests ../tests/test_causal_basis_marginal.cpp)
+          target_link_libraries(causal_basis_marginal_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S causal-basis-marginal-driver -B causal-basis-marginal-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build causal-basis-marginal-sanitize-build --target causal_basis_marginal_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./causal-basis-marginal-sanitize-build/causal_basis_marginal_tests
+
+  causal-basis-marginal-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p causal-basis-marginal-driver
+          cat > causal-basis-marginal-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSACausalBasisMarginalEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(causal_basis_marginal_benchmark ../benchmarks/causal_basis_marginal.cpp)
+          target_link_libraries(causal_basis_marginal_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S causal-basis-marginal-driver -B causal-basis-marginal-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build causal-basis-marginal-evidence-build --target causal_basis_marginal_benchmark --parallel 2
+      - name: Run causal marginal broker carrier
+        run: |
+          set -o pipefail
+          ./causal-basis-marginal-evidence-build/causal_basis_marginal_benchmark | tee causal-basis-marginal-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("causal-basis-marginal-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["causal_broker_full_qubits"]) == 10000
+          assert int(values["causal_broker_full_operations"]) == 112500
+          assert int(values["causal_broker_island_count"]) == 2500
+          assert int(values["causal_broker_active_qubits"]) == 4
+          assert int(values["causal_broker_active_operations"]) == 45
+          assert float(values["causal_broker_qubit_reduction_ratio"]) == 2500.0
+          assert float(values["causal_broker_operation_reduction_ratio"]) == 2500.0
+          assert int(values["causal_broker_route"]) == 0
+          assert int(values["causal_broker_local_eligible"]) == 1
+          assert int(values["causal_broker_local_worst_case_amplitudes"]) == 16
+          assert int(values["causal_broker_local_worst_case_dense_bytes"]) == 16 * 16
+          assert 0 < int(values["causal_broker_local_state_bytes"]) < 1024 * 1024
+          assert 0 < int(values["causal_broker_workspace_bytes"]) < 1024 * 1024
+          assert 0 < int(values["causal_broker_hpath_plan_bytes"]) < 64 * 1024 * 1024
+          assert 0 < int(values["causal_broker_hpath_workspace_bytes"]) < 64 * 1024 * 1024
+          assert int(values["causal_broker_output_entries"]) == 16
+          total = float(values["causal_broker_probability_sum"])
+          assert math.isfinite(total) and abs(total - 1.0) <= 1e-9
+          assert float(values["causal_broker_max_abs_imaginary"]) <= 1e-12
+          assert float(values["causal_broker_max_hpath_error"]) <= 1e-10
+          assert 0.0 < float(values["causal_broker_setup_ms"]) < 10000.0
+          assert 0.0 < float(values["causal_broker_hpath_setup_ms"]) < 10000.0
+          assert 0.0 < float(values["causal_broker_query_ms"]) < 10000.0
+          assert 0.0 < float(values["causal_broker_hpath_query_ms"]) < 10000.0
+          assert math.isfinite(float(values["causal_broker_setup_speed_ratio"]))
+          assert math.isfinite(float(values["causal_broker_query_speed_ratio"]))
+          assert int(values["dense_full_state_materialized"]) == 0
+          assert int(values["full_born_graph_materialized"]) == 0
+          assert int(values["explicit_output_enumeration_performed"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum causal-basis-marginal-evidence.txt | tee causal-basis-marginal-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-causal-basis-marginal-evidence
+          path: |
+            causal-basis-marginal-evidence.txt
+            causal-basis-marginal-evidence.sha256

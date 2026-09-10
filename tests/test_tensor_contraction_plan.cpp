@@ -28,6 +28,16 @@ void require(bool condition, const std::string& message) {
     }
 }
 
+[[nodiscard]] bool same_certificate(
+    const TensorContractionStats& first,
+    const TensorContractionStats& second) noexcept {
+    return first.source_operations == second.source_operations &&
+           first.source_factors == second.source_factors &&
+           first.eliminated_variables == second.eliminated_variables &&
+           first.peak_union_variables == second.peak_union_variables &&
+           first.peak_contraction_entries == second.peak_contraction_entries;
+}
+
 Operation random_operation(std::mt19937_64& generator, std::size_t qubits) {
     Operation operation;
     operation.first = static_cast<QubitId>(generator() % qubits);
@@ -73,9 +83,7 @@ int main() {
             const QComplex compiled = plan.amplitude(basis, workspace, &compiled_stats);
             require(qubit::almost_equal(direct, compiled, 1e-13),
                     "compiled Bell contraction disagrees with direct contraction");
-            require(direct_stats.peak_contraction_entries == compiled_stats.peak_contraction_entries &&
-                        direct_stats.peak_union_variables == compiled_stats.peak_union_variables &&
-                        direct_stats.eliminated_variables == compiled_stats.eliminated_variables,
+            require(same_certificate(direct_stats, compiled_stats),
                     "compiled Bell contraction changed its resource certificate");
         }
         require(plan.step_count() == plan.stats().eliminated_variables,
@@ -93,14 +101,21 @@ int main() {
                 tensor.apply(random_operation(generator, qubits));
             }
             const TensorContractionPlan plan = tensor.compile();
+            const TensorContractionPlan repeated_plan = tensor.compile();
+            require(same_certificate(plan.stats(), repeated_plan.stats()) &&
+                        plan.step_count() == repeated_plan.step_count(),
+                    "incremental contraction planning is not deterministic");
             TensorContractionWorkspace workspace = plan.workspace();
             for (std::size_t query = 0; query < 16U; ++query) {
                 const std::uint64_t basis = generator() & 63U;
-                require(qubit::almost_equal(
-                            tensor.amplitude(basis),
-                            plan.amplitude(basis, workspace),
-                            2e-12),
+                TensorContractionStats direct_stats;
+                TensorContractionStats compiled_stats;
+                const QComplex direct = tensor.amplitude(basis, &direct_stats);
+                const QComplex compiled = plan.amplitude(basis, workspace, &compiled_stats);
+                require(qubit::almost_equal(direct, compiled, 2e-12),
                         "compiled random contraction disagrees with direct contraction");
+                require(same_certificate(direct_stats, compiled_stats),
+                        "incremental planner changed the greedy resource certificate");
             }
         }
     }
@@ -142,10 +157,19 @@ int main() {
                 "compiled 100-qubit zero amplitude acquired an imaginary part");
         require(qubit::almost_equal(direct, compiled, 1e-13),
                 "compiled 100-qubit contraction disagrees with direct contraction");
-        require(direct_stats.peak_contraction_entries == compiled_stats.peak_contraction_entries &&
-                    direct_stats.peak_union_variables == compiled_stats.peak_union_variables &&
-                    direct_stats.eliminated_variables == compiled_stats.eliminated_variables,
+        require(same_certificate(direct_stats, compiled_stats),
                 "compiled 100-qubit contraction changed its resource certificate");
+    }
+
+    {
+        TensorNetworkConfig config;
+        config.max_contraction_entries = 16U;
+        TensorNetworkCircuit tensor(2U, config);
+        tensor.apply({OperationCode::H, 0U, 0U, 0.0, 0.0});
+        tensor.apply({OperationCode::Cnot, 0U, 1U, 0.0, 0.0});
+        const TensorContractionPlan plan = tensor.compile();
+        require(plan.stats().peak_contraction_entries == 16U,
+                "compiled contraction changed its exact resource boundary");
     }
 
     {

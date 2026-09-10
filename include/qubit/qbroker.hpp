@@ -1,14 +1,20 @@
 #pragma once
 
+#include "qubit/qmps.hpp"
 #include "qubit/qpauli.hpp"
+#include "qubit/qphase_graph.hpp"
 #include "qubit/qplan.hpp"
+#include "qubit/qstabilizer.hpp"
 #include "qubit/qstate.hpp"
 #include "qubit/qtensor.hpp"
+#include "qubit/qttn_marginal.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace qubit {
 
@@ -16,10 +22,20 @@ enum class ExactExecutionRoute : std::uint8_t {
     Register = 0,
     CausalPauli = 1,
     TensorNetwork = 2,
+    PersistentMPS = 3,
+    PhaseGraph = 4,
+    UniformMagnitude = 5,
+    BasisPermutation = 6,
+    Stabilizer = 7,
+    TreeTensor = 8,
 };
 
 struct ExactExecutionBrokerConfig {
     TensorNetworkConfig tensor{};
+    std::size_t tensor_planning_defer_variables{65'536U};
+    MPSConfig mps{};
+    PhaseGraphConfig phase_graph{};
+    TreeTensorConfig tree_tensor{};
     QStateConfig register_state{};
 };
 
@@ -46,6 +62,11 @@ public:
         std::span<const Operation> operations,
         const PauliObservable& observable) const;
 
+    [[nodiscard]] ExactExpectationResult expectation_from_zero(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        const PauliObservable& observable) const;
+
     [[nodiscard]] ExactProbabilityResult basis_probability_from_zero(
         std::size_t qubit_count,
         std::span<const Operation> operations,
@@ -56,12 +77,91 @@ public:
         std::span<const Operation> operations,
         BasisIndex basis) const;
 
+    [[nodiscard]] ExactProbabilityResult marginal_probability_from_zero(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        std::span<const QubitId> qubits,
+        std::span<const std::uint8_t> bits) const;
+
     [[nodiscard]] const ExactExecutionBrokerConfig& config() const noexcept {
         return config_;
     }
 
 private:
     ExactExecutionBrokerConfig config_{};
+};
+
+class ExactPreparedExpectationPlan {
+public:
+    ExactPreparedExpectationPlan(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        ExactExecutionBrokerConfig config = {});
+
+    [[nodiscard]] ExactExpectationResult expectation(
+        const PauliObservable& observable) const;
+    [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
+    [[nodiscard]] ExactExecutionRoute prepared_fallback_route() const noexcept;
+    [[nodiscard]] std::size_t estimated_bytes() const noexcept;
+
+private:
+    std::size_t qubit_count_{0};
+    ExactExecutionBrokerConfig config_{};
+    QRegister zero_input_;
+    std::optional<PauliPropagationPlan> causal_plan_{};
+    std::optional<MPSPauliPlan> mps_plan_{};
+    std::optional<QRegister> register_state_{};
+    std::string causal_preparation_reason_{};
+    std::string mps_preparation_reason_{};
+};
+
+class ExactPreparedProbabilityPlan {
+public:
+    ExactPreparedProbabilityPlan(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        ExactExecutionBrokerConfig config = {});
+
+    [[nodiscard]] static ExactPreparedProbabilityPlan for_marginals(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        ExactExecutionBrokerConfig config = {});
+
+    [[nodiscard]] ExactProbabilityResult probability(
+        std::span<const std::uint8_t> basis_bits) const;
+    [[nodiscard]] ExactProbabilityResult probability(BasisIndex basis) const;
+    [[nodiscard]] ExactProbabilityResult marginal_probability(
+        std::span<const QubitId> qubits,
+        std::span<const std::uint8_t> bits) const;
+    [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
+    [[nodiscard]] ExactExecutionRoute prepared_route() const noexcept { return route_; }
+    [[nodiscard]] std::size_t estimated_bytes() const noexcept;
+
+private:
+    enum class QueryCapability : std::uint8_t {
+        FullBasis = 0,
+        Marginal = 1,
+    };
+
+    ExactPreparedProbabilityPlan(
+        std::size_t qubit_count,
+        std::span<const Operation> operations,
+        ExactExecutionBrokerConfig config,
+        QueryCapability capability);
+
+    std::size_t qubit_count_{0};
+    ExactExecutionBrokerConfig config_{};
+    ExactExecutionRoute route_{ExactExecutionRoute::Register};
+    std::vector<std::uint8_t> basis_permutation_bits_{};
+    double uniform_probability_{0.0};
+    std::optional<StabilizerState> stabilizer_state_{};
+    std::optional<TensorContractionPlan> tensor_plan_{};
+    std::optional<MatrixProductState> mps_state_{};
+    std::optional<MPSPauliPlan> mps_plan_{};
+    std::optional<PhaseGraphState> phase_graph_state_{};
+    std::optional<TreeTensorMarginalPlan> tree_tensor_plan_{};
+    std::optional<QRegister> register_state_{};
+    std::string fallback_reason_{};
 };
 
 [[nodiscard]] const char* exact_execution_route_name(ExactExecutionRoute route) noexcept;

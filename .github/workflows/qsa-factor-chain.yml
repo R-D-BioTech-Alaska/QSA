@@ -1,0 +1,89 @@
+name: QSA Exact Factor Chain
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qfactor.hpp"
+      - "include/qubit/qfactor_chain.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_factor_chain.cpp"
+      - "benchmarks/factor_chain.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-factor-chain.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chain-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create standalone chain build
+        shell: bash
+        run: |
+          mkdir -p chain-driver
+          cat > chain-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAFactorChainCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(chain_tests ../tests/test_factor_chain.cpp ../src/qfactor.cpp)
+          target_include_directories(chain_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(chain_tests PRIVATE /W4)
+          else()
+              target_compile_options(chain_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME chain_tests COMMAND chain_tests)
+          EOF
+      - name: Configure
+        run: cmake -S chain-driver -B chain-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build chain-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir chain-build -C Release --output-on-failure
+
+  chain-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_factor_chain.cpp src/qfactor.cpp -o factor-chain-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./factor-chain-sanitize
+
+  chain-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build benchmark
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/factor_chain.cpp src/qfactor.cpp -o factor-chain-benchmark
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run matched controls
+        run: |
+          set -o pipefail
+          ./factor-chain-benchmark | tee factor-chain-evidence.txt
+      - name: Hash evidence
+        run: sha256sum factor-chain-evidence.txt | tee factor-chain-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-factor-chain-evidence
+          path: |
+            factor-chain-evidence.txt
+            factor-chain-evidence.sha256

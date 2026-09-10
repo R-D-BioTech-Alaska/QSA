@@ -1,0 +1,160 @@
+name: QSA Exact Symbolic Phase Interference
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qsymbolic_phase.hpp"
+      - "tests/test_symbolic_phase.cpp"
+      - "benchmarks/symbolic_phase.cpp"
+      - ".github/workflows/qsa-symbolic-phase.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  symbolic-phase-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build symbolic phase driver
+        shell: bash
+        run: |
+          mkdir -p symbolic-phase-driver
+          cat > symbolic-phase-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSASymbolicPhaseCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(symbolic_phase_tests ../tests/test_symbolic_phase.cpp)
+          target_link_libraries(symbolic_phase_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(symbolic_phase_tests PRIVATE /W4)
+          else()
+              target_compile_options(symbolic_phase_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME symbolic_phase_tests COMMAND symbolic_phase_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S symbolic-phase-driver -B symbolic-phase-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build symbolic-phase-build --config Release --target symbolic_phase_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir symbolic-phase-build -C Release --output-on-failure
+
+  symbolic-phase-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p symbolic-phase-driver
+          cat > symbolic-phase-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSASymbolicPhaseSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(symbolic_phase_tests ../tests/test_symbolic_phase.cpp)
+          target_link_libraries(symbolic_phase_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S symbolic-phase-driver -B symbolic-phase-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build symbolic-phase-sanitize-build --target symbolic_phase_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./symbolic-phase-sanitize-build/symbolic_phase_tests
+
+  symbolic-phase-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p symbolic-phase-driver
+          cat > symbolic-phase-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSASymbolicPhaseEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(symbolic_phase_benchmark ../benchmarks/symbolic_phase.cpp)
+          target_link_libraries(symbolic_phase_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S symbolic-phase-driver -B symbolic-phase-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build symbolic-phase-evidence-build --target symbolic_phase_benchmark --parallel 2
+      - name: Run symbolic carrier
+        run: |
+          set -o pipefail
+          ./symbolic-phase-evidence-build/symbolic_phase_benchmark | tee symbolic-phase-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("symbolic-phase-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["carrier_qubits"]) == 4096
+          assert int(values["carrier_symbols"]) == 256
+          assert int(values["carrier_hadamard_defects"]) == 512
+          assert int(values["carrier_raw_branch_count_log2"]) == 512
+          assert int(values["carrier_live_branches"]) == 1
+          assert int(values["carrier_max_live_branches"]) <= 4
+          assert int(values["carrier_coefficient_terms"]) == 1
+          assert int(values["carrier_max_coefficient_terms"]) <= 2
+          assert int(values["carrier_max_integer_bits"]) <= 2
+          assert int(values["carrier_graph_merges"]) >= 512
+          assert int(values["carrier_exact_cancellations"]) >= 256
+          assert int(values["carrier_extracted_power_of_two_bits"]) == 256
+          assert int(values["carrier_sqrt2_denominator_power"]) == 0
+          assert 0 < int(values["carrier_retained_estimated_bytes"]) < 64 * 1024 * 1024
+          assert float(values["carrier_dense_to_retained_ratio_log2"]) > 4070.0
+          assert int(values["carrier_exact_zero_terms"]) == 1
+          assert int(values["carrier_exact_zero_eighths"]) == 0
+          assert int(values["carrier_exact_zero_symbol_terms"]) == 0
+          assert int(values["carrier_exact_zero_multiplicity"]) == 1
+          assert int(values["carrier_exact_zero_denominator"]) == 0
+          assert abs(float(values["carrier_log2_probability_zero"]) + 4096.0) < 1e-10
+          assert 0.0 < float(values["carrier_evolution_ms"]) < 30000.0
+          assert 0.0 < float(values["carrier_query_us"]) < 30000.0
+          assert int(values["carrier_direct_amplitude_underflow_rejected"]) == 1
+          assert int(values["control_connected_hadamards"]) == 14
+          assert int(values["control_live_branches"]) == 16384
+          assert int(values["control_expected_live_branches"]) == 16384
+          assert 0 < int(values["control_retained_estimated_bytes"]) < 512 * 1024 * 1024
+          assert int(values["control_fifteenth_h_rejected"]) == 1
+          assert int(values["dense_state_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum symbolic-phase-evidence.txt | tee symbolic-phase-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-symbolic-phase-evidence
+          path: |
+            symbolic-phase-evidence.txt
+            symbolic-phase-evidence.sha256

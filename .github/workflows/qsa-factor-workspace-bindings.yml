@@ -1,0 +1,159 @@
+name: QSA Exact Factor Workspace Bindings
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qfactor.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_factor_workspace_bindings.cpp"
+      - "benchmarks/factor_workspace_bindings.cpp"
+      - ".github/workflows/qsa-factor-workspace-bindings.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  factor-binding-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build factor binding driver
+        shell: bash
+        run: |
+          mkdir -p factor-binding-driver
+          cat > factor-binding-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAFactorWorkspaceBindingCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(factor_binding_tests ../tests/test_factor_workspace_bindings.cpp)
+          target_link_libraries(factor_binding_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(factor_binding_tests PRIVATE /W4)
+          else()
+              target_compile_options(factor_binding_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME factor_binding_tests COMMAND factor_binding_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S factor-binding-driver -B factor-binding-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build factor-binding-build --config Release --target factor_binding_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir factor-binding-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  factor-binding-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p factor-binding-driver
+          cat > factor-binding-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAFactorWorkspaceBindingSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(factor_binding_tests ../tests/test_factor_workspace_bindings.cpp)
+          target_link_libraries(factor_binding_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S factor-binding-driver -B factor-binding-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build factor-binding-sanitize-build --target factor_binding_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./factor-binding-sanitize-build/factor_binding_tests
+
+  factor-binding-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p factor-binding-driver
+          cat > factor-binding-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAFactorWorkspaceBindingEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(factor_binding_benchmark ../benchmarks/factor_workspace_bindings.cpp)
+          target_link_libraries(factor_binding_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S factor-binding-driver -B factor-binding-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build factor-binding-evidence-build --target factor_binding_benchmark --parallel 2
+      - name: Run factor binding carrier
+        run: |
+          set -o pipefail
+          ./factor-binding-evidence-build/factor_binding_benchmark | tee factor-binding-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("factor-binding-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["binding_variables"]) == 4096
+          assert int(values["binding_source_factors"]) == 8191
+          assert int(values["binding_mutable_factors"]) == 4096
+          assert int(values["binding_peak_union_variables"]) <= 3
+          assert int(values["binding_peak_factor_entries"]) <= 8
+          assert 0 < int(values["binding_plan_bytes"]) < 256 * 1024 * 1024
+          assert int(values["binding_worker_count"]) == 16
+          assert 0 < int(values["binding_per_workspace_bytes"]) < 4 * 1024 * 1024
+          assert int(values["binding_total_rebinds"]) == 16 * 4096
+          assert int(values["binding_plan_rebind_count"]) == 0
+          shared = int(values["binding_shared_plan_batch_bytes"])
+          copied = int(values["binding_plan_copy_equivalent_batch_bytes"])
+          assert 0 < shared < copied
+          ratio = float(values["binding_memory_reduction_ratio"])
+          assert math.isfinite(ratio) and ratio > 2.0
+          assert float(values["binding_max_parallel_error"]) <= 1e-12
+          assert math.isfinite(float(values["binding_guard"])) and float(values["binding_guard"]) > 0.0
+          assert 0.0 < float(values["binding_compile_ms"]) < 10000.0
+          assert 0.0 < float(values["binding_workspace_prepare_ms"]) < 10000.0
+          assert 0.0 < float(values["binding_serial_ms"]) < 10000.0
+          assert 0.0 < float(values["binding_parallel_ms"]) < 10000.0
+          assert math.isfinite(float(values["binding_parallel_ratio"]))
+          assert int(values["same_plan_parallel_execution"]) == 1
+          assert int(values["plan_source_mutation"]) == 0
+          assert int(values["dense_global_state_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum factor-binding-evidence.txt | tee factor-binding-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-factor-workspace-bindings-evidence
+          path: |
+            factor-binding-evidence.txt
+            factor-binding-evidence.sha256

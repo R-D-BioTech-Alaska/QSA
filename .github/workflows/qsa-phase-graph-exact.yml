@@ -1,0 +1,155 @@
+name: QSA Exact Discrete Phase Reconvergence
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qphase_exact.hpp"
+      - "tests/test_phase_graph_exact.cpp"
+      - "benchmarks/phase_graph_exact.cpp"
+      - ".github/workflows/qsa-phase-graph-exact.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-phase-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact-phase driver
+        shell: bash
+        run: |
+          mkdir -p exact-phase-driver
+          cat > exact-phase-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactDiscretePhaseCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(exact_phase_tests ../tests/test_phase_graph_exact.cpp)
+          target_link_libraries(exact_phase_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(exact_phase_tests PRIVATE /W4)
+          else()
+              target_compile_options(exact_phase_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME exact_phase_tests COMMAND exact_phase_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S exact-phase-driver -B exact-phase-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build exact-phase-build --config Release --target exact_phase_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir exact-phase-build -C Release --output-on-failure
+
+  exact-phase-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p exact-phase-driver
+          cat > exact-phase-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactDiscretePhaseSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(exact_phase_tests ../tests/test_phase_graph_exact.cpp)
+          target_link_libraries(exact_phase_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S exact-phase-driver -B exact-phase-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build exact-phase-sanitize-build --target exact_phase_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./exact-phase-sanitize-build/exact_phase_tests
+
+  exact-phase-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p exact-phase-driver
+          cat > exact-phase-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAExactDiscretePhaseEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(exact_phase_benchmark ../benchmarks/phase_graph_exact.cpp)
+          target_link_libraries(exact_phase_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S exact-phase-driver -B exact-phase-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build exact-phase-evidence-build --target exact_phase_benchmark --parallel 2
+      - name: Run exact-phase carrier
+        run: |
+          set -o pipefail
+          ./exact-phase-evidence-build/exact_phase_benchmark | tee exact-phase-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("exact-phase-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["carrier_qubits"]) == 4096
+          assert int(values["carrier_discrete_t_gates"]) == 64
+          assert int(values["carrier_hadamard_defects"]) == 512
+          assert int(values["carrier_raw_branch_count_log2"]) == 512
+          assert int(values["carrier_live_branches"]) == 1
+          assert int(values["carrier_max_live_branches"]) <= 2
+          assert int(values["carrier_merged_branches"]) > 0
+          assert int(values["carrier_exact_cancellations"]) > 0
+          assert int(values["carrier_extracted_power_of_two_bits"]) == 256
+          assert int(values["carrier_scale_half_power"]) == -4096
+          assert 0 < int(values["carrier_retained_estimated_bytes"]) < 64 * 1024 * 1024
+          assert float(values["carrier_dense_to_retained_ratio_log2"]) > 4080.0
+          assert int(values["carrier_exact_coefficient_0"]) == 1
+          assert int(values["carrier_exact_coefficient_1"]) == 0
+          assert int(values["carrier_exact_coefficient_2"]) == 0
+          assert int(values["carrier_exact_coefficient_3"]) == 0
+          assert abs(float(values["carrier_log2_probability_zero"]) + 4096.0) < 1e-12
+          assert float(values["carrier_evolution_ms"]) > 0.0
+          assert float(values["carrier_query_us"]) > 0.0
+          assert int(values["carrier_direct_amplitude_underflow_rejected"]) == 1
+          assert int(values["irreducible_live_before_rejection"]) == 1024
+          assert int(values["irreducible_hadamards_before_rejection"]) == 10
+          assert int(values["irreducible_next_h_rejected"]) == 1
+          assert int(values["floating_rz_rejected"]) == 1
+          assert int(values["dense_state_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum exact-phase-evidence.txt | tee exact-phase-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-exact-phase-reconvergence-evidence
+          path: |
+            exact-phase-evidence.txt
+            exact-phase-evidence.sha256

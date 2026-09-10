@@ -1,0 +1,66 @@
+name: QSA Persistent Tropical QTT
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qtropical_qtt.hpp"
+      - "include/qubit/qpersistent_tropical_qtt.hpp"
+      - "tests/test_exact_tropical_qtt.cpp"
+      - "tests/test_persistent_tropical_qtt.cpp"
+      - "benchmarks/persistent_tropical_qtt.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-tropical-qtt.yml"
+      - ".github/workflows/qsa-tropical-qtt-evidence.yml"
+      - ".github/workflows/qsa-persistent-tropical-qtt.yml"
+      - ".github/workflows/qsa-persistent-tropical-qtt-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  persistent-tropical-qtt-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create standalone persistent Tropical QTT build
+        shell: bash
+        run: |
+          mkdir -p persistent-tropical-qtt-driver
+          cat > persistent-tropical-qtt-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAPersistentTropicalQTTCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(persistent_tropical_qtt_tests ../tests/test_persistent_tropical_qtt.cpp)
+          target_include_directories(persistent_tropical_qtt_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(persistent_tropical_qtt_tests PRIVATE /W4)
+          else()
+              target_compile_options(persistent_tropical_qtt_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME persistent_tropical_qtt_tests COMMAND persistent_tropical_qtt_tests)
+          EOF
+      - name: Configure
+        run: cmake -S persistent-tropical-qtt-driver -B persistent-tropical-qtt-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build persistent-tropical-qtt-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir persistent-tropical-qtt-build -C Release --output-on-failure
+
+  persistent-tropical-qtt-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_persistent_tropical_qtt.cpp -o persistent-tropical-qtt-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./persistent-tropical-qtt-sanitize

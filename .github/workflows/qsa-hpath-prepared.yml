@@ -1,0 +1,174 @@
+name: QSA Prepared Hadamard Path
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qhpath_prepared.hpp"
+      - "include/qubit/qhpath_factor.hpp"
+      - "include/qubit/qfactor.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_hpath_prepared.cpp"
+      - "benchmarks/hpath_prepared.cpp"
+      - ".github/workflows/qsa-hpath-prepared.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hpath-prepared-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build prepared Hpath driver
+        shell: bash
+        run: |
+          mkdir -p hpath-prepared-driver
+          cat > hpath-prepared-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAPreparedHadamardPathCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(hpath_prepared_tests ../tests/test_hpath_prepared.cpp)
+          target_link_libraries(hpath_prepared_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(hpath_prepared_tests PRIVATE /W4)
+          else()
+              target_compile_options(hpath_prepared_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME hpath_prepared_tests COMMAND hpath_prepared_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S hpath-prepared-driver -B hpath-prepared-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build hpath-prepared-build --config Release --target hpath_prepared_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir hpath-prepared-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  hpath-prepared-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p hpath-prepared-driver
+          cat > hpath-prepared-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAPreparedHadamardPathSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(hpath_prepared_tests ../tests/test_hpath_prepared.cpp)
+          target_link_libraries(hpath_prepared_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S hpath-prepared-driver -B hpath-prepared-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build hpath-prepared-sanitize-build --target hpath_prepared_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./hpath-prepared-sanitize-build/hpath_prepared_tests
+
+  hpath-prepared-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p hpath-prepared-driver
+          cat > hpath-prepared-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAPreparedHadamardPathEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(hpath_prepared_benchmark ../benchmarks/hpath_prepared.cpp)
+          target_link_libraries(hpath_prepared_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S hpath-prepared-driver -B hpath-prepared-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build hpath-prepared-evidence-build --target hpath_prepared_benchmark --parallel 2
+      - name: Run prepared carrier
+        run: |
+          set -o pipefail
+          ./hpath-prepared-evidence-build/hpath_prepared_benchmark | tee hpath-prepared-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("hpath-prepared-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["prepared_qubits"]) == 1024
+          assert int(values["prepared_h_events"]) == 8192
+          assert int(values["prepared_factor_variables"]) == 8192
+          assert int(values["prepared_factor_count"]) > 0
+          assert int(values["prepared_peak_union_variables"]) <= 12
+          assert int(values["prepared_peak_factor_entries"]) <= 4096
+          assert int(values["prepared_output_bindings"]) == 1024
+          assert int(values["prepared_fixed_cz_pairs"]) == 1023
+          assert 0 < int(values["prepared_metadata_bytes"]) < 64 * 1024 * 1024
+          assert 0 < int(values["prepared_graph_bytes"]) < 128 * 1024 * 1024
+          assert 0 < int(values["prepared_plan_bytes"]) < 512 * 1024 * 1024
+          workspace_bytes = int(values["prepared_workspace_bytes"])
+          copy_equivalent = int(values["prepared_plan_copy_equivalent_workspace_bytes"])
+          assert 0 < workspace_bytes < 8 * 1024 * 1024
+          assert copy_equivalent > 64 * 1024 * 1024
+          memory_ratio = float(values["prepared_workspace_memory_reduction_ratio"])
+          assert math.isfinite(memory_ratio) and memory_ratio > 20.0
+          assert int(values["prepared_workspace_count"]) == 16
+          compact_batch = int(values["prepared_compact_workspace_batch_bytes"])
+          copy_batch = int(values["prepared_plan_copy_equivalent_batch_bytes"])
+          assert compact_batch < 128 * 1024 * 1024
+          assert copy_batch > 1024 * 1024 * 1024
+          assert copy_batch > compact_batch * 20
+          assert int(values["prepared_shared_plan_serializes_queries"]) == 1
+          assert int(values["prepared_query_count"]) == 8
+          assert int(values["prepared_rebind_count"]) == int(values["prepared_output_bindings"]) * 8
+          assert 0.0 < float(values["prepared_setup_ms"]) < 10000.0
+          assert 0.0 < float(values["prepared_batch_ms"]) < 30000.0
+          assert 0.0 < float(values["direct_batch_ms"]) < 30000.0
+          query_ratio = float(values["prepared_query_speed_ratio"])
+          total_ratio = float(values["prepared_amortized_total_ratio"])
+          assert math.isfinite(query_ratio) and query_ratio > 1.0
+          assert math.isfinite(total_ratio) and total_ratio > 1.0
+          break_even = float(values["prepared_break_even_queries"])
+          assert math.isfinite(break_even) and 0.0 < break_even < 8.0
+          assert float(values["prepared_max_logp_error"]) <= 1e-10
+          assert int(values["dense_state_materialized"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum hpath-prepared-evidence.txt | tee hpath-prepared-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-hpath-prepared-evidence
+          path: |
+            hpath-prepared-evidence.txt
+            hpath-prepared-evidence.sha256
