@@ -1,4 +1,5 @@
 #include "qubit/qfactor.hpp"
+#include "qubit/qfactor_cache.hpp"
 
 #include <array>
 #include <atomic>
@@ -15,6 +16,13 @@ void require(bool condition, const char* message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+void require_exact(
+    const qubit::QComplex& actual,
+    const qubit::QComplex& expected,
+    const char* message) {
+    require(actual.re == expected.re && actual.im == expected.im, message);
 }
 
 qubit::ExactFactorGraph graph() {
@@ -42,6 +50,43 @@ qubit::ExactFactorGraph graph() {
     (void)result.add_dense_factor(a_scope, a_values);
     (void)result.add_dense_factor(ab_scope, ab_values);
     (void)result.add_dense_factor(bc_scope, bc_values);
+    return result;
+}
+
+struct ChainCarrier {
+    qubit::ExactFactorGraph graph;
+    std::vector<qubit::FactorVariableId> variables;
+    std::vector<qubit::FactorId> mutable_factors;
+};
+
+ChainCarrier chain(std::size_t variables, std::size_t cache_cap = 4096U) {
+    qubit::ExactFactorConfig config;
+    config.max_variables = variables;
+    config.max_factors = 2U * variables;
+    config.max_factor_entries = 16U;
+    config.max_compiled_index_entries = cache_cap;
+    config.reuse_workspace_slots = true;
+
+    ChainCarrier result{qubit::ExactFactorGraph(config), {}, {}};
+    result.variables.reserve(variables);
+    result.mutable_factors.reserve(variables);
+    for (std::size_t index = 0U; index < variables; ++index) {
+        result.variables.push_back(result.graph.add_variable(2U));
+    }
+    const std::array<qubit::QComplex, 2> unary{
+        qubit::QComplex{1.0, 0.0}, qubit::QComplex{1.0, 0.0}};
+    for (const qubit::FactorVariableId variable : result.variables) {
+        const std::array<qubit::FactorVariableId, 1> scope{variable};
+        result.mutable_factors.push_back(result.graph.add_dense_factor(scope, unary));
+    }
+    const std::array<qubit::QComplex, 4> pair{
+        qubit::QComplex{0.6, 0.0}, qubit::QComplex{0.4, 0.0},
+        qubit::QComplex{0.4, 0.0}, qubit::QComplex{0.6, 0.0}};
+    for (std::size_t index = 0U; index + 1U < variables; ++index) {
+        const std::array<qubit::FactorVariableId, 2> scope{
+            result.variables[index], result.variables[index + 1U]};
+        (void)result.graph.add_dense_factor(scope, pair);
+    }
     return result;
 }
 
@@ -186,11 +231,156 @@ void binding_contract_fails_closed() {
     require(rejected, "bound workspace silently converted a sparse source factor");
 }
 
+void persistent_messages_match_full_recompute() {
+    ChainCarrier carrier = chain(24U, 16384U);
+    qubit::ExactFactorPlan plan(carrier.graph);
+    auto workspace = plan.workspace(carrier.mutable_factors);
+    qubit::ExactFactorMessageCache cache(plan, carrier.mutable_factors);
+
+    require_exact(cache.partition(), plan.bound_partition(workspace),
+        "cold message cache differs from full factor evaluation");
+    require(cache.stats().last_recomputed_steps == plan.step_count() &&
+            cache.stats().last_reused_steps == 0U,
+        "cold message cache did not materialize every elimination message");
+
+    const std::array<qubit::QComplex, 2> last_values{
+        qubit::QComplex{1.25, 0.0}, qubit::QComplex{0.75, 0.0}};
+    const qubit::FactorId last = carrier.mutable_factors.back();
+    plan.bind_dense_factor(workspace, last, last_values);
+    cache.bind_dense_factor(last, last_values);
+    require_exact(cache.partition(), plan.bound_partition(workspace),
+        "local message-cache update differs from full factor evaluation");
+    require(cache.stats().last_recomputed_steps == 1U &&
+            cache.stats().last_reused_steps + 1U == plan.step_count(),
+        "terminal chain update did not reuse unaffected elimination messages");
+
+    require_exact(cache.partition(), plan.bound_partition(workspace),
+        "unchanged message cache differs from full factor evaluation");
+    require(cache.stats().last_recomputed_steps == 0U &&
+            cache.stats().last_reused_steps == plan.step_count(),
+        "unchanged message cache recomputed clean messages");
+
+    const qubit::QComplex accepted = cache.partition();
+    bool rejected = false;
+    try {
+        const std::array<qubit::QComplex, 2> bad{
+            qubit::QComplex{1.0, 0.0},
+            qubit::QComplex{std::numeric_limits<double>::quiet_NaN(), 0.0}};
+        cache.bind_dense_factor(last, bad);
+    } catch (const qubit::QStateError&) {
+        rejected = true;
+    }
+    require(rejected, "message cache accepted non-finite bound values");
+    require_exact(cache.partition(), accepted,
+        "failed message-cache bind changed accepted cached state");
+    require(cache.stats().last_recomputed_steps == 0U,
+        "failed message-cache bind dirtied accepted messages");
+}
+
+void persistent_messages_handle_retained_terminals() {
+    ChainCarrier carrier = chain(12U, 8192U);
+    const std::array<qubit::FactorVariableId, 1> retained{carrier.variables.back()};
+    qubit::ExactFactorPlan plan(carrier.graph, retained);
+    auto workspace = plan.workspace(carrier.mutable_factors);
+    qubit::ExactFactorMessageCache cache(plan, carrier.mutable_factors);
+    (void)cache.evaluate();
+
+    const std::array<qubit::QComplex, 2> values{
+        qubit::QComplex{1.3, 0.0}, qubit::QComplex{0.7, 0.0}};
+    const qubit::FactorId last = carrier.mutable_factors.back();
+    plan.bind_dense_factor(workspace, last, values);
+    cache.bind_dense_factor(last, values);
+    const auto cached = cache.evaluate();
+    const auto full = plan.bound_evaluate(workspace);
+    require(cached.size() == full.size(), "retained message-cache output size changed");
+    for (std::size_t index = 0U; index < full.size(); ++index) {
+        require_exact(cached[index], full[index],
+            "retained terminal message-cache update differs from full evaluation");
+    }
+    require(cache.stats().last_recomputed_steps == 0U &&
+            cache.stats().last_reused_steps == plan.step_count(),
+        "retained terminal source invalidated unrelated elimination messages");
+}
+
+void repeated_local_messages_match_full_recompute() {
+    ChainCarrier carrier = chain(16U, 8192U);
+    qubit::ExactFactorPlan plan(carrier.graph);
+    auto workspace = plan.workspace(carrier.mutable_factors);
+    qubit::ExactFactorMessageCache cache(plan, carrier.mutable_factors);
+    (void)cache.partition();
+    bool reused = false;
+
+    for (std::size_t iteration = 0U; iteration < 64U; ++iteration) {
+        const std::size_t variable = (7U * iteration + 3U) % carrier.mutable_factors.size();
+        const double delta = 1e-4 * static_cast<double>(1U + iteration);
+        const std::array<qubit::QComplex, 2> values{
+            qubit::QComplex{1.0 + delta, 0.0}, qubit::QComplex{1.0 - delta, 0.0}};
+        const qubit::FactorId factor = carrier.mutable_factors[variable];
+        plan.bind_dense_factor(workspace, factor, values);
+        cache.bind_dense_factor(factor, values);
+        require_exact(cache.partition(), plan.bound_partition(workspace),
+            "repeated local message update differs from full recompute");
+        reused = reused || cache.stats().last_reused_steps != 0U;
+    }
+    require(reused, "repeated local message updates never reused a separator message");
+    require(cache.stats().rebind_count == 64U,
+        "message-cache rebind accounting is wrong");
+}
+
+void message_cache_fails_closed() {
+    {
+        ChainCarrier carrier = chain(4U, 4U);
+        const qubit::ExactFactorPlan plan(carrier.graph);
+        bool rejected = false;
+        try {
+            (void)qubit::ExactFactorMessageCache(plan, carrier.mutable_factors);
+        } catch (const qubit::QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "message cache ignored its compiled-state resource cap");
+        require(carrier.graph.validate(), "failed message-cache compile damaged its graph");
+    }
+
+    {
+        ChainCarrier carrier = chain(6U, 4096U);
+        qubit::ExactFactorPlan plan(carrier.graph);
+        qubit::ExactFactorMessageCache cache(plan, carrier.mutable_factors);
+        (void)cache.partition();
+        const std::array<qubit::QComplex, 2> values{
+            qubit::QComplex{1.1, 0.0}, qubit::QComplex{0.9, 0.0}};
+        plan.rebind_dense_factor(carrier.mutable_factors.front(), values);
+        bool rejected = false;
+        try {
+            (void)cache.partition();
+        } catch (const qubit::QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "message cache reused messages after plan source mutation");
+    }
+
+    {
+        auto source = graph();
+        const qubit::ExactFactorPlan plan(source);
+        bool rejected = false;
+        try {
+            const std::span<const qubit::FactorId> none{};
+            (void)qubit::ExactFactorMessageCache(plan, none);
+        } catch (const qubit::QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "message cache accepted an empty binding contract");
+    }
+}
+
 }  // namespace
 
 int main() {
     independent_bound_workspaces_match_direct_graphs();
     same_plan_parallel_workspaces_are_isolated();
     binding_contract_fails_closed();
+    persistent_messages_match_full_recompute();
+    persistent_messages_handle_retained_terminals();
+    repeated_local_messages_match_full_recompute();
+    message_cache_fails_closed();
     return 0;
 }
