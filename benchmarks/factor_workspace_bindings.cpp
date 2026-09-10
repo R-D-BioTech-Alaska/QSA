@@ -1,4 +1,5 @@
 #include "qubit/qfactor.hpp"
+#include "qubit/qfactor_cache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -129,6 +130,42 @@ int main() {
         total_rebinds += workspaces[worker].bound_rebind_count();
     }
 
+    constexpr std::size_t local_updates = 256U;
+    auto full_workspace = plan.workspace(carrier.mutable_factors);
+    std::vector<qubit::QComplex> full_local(local_updates);
+    const qubit::FactorId local_factor = carrier.mutable_factors.back();
+    const auto full_local_begin = Clock::now();
+    for (std::size_t update = 0U; update < local_updates; ++update) {
+        const auto values = values_for(update, carrier.mutable_factors.size() - 1U);
+        plan.bind_dense_factor(full_workspace, local_factor, values);
+        full_local[update] = plan.bound_partition(full_workspace);
+    }
+    const auto full_local_end = Clock::now();
+
+    const auto cache_prepare_begin = Clock::now();
+    qubit::ExactFactorMessageCache cache(plan, carrier.mutable_factors);
+    const auto cache_prepare_end = Clock::now();
+    const auto cache_cold_begin = Clock::now();
+    const qubit::QComplex cache_cold = cache.partition();
+    const auto cache_cold_end = Clock::now();
+    const std::size_t cold_recomputed = cache.stats().last_recomputed_steps;
+
+    double max_cache_error = 0.0;
+    double cache_guard = cache_cold.norm2();
+    const auto cache_local_begin = Clock::now();
+    for (std::size_t update = 0U; update < local_updates; ++update) {
+        const auto values = values_for(update, carrier.mutable_factors.size() - 1U);
+        cache.bind_dense_factor(local_factor, values);
+        const qubit::QComplex observed = cache.partition();
+        max_cache_error = std::max(
+            max_cache_error,
+            std::hypot(
+                observed.re - full_local[update].re,
+                observed.im - full_local[update].im));
+        cache_guard += observed.norm2();
+    }
+    const auto cache_local_end = Clock::now();
+
     const std::size_t plan_bytes = plan.estimated_bytes();
     const std::size_t per_workspace_bytes =
         workspaces.front().estimated_bytes() + workspaces.front().binding_estimated_bytes();
@@ -149,8 +186,18 @@ int main() {
     const double parallel_ms =
         std::chrono::duration<double, std::milli>(parallel_end - parallel_begin).count();
     const double parallel_ratio = serial_ms / parallel_ms;
+    const double full_local_ms =
+        std::chrono::duration<double, std::milli>(full_local_end - full_local_begin).count();
+    const double cache_prepare_ms =
+        std::chrono::duration<double, std::milli>(cache_prepare_end - cache_prepare_begin).count();
+    const double cache_cold_ms =
+        std::chrono::duration<double, std::milli>(cache_cold_end - cache_cold_begin).count();
+    const double cache_local_ms =
+        std::chrono::duration<double, std::milli>(cache_local_end - cache_local_begin).count();
+    const double cache_repeat_ratio = full_local_ms / cache_local_ms;
 
     const auto stats = plan.stats();
+    const auto cache_stats = cache.stats();
     std::cout << std::setprecision(17)
               << "binding_variables=" << stats.variable_count << '\n'
               << "binding_source_factors=" << stats.source_factors << '\n'
@@ -174,6 +221,23 @@ int main() {
               << "binding_parallel_ratio=" << parallel_ratio << '\n'
               << "binding_max_parallel_error=" << max_parallel_error << '\n'
               << "binding_guard=" << guard << '\n'
+              << "message_cache_updates=" << local_updates << '\n'
+              << "message_cache_steps=" << cache_stats.step_count << '\n'
+              << "message_cache_entries=" << cache_stats.cached_message_entries << '\n'
+              << "message_cache_dependency_edges=" << cache_stats.dependency_edges << '\n'
+              << "message_cache_bytes=" << cache.estimated_bytes() << '\n'
+              << "message_cache_cold_recomputed_steps=" << cold_recomputed << '\n'
+              << "message_cache_last_recomputed_steps=" << cache_stats.last_recomputed_steps << '\n'
+              << "message_cache_last_reused_steps=" << cache_stats.last_reused_steps << '\n'
+              << "message_cache_total_recomputed_steps=" << cache_stats.total_recomputed_steps << '\n'
+              << "message_cache_total_reused_steps=" << cache_stats.total_reused_steps << '\n'
+              << "message_cache_full_update_ms=" << full_local_ms << '\n'
+              << "message_cache_prepare_ms=" << cache_prepare_ms << '\n'
+              << "message_cache_cold_ms=" << cache_cold_ms << '\n'
+              << "message_cache_local_update_ms=" << cache_local_ms << '\n'
+              << "message_cache_repeat_ratio=" << cache_repeat_ratio << '\n'
+              << "message_cache_max_error=" << max_cache_error << '\n'
+              << "message_cache_guard=" << cache_guard << '\n'
               << "same_plan_parallel_execution=1\n"
               << "plan_source_mutation=0\n"
               << "dense_global_state_materialized=0\n";
@@ -194,7 +258,19 @@ int main() {
             compile_ms > 0.0 && compile_ms < 10000.0 &&
             workspace_ms > 0.0 && workspace_ms < 10000.0 &&
             serial_ms > 0.0 && serial_ms < 10000.0 &&
-            parallel_ms > 0.0 && parallel_ms < 10000.0
+            parallel_ms > 0.0 && parallel_ms < 10000.0 &&
+            cache_stats.rebind_count == local_updates &&
+            cold_recomputed == plan.step_count() &&
+            cache_stats.last_recomputed_steps == 1U &&
+            cache_stats.last_reused_steps + 1U == plan.step_count() &&
+            cache_stats.total_recomputed_steps == plan.step_count() + local_updates &&
+            max_cache_error <= 1e-12 &&
+            std::isfinite(cache_guard) && cache_guard > 0.0 &&
+            full_local_ms > 0.0 && full_local_ms < 10000.0 &&
+            cache_prepare_ms > 0.0 && cache_prepare_ms < 10000.0 &&
+            cache_cold_ms > 0.0 && cache_cold_ms < 10000.0 &&
+            cache_local_ms > 0.0 && cache_local_ms < 10000.0 &&
+            std::isfinite(cache_repeat_ratio) && cache_repeat_ratio > 0.0
         ? 0
         : 1;
 }
