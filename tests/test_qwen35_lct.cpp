@@ -84,8 +84,8 @@ qubit::Qwen35SourceFragment source(qubit::Qwen35LctRole role) {
 
 void source_contract() {
     const auto value = source(qubit::Qwen35LctRole::FullAttention);
-    require(value.canonical_core_json() == qwen_core, "Qwen source canonical JSON differs from PR163");
-    require(value.identity == qwen_hash, "Qwen source signing vector differs from PR163");
+    require(value.canonical_core_json() == qwen_core, "Qwen source canonical JSON changed");
+    require(value.identity == qwen_hash, "Qwen source signing vector changed");
     require(qubit::Qwen35LlamaCommit == "74ade52741203e5c8f81eaf06a96cb1cfe15f2a3",
             "Qwen35 source commit changed");
     require(qubit::Qwen35SourceBlob == "6783d98ec204885caba96184fc5b9c6bd47e071b",
@@ -165,9 +165,9 @@ void fragment_contract() {
     vector.operator_equivalence_verified = true;
     vector.exact_reconstruction_verified = true;
     vector.producer_receipt_identity = "sha256:25c300605c92bfc4609848e2b0dda60e7c8fb852ae11e859855b76126bb9ad9f";
-    require(vector.canonical_core_json() == qsa_core, "QSA canonical JSON differs from PR163");
+    require(vector.canonical_core_json() == qsa_core, "QSA canonical JSON changed");
     vector.identity = fixture_sha(vector.canonical_core_json());
-    require(vector.identity == qsa_hash, "QSA signing vector differs from PR163");
+    require(vector.identity == qsa_hash, "QSA signing vector changed");
     vector.validate(fixture_sha);
 
     const auto wrong = qubit::Qwen35LctCompiler::compile(qubit::Qwen35LctRole::SsmRecurrent);
