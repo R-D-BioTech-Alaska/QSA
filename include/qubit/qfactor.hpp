@@ -58,6 +58,7 @@ class ExactFactorChainPlan;
 class ExactFactorDecisionPlan;
 class ExactFactorAffinePlan;
 class ExactFactorMaxSumPlan;
+class ExactFactorMessageCache;
 
 class ExactFactorGraph {
 public:
@@ -575,6 +576,8 @@ private:
         const ExactFactorWorkspace& workspace) const;
     void validate_workspace(const ExactFactorWorkspace& workspace) const;
     void validate_topology(const ExactFactorGraph& graph) const;
+
+    friend class ExactFactorMessageCache;
 };
 
 [[nodiscard]] const char* exact_factor_route_name(ExactFactorRoute route) noexcept;
