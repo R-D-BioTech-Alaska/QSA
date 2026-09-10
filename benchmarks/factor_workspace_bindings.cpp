@@ -37,14 +37,14 @@ Carrier make_carrier() {
     for (std::size_t index = 0U; index < variables; ++index) {
         const std::array<qubit::FactorVariableId, 1> scope{ids[index]};
         const std::array<qubit::QComplex, 2> values{
-            qubit::QComplex{0.5, 0.0}, qubit::QComplex{0.5, 0.0}};
+            qubit::QComplex{1.0, 0.0}, qubit::QComplex{1.0, 0.0}};
         carrier.mutable_factors.push_back(carrier.graph.add_dense_factor(scope, values));
     }
     for (std::size_t index = 0U; index + 1U < variables; ++index) {
         const std::array<qubit::FactorVariableId, 2> scope{ids[index], ids[index + 1U]};
         const std::array<qubit::QComplex, 4> values{
-            qubit::QComplex{1.0, 0.0}, qubit::QComplex{0.75, 0.0},
-            qubit::QComplex{0.75, 0.0}, qubit::QComplex{1.0, 0.0}};
+            qubit::QComplex{4.0 / 7.0, 0.0}, qubit::QComplex{3.0 / 7.0, 0.0},
+            qubit::QComplex{3.0 / 7.0, 0.0}, qubit::QComplex{4.0 / 7.0, 0.0}};
         (void)carrier.graph.add_dense_factor(scope, values);
     }
     return carrier;
@@ -56,8 +56,8 @@ std::array<qubit::QComplex, 2> values_for(
     const double delta =
         1e-5 * static_cast<double>(1U + ((worker + 3U * variable) % 23U));
     return {
-        qubit::QComplex{0.5 + delta, 0.0},
-        qubit::QComplex{0.5 - delta, 0.0},
+        qubit::QComplex{1.0 + delta, 0.0},
+        qubit::QComplex{1.0 - delta, 0.0},
     };
 }
 
