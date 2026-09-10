@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-09-10
+
+- Added persistent exact representation compiler and component-fabric routes with typed, fail-closed structural admission and bounded resource accounting
+- Added arbitrary-precision exact rational arithmetic, signed structural arithmetic, Weyl algebra, cyclotomic qutrit arithmetic, and exact qutrit Clifford symplectic operations
+- Added typed strict-order, affine-relation, Horn-logic, exact rational linear-system, and mathematical-language execution surfaces
+- Added bounded exact univariate rational polynomial arithmetic with Euclidean division, GCD, square-free reduction, Sturm sequences, and exact rational-interval root counts
+- Added source-bound Qwen3.5 LCT translation contracts that retain source topology, runtime context, reconstruction evidence, and fail-closed translation receipts without claiming full donor-activation equivalence
+- Added exact behavior-fold execution and matching C bridge while keeping semantic authority outside QSA
+- Added bounded fermionic Gaussian states using real Majorana covariance matrices with explicit mode, scalar, memory, structural, and pure-state validation
+- Added structured quadratic-phase coherence and bounded Pauli readout with explicit support limits and dense differential validation
+- Added deterministic exact factor max-sum variable elimination with sparse infeasibility semantics, bounded intermediate tables/backpointers, and deterministic tie handling
+- Added persistent exact factor-message reuse for repeated local dense-factor bindings on fixed topology, including stale-plan rejection, transactional failed binds, dependency-limited invalidation, and compiled-index resource preflight
+- Added matched exact-rational QSA/SymPy evidence that requires exact-output agreement before timing is reported
+- Recorded a 28.38x repeat-update ratio on the specific 4,096-variable chain/local-update factor-message workload with zero numerical error; the result is workload-specific
+- Preserved the existing exact QRegister fallback, QSC v1 bytes, C ABI 1.5.0, established C++/C/Python interfaces, and fail-closed exactness/resource boundaries
+
 ## 0.2.0 — 2026-08-09
 
 - Added a native fused numerical layer with persistent bounded workers, deterministic reductions, specialized real/complex kernels, and runtime AVX2/FMA dispatch on supported x86 systems
