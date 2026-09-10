@@ -64,10 +64,6 @@ The cache keeps the source plan and bound workspace contracts explicit, rejects 
 
 On the recorded 4,096-variable chain/local-update workload, the persistent-message carrier measured a **28.38x repeat-update ratio** against the matched full-update path with zero numerical error. This number is specific to that topology and update pattern; it is not a universal factor-graph speedup claim.
 
-### Source-bound translation contracts
-
-0.3.0 also includes a source-bound Qwen3.5 LCT translation surface that keeps source topology, runtime context, reconstruction evidence, and translation receipts explicit and fail-closed. It is an engineering contract for bounded source translation; it does **not** establish full donor-activation equivalence or end-to-end model acceptance.
-
 ---
 
 ## QSA 0.2 foundations retained
