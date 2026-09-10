@@ -1,5 +1,6 @@
 #pragma once
 
+#include "qubit/qpauli.hpp"
 #include "qubit/qstate.hpp"
 
 #include <cstddef>
@@ -13,6 +14,42 @@ namespace qubit {
 
 struct PhaseGraphConfig {
     std::size_t max_edges{4'000'000};
+};
+
+struct PhaseGraphCoherenceReceipt {
+    std::size_t qubits{0};
+    std::size_t phase_edges{0};
+    std::size_t structural_factors{0};
+    bool factorized{true};
+    bool dense_materialization{false};
+};
+
+struct PhaseGraphCoherenceResult {
+    std::vector<QComplex> values{};
+    PhaseGraphCoherenceReceipt receipt{};
+};
+
+struct PhaseGraphPauliConfig {
+    std::size_t max_flip_qubits{16};
+    std::size_t max_enumerated_assignments{1U << 16U};
+};
+
+struct PhaseGraphPauliReceipt {
+    std::size_t qubits{0};
+    std::size_t phase_edges{0};
+    std::size_t pauli_factors{0};
+    std::size_t flipped_qubits{0};
+    std::size_t internal_phase_edges{0};
+    std::size_t boundary_phase_edges{0};
+    std::size_t external_factors{0};
+    std::size_t enumerated_assignments{0};
+    bool factorized{true};
+    bool dense_materialization{false};
+};
+
+struct PhaseGraphPauliResult {
+    QComplex value{};
+    PhaseGraphPauliReceipt receipt{};
 };
 
 class PhaseGraphState {
@@ -41,6 +78,10 @@ public:
     void apply_swap(QubitId first, QubitId second);
 
     [[nodiscard]] double probability_one(QubitId qubit) const;
+    [[nodiscard]] PhaseGraphCoherenceResult equatorial_coherence() const;
+    [[nodiscard]] PhaseGraphPauliResult pauli_expectation(
+        std::span<const PauliFactor> factors,
+        PhaseGraphPauliConfig config = {}) const;
     [[nodiscard]] QComplex unit_phase(BasisIndex basis) const;
     [[nodiscard]] QComplex unit_phase_bits(std::span<const std::uint8_t> bits) const;
     [[nodiscard]] QComplex amplitude(BasisIndex basis) const;
