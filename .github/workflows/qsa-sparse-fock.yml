@@ -1,0 +1,108 @@
+name: QSA Exact Sparse Fock
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qfock.hpp"
+      - "include/qubit/detail/qfock_impl.hpp"
+      - "tests/test_sparse_fock.cpp"
+      - "benchmarks/sparse_fock.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-sparse-fock.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sparse-fock-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sparse Fock test
+        shell: bash
+        run: |
+          mkdir -p sparse-fock-driver
+          cat > sparse-fock-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSASparseFockCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(sparse_fock_tests ../tests/test_sparse_fock.cpp)
+          target_include_directories(sparse_fock_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(sparse_fock_tests PRIVATE /W4)
+          else()
+              target_compile_options(sparse_fock_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME sparse_fock_tests COMMAND sparse_fock_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S sparse-fock-driver -B sparse-fock-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build sparse-fock-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir sparse-fock-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  sparse-fock-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_sparse_fock.cpp -o sparse-fock-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./sparse-fock-sanitize
+
+  sparse-fock-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/sparse_fock.cpp -o sparse-fock-benchmark
+      - name: Run sparse Fock carrier
+        run: |
+          set -o pipefail
+          ./sparse-fock-benchmark | tee sparse-fock-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("sparse-fock-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          def number(name):
+              return float(values[name])
+          assert int(values["fock_modes"]) == 4096
+          assert int(values["fock_particles"]) == 4096
+          assert number("fock_sector_log2_dimension") > 8000.0
+          assert int(values["fock_input_terms"]) == 8
+          assert int(values["fock_input_occupied_entries"]) == 24
+          assert int(values["fock_output_fixed_particles"]) == 4096
+          assert int(values["fock_output_terms"]) <= 128
+          assert int(values["fock_output_occupied_entries"]) < 4096
+          assert number("fock_output_norm_squared") > 0.0
+          assert number("fock_apply_ms") < 10000.0
+          assert number("fock_query_ms") < 10000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum sparse-fock-evidence.txt | tee sparse-fock-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-sparse-fock-evidence
+          path: |
+            sparse-fock-evidence.txt
+            sparse-fock-evidence.sha256

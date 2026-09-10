@@ -1,5 +1,6 @@
 #pragma once
 
+#include "qubit/qpauli.hpp"
 #include "qubit/qstate.hpp"
 
 #include <cstddef>
@@ -15,6 +16,42 @@ struct PhaseGraphConfig {
     std::size_t max_edges{4'000'000};
 };
 
+struct PhaseGraphCoherenceReceipt {
+    std::size_t qubits{0};
+    std::size_t phase_edges{0};
+    std::size_t structural_factors{0};
+    bool factorized{true};
+    bool dense_materialization{false};
+};
+
+struct PhaseGraphCoherenceResult {
+    std::vector<QComplex> values{};
+    PhaseGraphCoherenceReceipt receipt{};
+};
+
+struct PhaseGraphPauliConfig {
+    std::size_t max_flip_qubits{16};
+    std::size_t max_enumerated_assignments{1U << 16U};
+};
+
+struct PhaseGraphPauliReceipt {
+    std::size_t qubits{0};
+    std::size_t phase_edges{0};
+    std::size_t pauli_factors{0};
+    std::size_t flipped_qubits{0};
+    std::size_t internal_phase_edges{0};
+    std::size_t boundary_phase_edges{0};
+    std::size_t external_factors{0};
+    std::size_t enumerated_assignments{0};
+    bool factorized{true};
+    bool dense_materialization{false};
+};
+
+struct PhaseGraphPauliResult {
+    QComplex value{};
+    PhaseGraphPauliReceipt receipt{};
+};
+
 class PhaseGraphState {
 public:
     explicit PhaseGraphState(
@@ -24,6 +61,9 @@ public:
     [[nodiscard]] std::size_t qubit_count() const noexcept { return qubit_count_; }
     [[nodiscard]] std::size_t edge_count() const noexcept { return edge_phases_.size(); }
     [[nodiscard]] std::size_t estimated_bytes() const noexcept;
+    [[nodiscard]] double log2_uniform_amplitude_scale() const noexcept {
+        return -0.5 * static_cast<double>(qubit_count_);
+    }
 
     void apply_x(QubitId qubit);
     void apply_y(QubitId qubit);
@@ -38,6 +78,12 @@ public:
     void apply_swap(QubitId first, QubitId second);
 
     [[nodiscard]] double probability_one(QubitId qubit) const;
+    [[nodiscard]] PhaseGraphCoherenceResult equatorial_coherence() const;
+    [[nodiscard]] PhaseGraphPauliResult pauli_expectation(
+        std::span<const PauliFactor> factors,
+        PhaseGraphPauliConfig config = {}) const;
+    [[nodiscard]] QComplex unit_phase(BasisIndex basis) const;
+    [[nodiscard]] QComplex unit_phase_bits(std::span<const std::uint8_t> bits) const;
     [[nodiscard]] QComplex amplitude(BasisIndex basis) const;
     [[nodiscard]] QComplex amplitude_bits(std::span<const std::uint8_t> bits) const;
     [[nodiscard]] std::vector<QComplex> materialize(std::size_t max_qubits = 24) const;

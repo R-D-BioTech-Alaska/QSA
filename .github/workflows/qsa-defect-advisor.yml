@@ -1,0 +1,151 @@
+name: QSA Exact Defect Representation Advisor
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qdefect_advisor.hpp"
+      - "tests/test_defect_advisor.cpp"
+      - "benchmarks/defect_advisor.cpp"
+      - ".github/workflows/qsa-defect-advisor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  defect-advisor-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build advisor driver
+        shell: bash
+        run: |
+          mkdir -p defect-advisor-driver
+          cat > defect-advisor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSADefectAdvisorCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(defect_advisor_tests ../tests/test_defect_advisor.cpp)
+          target_link_libraries(defect_advisor_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(defect_advisor_tests PRIVATE /W4)
+          else()
+              target_compile_options(defect_advisor_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME defect_advisor_tests COMMAND defect_advisor_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S defect-advisor-driver -B defect-advisor-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build defect-advisor-build --config Release --target defect_advisor_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir defect-advisor-build -C Release --output-on-failure
+
+  defect-advisor-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p defect-advisor-driver
+          cat > defect-advisor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSADefectAdvisorSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(defect_advisor_tests ../tests/test_defect_advisor.cpp)
+          target_link_libraries(defect_advisor_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S defect-advisor-driver -B defect-advisor-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build defect-advisor-sanitize-build --target defect_advisor_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./defect-advisor-sanitize-build/defect_advisor_tests
+
+  defect-advisor-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p defect-advisor-driver
+          cat > defect-advisor-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSADefectAdvisorEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(defect_advisor_benchmark ../benchmarks/defect_advisor.cpp)
+          target_link_libraries(defect_advisor_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S defect-advisor-driver -B defect-advisor-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build defect-advisor-evidence-build --target defect_advisor_benchmark --parallel 2
+      - name: Run advisor carrier
+        run: |
+          set -o pipefail
+          ./defect-advisor-evidence-build/defect_advisor_benchmark | tee defect-advisor-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("defect-advisor-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["advisor_qubits"]) == 4096
+          assert int(values["phase_case_route"]) == 1
+          assert int(values["phase_case_h_defects"]) == 4
+          assert int(values["phase_case_t_defects"]) == 64
+          assert int(values["phase_case_gap_log2"]) == 60
+          assert int(values["phase_case_selected_envelope"]) == 16
+          assert int(values["magic_case_route"]) == 2
+          assert int(values["magic_case_h_defects"]) == 64
+          assert int(values["magic_case_t_defects"]) == 4
+          assert int(values["magic_case_gap_log2"]) == 60
+          assert int(values["magic_case_selected_envelope"]) == 16
+          assert int(values["tie_case_route"]) == 3
+          assert int(values["tie_case_gap_log2"]) == 0
+          assert 0.0 < float(values["triad_analysis_us"]) < 1000000.0
+          assert int(values["large_operations"]) == 262144
+          assert int(values["large_route"]) == 1
+          assert int(values["large_phase_h_defects"]) == 0
+          assert int(values["large_magic_t_defects"]) == 262144
+          assert int(values["large_magic_envelope_fits_size_t"]) == 0
+          assert 0.0 < float(values["large_analysis_ms"]) < 5000.0
+          assert int(values["state_expansion_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum defect-advisor-evidence.txt | tee defect-advisor-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-defect-advisor-evidence
+          path: |
+            defect-advisor-evidence.txt
+            defect-advisor-evidence.sha256

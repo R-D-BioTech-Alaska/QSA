@@ -1,0 +1,61 @@
+name: QSA Exact Tree Tensor
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qttn.hpp"
+      - "tests/test_tree_tensor.cpp"
+      - "benchmarks/tree_tensor.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-ttn.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ttn-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create standalone TTN build
+        shell: bash
+        run: |
+          mkdir -p ttn-driver
+          cat > ttn-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSATreeTensorCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(ttn_tests ../tests/test_tree_tensor.cpp)
+          target_include_directories(ttn_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(ttn_tests PRIVATE /W4)
+          else()
+              target_compile_options(ttn_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME ttn_tests COMMAND ttn_tests)
+          EOF
+      - name: Configure
+        run: cmake -S ttn-driver -B ttn-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build ttn-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir ttn-build -C Release --output-on-failure
+
+  ttn-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_tree_tensor.cpp -o tree-tensor-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./tree-tensor-sanitize

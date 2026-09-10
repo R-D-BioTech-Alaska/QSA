@@ -1,0 +1,167 @@
+name: QSA Shared Prepared Adaptive Amplitude
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qadaptive_prepared_amplitude.hpp"
+      - "include/qubit/qadaptive_amplitude.hpp"
+      - "include/qubit/qamplitude_advisor.hpp"
+      - "include/qubit/qhpath_prepared.hpp"
+      - "tests/test_adaptive_prepared_amplitude.cpp"
+      - "benchmarks/adaptive_prepared_amplitude.cpp"
+      - ".github/workflows/qsa-adaptive-prepared-amplitude.yml"
+      - "tests/test_architecture_layers.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adaptive-prepared-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build shared adaptive driver
+        shell: bash
+        run: |
+          mkdir -p adaptive-prepared-driver
+          cat > adaptive-prepared-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSASharedPreparedAdaptiveCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          enable_testing()
+          add_executable(adaptive_prepared_tests ../tests/test_adaptive_prepared_amplitude.cpp)
+          target_link_libraries(adaptive_prepared_tests PRIVATE qstate_core)
+          if(MSVC)
+              target_compile_options(adaptive_prepared_tests PRIVATE /W4)
+          else()
+              target_compile_options(adaptive_prepared_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME adaptive_prepared_tests COMMAND adaptive_prepared_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S adaptive-prepared-driver -B adaptive-prepared-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build adaptive-prepared-build --config Release --target adaptive_prepared_tests --parallel 2
+      - name: Run
+        run: ctest --test-dir adaptive-prepared-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  adaptive-prepared-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sanitizer driver
+        run: |
+          mkdir -p adaptive-prepared-driver
+          cat > adaptive-prepared-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSASharedPreparedAdaptiveSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+          add_subdirectory(.. qsa-core)
+          add_executable(adaptive_prepared_tests ../tests/test_adaptive_prepared_amplitude.cpp)
+          target_link_libraries(adaptive_prepared_tests PRIVATE qstate_core)
+          CMAKE
+          cmake -S adaptive-prepared-driver -B adaptive-prepared-sanitize-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build adaptive-prepared-sanitize-build --target adaptive_prepared_tests --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./adaptive-prepared-sanitize-build/adaptive_prepared_tests
+
+  adaptive-prepared-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          mkdir -p adaptive-prepared-driver
+          cat > adaptive-prepared-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSASharedPreparedAdaptiveEvidence LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_PYTHON_TESTS OFF CACHE BOOL "" FORCE)
+          set(QSTATE_INSTALL_DEVELOPMENT OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa-core)
+          add_executable(adaptive_prepared_benchmark ../benchmarks/adaptive_prepared_amplitude.cpp)
+          target_link_libraries(adaptive_prepared_benchmark PRIVATE qstate_core)
+          CMAKE
+          cmake -S adaptive-prepared-driver -B adaptive-prepared-evidence-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build adaptive-prepared-evidence-build --target adaptive_prepared_benchmark --parallel 2
+      - name: Run shared adaptive carrier
+        run: |
+          set -o pipefail
+          ./adaptive-prepared-evidence-build/adaptive_prepared_benchmark | tee adaptive-prepared-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          import math
+          values = {}
+          with open("adaptive-prepared-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          assert int(values["shared_qubits"]) == 1024
+          assert int(values["shared_query_count"]) == 8
+          assert int(values["shared_route"]) == 2
+          assert int(values["legacy_route"]) == 2
+          assert int(values["shared_h_events"]) == 8192
+          assert int(values["shared_peak_union_variables"]) <= 12
+          assert int(values["shared_peak_factor_entries"]) <= 4096
+          assert 0 < int(values["shared_plan_bytes"]) < 512 * 1024 * 1024
+          assert 0 < int(values["shared_workspace_bytes"]) < 1024 * 1024 * 1024
+          assert int(values["shared_hpath_rebind_count"]) == 8192
+          assert int(values["shared_topology_compilations"]) == 1
+          assert int(values["legacy_topology_compilations"]) == 9
+          assert int(values["shared_certificate_reused_for_execution"]) == 1
+          assert float(values["shared_max_logp_error"]) <= 1e-10
+          for key in (
+              "shared_setup_ms", "legacy_setup_ms",
+              "shared_first_query_ms", "legacy_first_query_ms",
+              "shared_batch_ms", "legacy_batch_ms",
+              "shared_one_shot_total_ms", "legacy_one_shot_total_ms",
+              "shared_eight_query_total_ms", "legacy_eight_query_total_ms",
+          ):
+              assert math.isfinite(float(values[key])) and float(values[key]) > 0.0
+          one_shot = float(values["shared_one_shot_speed_ratio"])
+          query_batch = float(values["shared_query_batch_speed_ratio"])
+          total = float(values["shared_eight_query_total_speed_ratio"])
+          assert math.isfinite(one_shot) and one_shot > 1.0
+          assert math.isfinite(query_batch) and query_batch > 1.5
+          assert math.isfinite(total) and total > 1.5
+          assert int(values["dense_state_materialized"]) == 0
+          assert int(values["explicit_h_branch_list_materialized"]) == 0
+          PY
+      - name: Hash evidence
+        run: sha256sum adaptive-prepared-evidence.txt | tee adaptive-prepared-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-adaptive-prepared-evidence
+          path: |
+            adaptive-prepared-evidence.txt
+            adaptive-prepared-evidence.sha256

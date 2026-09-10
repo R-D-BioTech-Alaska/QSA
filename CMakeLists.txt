@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QubitNativeStateEngine VERSION 0.2.0 LANGUAGES CXX)
+project(QubitNativeStateEngine VERSION 0.3.0 LANGUAGES CXX)
 
 find_package(Threads REQUIRED)
 include(GNUInstallDirs)
@@ -39,7 +39,9 @@ add_library(qstate_core STATIC
     src/qpauli.cpp
     src/qpauli_causal.cpp
     src/qtensor.cpp
+    src/qmps.cpp
     src/qbroker.cpp
+    src/qfactor.cpp
     src/qestimator.cpp
     src/qtensor_plan.cpp
     src/qtensor_expectation.cpp
@@ -214,9 +216,21 @@ if(QSTATE_BUILD_TESTS)
     target_link_libraries(qstate_numeric_tests PRIVATE qstate_core)
     add_test(NAME qstate_numeric_tests COMMAND qstate_numeric_tests)
 
+    add_executable(qstate_math_tests tests/test_qmath.cpp)
+    target_link_libraries(qstate_math_tests PRIVATE qstate_core)
+    add_test(NAME qstate_math_tests COMMAND qstate_math_tests)
+
+    add_executable(qstate_logic_tests tests/test_qlogic.cpp)
+    target_link_libraries(qstate_logic_tests PRIVATE qstate_core)
+    add_test(NAME qstate_logic_tests COMMAND qstate_logic_tests)
+
     add_executable(qstate_tensor_network_tests tests/test_tensor_network.cpp)
     target_link_libraries(qstate_tensor_network_tests PRIVATE qstate_core)
     add_test(NAME qstate_tensor_network_tests COMMAND qstate_tensor_network_tests)
+
+    add_executable(qstate_mps_tests tests/test_mps.cpp)
+    target_link_libraries(qstate_mps_tests PRIVATE qstate_core)
+    add_test(NAME qstate_mps_tests COMMAND qstate_mps_tests)
 
     add_executable(qstate_tensor_contraction_plan_tests tests/test_tensor_contraction_plan.cpp)
     target_link_libraries(qstate_tensor_contraction_plan_tests PRIVATE qstate_core)
@@ -229,6 +243,14 @@ if(QSTATE_BUILD_TESTS)
     add_executable(qstate_execution_broker_tests tests/test_execution_broker.cpp)
     target_link_libraries(qstate_execution_broker_tests PRIVATE qstate_core)
     add_test(NAME qstate_execution_broker_tests COMMAND qstate_execution_broker_tests)
+
+    add_executable(qstate_marginal_probability_tests tests/test_marginal_probability.cpp)
+    target_link_libraries(qstate_marginal_probability_tests PRIVATE qstate_core)
+    add_test(NAME qstate_marginal_probability_tests COMMAND qstate_marginal_probability_tests)
+
+    add_executable(qstate_factor_graph_tests tests/test_factor_graph.cpp)
+    target_link_libraries(qstate_factor_graph_tests PRIVATE qstate_core)
+    add_test(NAME qstate_factor_graph_tests COMMAND qstate_factor_graph_tests)
 
     add_executable(qstate_estimator_tests tests/test_estimator.cpp)
     target_link_libraries(qstate_estimator_tests PRIVATE qstate_core)
@@ -365,8 +387,14 @@ if(QSTATE_BUILD_BENCHMARKS)
     add_executable(qstate_tensor_network_benchmark benchmarks/tensor_network.cpp)
     target_link_libraries(qstate_tensor_network_benchmark PRIVATE qstate_core)
 
+    add_executable(qstate_mps_benchmark benchmarks/mps.cpp)
+    target_link_libraries(qstate_mps_benchmark PRIVATE qstate_core)
+
     add_executable(qstate_tensor_contraction_plan_benchmark benchmarks/tensor_contraction_plan.cpp)
     target_link_libraries(qstate_tensor_contraction_plan_benchmark PRIVATE qstate_core)
+
+    add_executable(qstate_factor_graph_benchmark benchmarks/factor_graph.cpp)
+    target_link_libraries(qstate_factor_graph_benchmark PRIVATE qstate_core)
 
     add_executable(qstate_estimator_benchmark benchmarks/estimator.cpp)
     target_link_libraries(qstate_estimator_benchmark PRIVATE qstate_core)

@@ -3,15 +3,102 @@ name: QSA Tensor Network Evidence
 on:
   pull_request:
     paths:
+      - "include/qubit/qbroker.hpp"
       - "include/qubit/qtensor.hpp"
+      - "src/qbroker.cpp"
       - "src/qtensor.cpp"
+      - "src/qtensor_plan.cpp"
       - "tests/test_tensor_network.cpp"
+      - "tests/test_tensor_contraction_plan.cpp"
+      - "tests/test_tensor_planning_deferral.cpp"
       - "benchmarks/tensor_network.cpp"
+      - "benchmarks/tensor_contraction_plan.cpp"
+      - "benchmarks/tensor_planner_scaling.cpp"
       - "CMakeLists.txt"
       - ".github/workflows/qsa-tensor-network.yml"
   workflow_dispatch:
 
 jobs:
+  tensor-planning-deferral:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create focused build
+        shell: bash
+        run: |
+          mkdir -p tensor-planning-driver
+          cat > tensor-planning-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSATensorPlanningCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa)
+          if(APPLE)
+              get_target_property(QSA_FOCUSED_SOURCES qstate_core SOURCES)
+              list(FILTER QSA_FOCUSED_SOURCES EXCLUDE REGEX "qestimator\\.cpp$")
+              set_property(TARGET qstate_core PROPERTY SOURCES ${QSA_FOCUSED_SOURCES})
+          endif()
+          enable_testing()
+          add_executable(tensor_planning_tests ../tests/test_tensor_planning_deferral.cpp)
+          target_link_libraries(tensor_planning_tests PRIVATE qstate_core)
+          target_include_directories(tensor_planning_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(tensor_planning_tests PRIVATE /W4)
+          else()
+              target_compile_options(tensor_planning_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME tensor_planning_tests COMMAND tensor_planning_tests)
+          EOF
+      - name: Configure
+        run: cmake -S tensor-planning-driver -B tensor-planning-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build tensor-planning-build --config Release --parallel 2 --target tensor_planning_tests
+      - name: Run
+        run: ctest --test-dir tensor-planning-build -C Release -R '^tensor_planning_tests$' --output-on-failure
+
+  tensor-planning-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create focused build
+        run: |
+          mkdir -p tensor-planning-driver
+          cat > tensor-planning-driver/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSATensorPlanningSanitize LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          set(QSTATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+          set(QSTATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+          add_subdirectory(.. qsa)
+          enable_testing()
+          add_executable(tensor_planning_tests ../tests/test_tensor_planning_deferral.cpp)
+          target_link_libraries(tensor_planning_tests PRIVATE qstate_core)
+          target_include_directories(tensor_planning_tests PRIVATE ../include)
+          target_compile_options(tensor_planning_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          add_test(NAME tensor_planning_tests COMMAND tensor_planning_tests)
+          EOF
+      - name: Configure
+        run: >-
+          cmake -S tensor-planning-driver -B tensor-planning-sanitize
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build tensor-planning-sanitize --parallel 2 --target tensor_planning_tests
+      - name: Run ASan/UBSan
+        run: >-
+          env ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1
+          ctest --test-dir tensor-planning-sanitize -R '^tensor_planning_tests$' --output-on-failure
+
   exact-tensor-network:
     runs-on: ubuntu-24.04
     steps:
@@ -21,16 +108,37 @@ jobs:
       - name: Build tensor targets
         run: >-
           cmake --build build --config Release --parallel 2
-          --target qstate_tensor_network_tests qstate_tensor_network_benchmark
+          --target
+          qstate_tensor_network_tests
+          qstate_tensor_contraction_plan_tests
+          qstate_tensor_network_benchmark
+          qstate_tensor_contraction_plan_benchmark
+      - name: Build planner and deferral evidence
+        run: >-
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow
+          -Iinclude benchmarks/tensor_planner_scaling.cpp build/libqstate_core.a -pthread
+          -o build/qstate_tensor_planner_scaling_benchmark
       - name: Run exactness and collapse gates
-        run: ./build/qstate_tensor_network_tests
-      - name: Run structural benchmark
-        run: ./build/qstate_tensor_network_benchmark | tee tensor_network_evidence.txt
+        run: |
+          ./build/qstate_tensor_network_tests
+          ./build/qstate_tensor_contraction_plan_tests
+      - name: Run structural benchmarks
+        run: |
+          ./build/qstate_tensor_network_benchmark | tee tensor_network_evidence.txt
+          ./build/qstate_tensor_contraction_plan_benchmark | tee tensor_plan_evidence.txt
+          ./build/qstate_tensor_planner_scaling_benchmark | tee tensor_planner_evidence.txt
       - name: Hash evidence
-        run: sha256sum tensor_network_evidence.txt | tee tensor_network_evidence.sha256
+        run: |
+          sha256sum tensor_network_evidence.txt | tee tensor_network_evidence.sha256
+          sha256sum tensor_plan_evidence.txt | tee tensor_plan_evidence.sha256
+          sha256sum tensor_planner_evidence.txt | tee tensor_planner_evidence.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: qsa-tensor-network-evidence
           path: |
             tensor_network_evidence.txt
             tensor_network_evidence.sha256
+            tensor_plan_evidence.txt
+            tensor_plan_evidence.sha256
+            tensor_planner_evidence.txt
+            tensor_planner_evidence.sha256

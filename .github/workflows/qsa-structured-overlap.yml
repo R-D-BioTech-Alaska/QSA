@@ -1,0 +1,63 @@
+name: QSA Exact Structured Overlap
+
+on:
+  pull_request:
+    paths:
+      - include/qubit/qoverlap.hpp
+      - tests/test_structured_overlap.cpp
+      - tests/structured_overlap_driver/CMakeLists.txt
+      - benchmarks/structured_overlap.cpp
+      - .github/workflows/qsa-structured-overlap.yml
+  workflow_dispatch:
+
+jobs:
+  structured-overlap-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tests/structured_overlap_driver -B structured-overlap-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build structured-overlap-build --config Release --target structured_overlap_tests --parallel 2
+      - name: Run
+        shell: bash
+        run: |
+          if [ -x structured-overlap-build/Release/structured_overlap_tests.exe ]; then
+            structured-overlap-build/Release/structured_overlap_tests.exe
+          else
+            ./structured-overlap-build/structured_overlap_tests
+          fi
+
+  structured-overlap-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tests/structured_overlap_driver -B structured-overlap-sanitize -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build structured-overlap-sanitize --target structured_overlap_tests --parallel 2
+      - name: Run
+        run: ./structured-overlap-sanitize/structured_overlap_tests
+
+  structured-overlap-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S tests/structured_overlap_driver -B structured-overlap-evidence-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build structured-overlap-evidence-build --target structured_overlap_benchmark --parallel 2
+      - name: Run evidence
+        run: ./structured-overlap-evidence-build/structured_overlap_benchmark | tee structured-overlap-evidence.txt
+      - name: Hash evidence
+        run: sha256sum structured-overlap-evidence.txt | tee structured-overlap-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-structured-overlap-evidence
+          path: |
+            structured-overlap-evidence.txt
+            structured-overlap-evidence.sha256

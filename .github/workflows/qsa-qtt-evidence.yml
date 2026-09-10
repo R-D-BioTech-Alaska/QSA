@@ -1,0 +1,65 @@
+name: QSA Exact QTT Evidence
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qqtt.hpp"
+      - "benchmarks/qtt.cpp"
+      - "tests/test_exact_qtt.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-qtt.yml"
+      - ".github/workflows/qsa-qtt-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qtt-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/qtt.cpp -o exact-qtt-benchmark
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run matched and capability controls
+        run: |
+          set -o pipefail
+          ./exact-qtt-benchmark | tee exact-qtt-evidence.txt
+      - name: Enforce evidence thresholds
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("exact-qtt-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          def number(name):
+              return float(values[name])
+          assert int(values["qtt_matched_rank"]) == 2
+          assert int(values["qtt_capability_bits"]) == 4096
+          assert int(values["qtt_capability_rank"]) == 2
+          assert int(values["qtt_capability_descriptor_scalars"]) == 32760
+          assert number("qtt_matched_query_error") < 1e-9
+          assert number("qtt_matched_sum_error") < 1e-8
+          assert number("qtt_norm_relative_error") < 1e-9
+          assert number("qtt_capability_selected_error") < 1e-9
+          assert number("qtt_capability_conditioned_relative_error") < 1e-9
+          assert number("qtt_matched_dense_sum_speedup") > 10.0
+          assert number("qtt_capability_descriptor_bytes") < 1_000_000.0
+          assert number("qtt_capability_setup_ms") < 1000.0
+          assert number("qtt_capability_query_ms") < 1000.0
+          assert number("qtt_capability_conditioned_ms") < 1000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum exact-qtt-evidence.txt | tee exact-qtt-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-exact-qtt-evidence
+          path: |
+            exact-qtt-evidence.txt
+            exact-qtt-evidence.sha256

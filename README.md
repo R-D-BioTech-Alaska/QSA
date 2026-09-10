@@ -11,7 +11,7 @@
 
 [![DOI](https://img.shields.io/badge/DOI-10.13140%2FRG.2.2.19653.20965-blue)](https://doi.org/10.13140/RG.2.2.19653.20965)
 [![Build and Test](https://github.com/R-D-BioTech-Alaska/QSA/actions/workflows/qsa.yml/badge.svg)](https://github.com/R-D-BioTech-Alaska/QSA/actions/workflows/qsa.yml)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-orange)](LICENSE)
 
 ### An exact, structure-aware quantum runtime for ordinary computers
@@ -40,13 +40,43 @@ The numerical core does not use NumPy, Qiskit, `std::complex`, BLAS, or a full-s
 
 ---
 
-## QSA 0.2.0
+## QSA 0.3.0
 
-0.2.0 is the first release of the newer compiled numerical and tensor runtime developed through the 0.1.9 bridge. It keeps the established QSA state engine and compatibility surface, then adds reusable exact execution plans around it.
+0.3.0 extends QSA from structure-aware state execution into a broader exact representation and mathematical runtime. The 0.2 numerical, tensor, estimator, gradient, state, and compatibility surfaces remain in place; the new work adds exact algebraic, relational, factorized, and bounded physical representations without changing QSC v1 or the established C ABI.
+
+### Exact mathematical language and persistent representations
+
+QSA now includes arbitrary-precision rational arithmetic, signed structural arithmetic, Weyl and cyclotomic algebra, exact qutrit Clifford symplectic operations, typed strict-order and affine relations, Horn-style exact logic, exact rational linear systems, and bounded exact univariate polynomial operations including Euclidean division, GCD, square-free reduction, Sturm sequences, and rational-interval root counts.
+
+The persistent representation compiler and component fabric keep eligible mathematical structure explicit across repeated work. Admission remains typed and bounded: unsupported structure is not silently promoted into an exact route, and resource limits remain part of the representation contract.
+
+### Structured physical representations
+
+The existing bosonic Gaussian, sparse fixed-number Fock, coherent branch-sum, QTT, stabilizer, phase-graph, tensor, and symmetry routes remain available. 0.3.0 adds a bounded fermionic Gaussian covariance representation using real Majorana covariance matrices with explicit mode, scalar, memory, structural, and pure-state checks.
+
+Quadratic phase-graph work also gains exact structured coherence and bounded Pauli readout where the requested support fits the certified route. These mechanisms preserve compact structure only when the mathematics allows it; they do not imply a compact route for arbitrary states or observables.
+
+### Exact factor decisions and persistent messages
+
+The exact factor runtime now supports deterministic max-sum variable elimination with sparse infeasibility semantics, bounded intermediate tables and backpointers, and deterministic tie handling. A persistent exact message cache can reuse unaffected elimination messages across repeated local dense-factor bindings on fixed topology.
+
+The cache keeps the source plan and bound workspace contracts explicit, rejects stale source-plan state, rejects temporary source plans at construction, propagates dirtiness only through dependent messages, and preflights persistent message/dependency storage against the existing compiled-index cap.
+
+On the recorded 4,096-variable chain/local-update workload, the persistent-message carrier measured a **28.38x repeat-update ratio** against the matched full-update path with zero numerical error. This number is specific to that topology and update pattern; it is not a universal factor-graph speedup claim.
+
+### Source-bound translation contracts
+
+0.3.0 also includes a source-bound Qwen3.5 LCT translation surface that keeps source topology, runtime context, reconstruction evidence, and translation receipts explicit and fail-closed. It is an engineering contract for bounded source translation; it does **not** establish full donor-activation equivalence or end-to-end model acceptance.
+
+---
+
+## QSA 0.2 foundations retained
+
+0.2.0 introduced the compiled numerical and tensor runtime that remains part of 0.3.0.
 
 ### Native numerical core
 
-The new numerical layer provides persistent bounded CPU workers, deterministic reductions, fused real and complex arithmetic, dot and inner-product operations, and specialized small complex matrix batches. x86 builds can select AVX2/FMA kernels at runtime when the host supports them.
+The numerical layer provides persistent bounded CPU workers, deterministic reductions, fused real and complex arithmetic, dot and inner-product operations, and specialized small complex matrix batches. x86 builds can select AVX2/FMA kernels at runtime when the host supports them.
 
 The point of this layer is not to reproduce a general array package. It exists to remove temporary allocations and repeated memory passes from the numerical shapes QSA actually uses.
 
@@ -60,7 +90,7 @@ This lets structured circuits reach logical widths that would be impossible to r
 
 ### Estimation and parameter sweeps
 
-QSA 0.2.0 includes exact estimator planning for Pauli observables and a compile-once parameterized estimator for Rx, Ry, and Rz parameter sweeps.
+QSA includes exact estimator planning for Pauli observables and a compile-once parameterized estimator for Rx, Ry, and Rz parameter sweeps.
 
 Parameterized tensor execution does not rebuild the complete circuit for each point when the topology is reusable. Parameterized gate sources are rebound directly, fixed tensor sources are retained, and observable terms proven independent of the parameters can be cached once. Shared parameter slots are supported, and the general QRegister route remains the exact fallback.
 
@@ -89,6 +119,10 @@ The result is especially useful for large logical circuits where a requested obs
 | `TensorNetworkCircuit` | Bounded-width exact tensor execution and reusable contraction plans |
 | Exact estimator plans | Observable evaluation, parameter sweeps, and exact route fallback |
 | Exact adjoint plans | Reverse-mode parameter gradients with bounded scheduling and causal pruning |
+| Exact representation compiler / fabric | Typed persistent exact mathematical and structural representations |
+| QMath / typed relation and logic | Exact rational, signed, Weyl, qutrit, linear, relational, logic, and polynomial operations |
+| Exact factor runtime | Bounded exact elimination, decisions, bindings, and persistent local messages |
+| Fermionic Gaussian state | Bounded real Majorana covariance representation |
 | QSC v1 | Checksummed binary storage for normal QSA registers |
 
 The representations are complementary. QSA does not force every calculation through the newest backend; the representation has to fit the mathematics of the workload.
@@ -97,9 +131,9 @@ The representations are complementary. QSA does not force every calculation thro
 
 ## Measured results
 
-The benchmark suite records both speed and numerical agreement. These numbers are **workload-specific measurements**, not a claim that QSA is universally faster than NumPy, Qiskit, or every dense simulator.
+The benchmark suite records both speed and numerical agreement. These numbers are **workload-specific measurements**, not a claim that QSA is universally faster than NumPy, Qiskit, SymPy, or every dense simulator.
 
-### QSA 0.2 runtime evidence
+### Compiled runtime evidence
 
 | Workload | Measured result |
 | --- | ---: |
@@ -110,14 +144,15 @@ The benchmark suite records both speed and numerical agreement. These numbers ar
 | 100q exact gradient, 8 observables / 4 parameters | **364x** best execution ratio vs matched exact Aer MPS parameter shift; **4.51x** setup-plus-first ratio |
 | Parameterized estimator sweep, 18q | roughly **29x** vs the matched Aer sweep in the recorded workload |
 | Parameterized estimator sweep, 100q | roughly **161x to 239x** vs matched exact Aer MPS in the recorded workload |
+| Persistent exact factor messages, 4,096-variable chain/local update | **28.38x** repeat-update ratio vs the matched full-update path, zero numerical error |
 
 The NumPy comparison uses the same numerical work and preallocated outputs; the recorded evidence compares QSA's four persistent workers with NumPy pinned to one backend thread. It is evidence for these fused QSA workloads, not a generic BLAS/GEMM comparison.
 
-The Aer comparisons use the same circuit family, observables, parameters, and exact-result checks. The 100-qubit Aer route uses MPS with truncation disabled. These results demonstrate the value of preserving structure and causal locality; they do not imply the same multiplier for arbitrary circuits.
+The Aer comparisons use the same circuit family, observables, parameters, and exact-result checks. The 100-qubit Aer route uses MPS with truncation disabled. The exact-rational evidence lane checks QSA output against a matched SymPy control before reporting timing. These results demonstrate the value of preserving structure and causal locality; they do not imply the same multiplier for arbitrary circuits.
 
 ### Earlier structural results
 
-QSA's older structural engines remain part of 0.2.0. Representative measurements include an approximately 1,744x gain on the recorded 18-qubit Clifford workload, approximately 120x to 138x for a 4,096-qubit stabilizer batch, a 100,000-qubit phase graph evolved in roughly 4.6 ms, and exact 50-qubit GHZ storage in a few KiB instead of a dense 16 PiB statevector.
+QSA's older structural engines remain part of 0.3.0. Representative measurements include an approximately 1,744x gain on the recorded 18-qubit Clifford workload, approximately 120x to 138x for a 4,096-qubit stabilizer batch, a 100,000-qubit phase graph evolved in roughly 4.6 ms, and exact 50-qubit GHZ storage in a few KiB instead of a dense 16 PiB statevector.
 
 Benchmark sources live in [`benchmarks/`](benchmarks/). The runtime evidence workflow records the matching configuration and error checks alongside the timings.
 
@@ -139,10 +174,10 @@ This distinction is important: QSA removes unnecessary exponential work. It does
 
 ## Installation
 
-Install QSA 0.2.0 from the release tag:
+Install QSA 0.3.0 from the release tag:
 
 ```bash
-python -m pip install "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@v0.2.0"
+python -m pip install "qubit-state-algebra @ git+https://github.com/R-D-BioTech-Alaska/QSA.git@v0.3.0"
 ```
 
 Install the current `main` branch:
@@ -241,7 +276,8 @@ The runtime therefore uses explicit boundaries:
 * causal execution expands when the real backward light cone expands;
 * tensor execution enforces factor and contraction-entry limits;
 * parameter-independent caching is based on structural dependency proofs;
-* no accepted 0.2 path silently truncates amplitudes, Pauli terms, MPS bonds, or gradients;
+* exact factor and representation routes enforce their declared size and compiled-index limits;
+* no accepted release path silently truncates amplitudes, Pauli terms, MPS bonds, gradients, exact factors, or typed algebraic results;
 * `QRegister` remains the general exact fallback where a specialized representation is not eligible.
 
 Performance should be measured on the actual workload being run.
@@ -250,7 +286,7 @@ Performance should be measured on the actual workload being run.
 
 ## Compatibility
 
-QSA 0.2.0 keeps the established 0.1 compatibility surface while adding the newer runtime as additive C++ systems.
+QSA 0.3.0 keeps the established 0.1 compatibility surface while adding the newer exact C++ systems.
 
 * The C ABI remains **1.5.0**.
 * QSC remains **version 1**.
@@ -281,11 +317,11 @@ The checksum is for corruption detection. QSC is not an authentication or encryp
 
 ## Validation
 
-The release build is gated across Linux, macOS, and Windows. The suite includes native CTest targets, randomized dense-reference comparisons, QSC compatibility and hostile-input tests, structural and representation checks, stabilizer and phase-graph differential tests, exact tensor and estimator tests, parameter-sweep and gradient tests, causal-collapse cases, package installation tests, independent installed C/C++ consumers, and Linux ASan/UBSan.
+The release build is gated across Linux, macOS, and Windows. The suite includes native CTest targets, randomized dense-reference comparisons, QSC compatibility and hostile-input tests, structural and representation checks, stabilizer and phase-graph differential tests, exact tensor and estimator tests, parameter-sweep and gradient tests, causal-collapse cases, exact mathematical-language and factor-route tests, package installation tests, independent installed C/C++ consumers, and Linux ASan/UBSan.
 
-The 0.2 runtime evidence lane additionally records matched numerical and quantum benchmarks together with numerical error, memory, route selection, and exactness boundaries.
+The runtime evidence lane records matched numerical and quantum benchmarks together with numerical error, memory, route selection, and exactness boundaries. Its historical workflow filename still contains the 0.2.0 label; the release version is determined by the synchronized package metadata and source tree.
 
-NumPy and Qiskit Aer are used as outside references in benchmark and differential work. They are not runtime dependencies of the QSA state engine.
+NumPy, SymPy, and Qiskit Aer are used as outside references in benchmark and differential work. They are not runtime dependencies of the QSA state engine.
 
 Run the native suite with:
 
@@ -325,6 +361,7 @@ This separation lets a temporary Qubit node execute a bounded mathematical job w
 
 | Release | Main work |
 | --- | --- |
+| **0.3.0** | Persistent exact representation/compiler fabric, exact mathematical language and rational algebra, Weyl/qutrit/typed relation/logic systems, exact rational linear and polynomial operations, source-bound translation contracts, bounded fermionic Gaussian covariance, structured phase coherence readout, exact factor max-sum decisions, persistent factor-message reuse, and matched exact-rational evidence. |
 | **0.2.0** | Native fused numerical runtime, reusable exact tensor contraction/expectation, estimator and parameter-sweep execution, direct tensor rebinding, exact adjoint gradients, bounded scheduling, and causal/static gradient pruning. |
 | **0.1.9** | Development bridge into 0.2.0. The accepted numerical, tensor, estimator, and differentiation work from this bridge was consolidated into 0.2.0 rather than maintained as a separate long-lived feature line. |
 | **0.1.8** | Exact factorization reconstruction, batch-native weighted adjoints, deterministic row-parallel execution, exact sparse Pauli observables, and causal Pauli propagation. |
@@ -370,7 +407,7 @@ Security reports should follow [`SECURITY.md`](SECURITY.md) rather than being po
 
 ## Citation
 
-Use the DOI at the top of this README or [`CITATION.cff`](CITATION.cff) when citing Qubit State Algebra. For results or features specific to this release, identify the software version as **QSA 0.2.0**.
+Use the DOI at the top of this README or [`CITATION.cff`](CITATION.cff) when citing Qubit State Algebra. For results or features specific to this release, identify the software version as **QSA 0.3.0**.
 
 ---
 

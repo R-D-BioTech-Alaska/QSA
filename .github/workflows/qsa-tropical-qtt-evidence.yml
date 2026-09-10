@@ -1,0 +1,66 @@
+name: QSA Exact Tropical QTT Evidence
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qtropical_qtt.hpp"
+      - "tests/test_exact_tropical_qtt.cpp"
+      - "benchmarks/tropical_qtt.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-tropical-qtt.yml"
+      - ".github/workflows/qsa-tropical-qtt-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tropical-qtt-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/tropical_qtt.cpp -o exact-tropical-qtt-benchmark
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run matched and capability controls
+        run: |
+          set -o pipefail
+          ./exact-tropical-qtt-benchmark | tee exact-tropical-qtt-evidence.txt
+      - name: Enforce evidence thresholds
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("exact-tropical-qtt-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          def number(name):
+              return float(values[name])
+          assert int(values["tropical_matched_bits"]) == 16
+          assert int(values["tropical_matched_rank"]) == 4
+          assert int(values["tropical_matched_descriptor_entries"]) == 464
+          assert int(values["tropical_matched_candidate_evaluations"]) == 464
+          assert number("tropical_matched_vs_enumeration_speedup") > 50.0
+          assert int(values["tropical_capability_bits"]) == 4096
+          assert int(values["tropical_capability_rank"]) == 8
+          assert int(values["tropical_capability_descriptor_entries"]) == 524064
+          assert int(values["tropical_capability_supported_entries"]) == 524064
+          assert int(values["tropical_capability_candidate_evaluations"]) == 524064
+          assert int(values["tropical_capability_maximum_active_bond_states"]) <= 8
+          assert number("tropical_capability_sector_descriptor_log2_ratio") > 4000.0
+          assert number("tropical_capability_setup_ms") < 5000.0
+          assert number("tropical_capability_qtt_min_ms") < 5000.0
+          assert number("tropical_capability_verify_ms") < 5000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum exact-tropical-qtt-evidence.txt | tee exact-tropical-qtt-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-exact-tropical-qtt-evidence
+          path: |
+            exact-tropical-qtt-evidence.txt
+            exact-tropical-qtt-evidence.sha256

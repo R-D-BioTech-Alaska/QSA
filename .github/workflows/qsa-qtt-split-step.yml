@@ -1,0 +1,117 @@
+name: QSA Exact QTT Split Step
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qqtt.hpp"
+      - "include/qubit/qqtt_poisson.hpp"
+      - "include/qubit/qqtt_schrodinger_poisson.hpp"
+      - "include/qubit/qqtt_sp_invariants.hpp"
+      - "include/qubit/qqtt_split_step.hpp"
+      - "tests/test_exact_qtt_split_step.cpp"
+      - "benchmarks/qtt_split_step.cpp"
+      - "tests/test_architecture_layers.py"
+      - ".github/workflows/qsa-qtt-split-step.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qtt-split-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build exact QTT split-step test
+        shell: bash
+        run: |
+          mkdir -p qtt-split-driver
+          cat > qtt-split-driver/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.20)
+          project(QSAQTTSplitStepCheck LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_CXX_EXTENSIONS OFF)
+          enable_testing()
+          add_executable(qtt_split_tests ../tests/test_exact_qtt_split_step.cpp)
+          target_include_directories(qtt_split_tests PRIVATE ../include)
+          if(MSVC)
+              target_compile_options(qtt_split_tests PRIVATE /W4)
+          else()
+              target_compile_options(qtt_split_tests PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+          endif()
+          add_test(NAME qtt_split_tests COMMAND qtt_split_tests)
+          CMAKE
+      - name: Configure
+        run: cmake -S qtt-split-driver -B qtt-split-build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build qtt-split-build --config Release --parallel 2
+      - name: Run
+        run: ctest --test-dir qtt-split-build -C Release --output-on-failure
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+
+  qtt-split-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run ASan/UBSan
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            tests/test_exact_qtt_split_step.cpp -o qtt-split-sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./qtt-split-sanitize
+
+  qtt-split-evidence:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build evidence carrier
+        run: |
+          c++ -std=c++20 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude benchmarks/qtt_split_step.cpp -o qtt-split-benchmark
+      - name: Run structure-preserving carrier
+        run: |
+          set -o pipefail
+          ./qtt-split-benchmark | tee qtt-split-evidence.txt
+      - name: Enforce bounded evidence
+        run: |
+          python - <<'PY'
+          values = {}
+          with open("qtt-split-evidence.txt", "r", encoding="utf-8") as handle:
+              for line in handle:
+                  key, sep, value = line.strip().partition("=")
+                  if sep:
+                      values[key] = value
+          def number(name):
+              return float(values[name])
+          assert int(values["qtt_split_bits"]) == 4096
+          assert int(values["qtt_split_logical_domain_exponent"]) == 4096
+          assert int(values["qtt_split_input_terms"]) == 2
+          assert int(values["qtt_split_density_terms"]) <= 2
+          assert int(values["qtt_split_potential_terms"]) <= 2
+          assert int(values["qtt_split_phase_terms"]) <= 2
+          assert int(values["qtt_split_output_terms"]) <= 2
+          assert int(values["qtt_split_output_qtt_rank"]) <= 2
+          assert int(values["qtt_split_output_qtt_descriptor_scalars"]) < 100000
+          assert number("qtt_split_norm_error") <= 1e-11
+          assert number("qtt_split_reverse_norm_error") <= 1e-11
+          assert number("qtt_split_reversal_l2") <= 1e-18
+          assert number("qtt_split_selected_error") <= 1e-9
+          assert number("qtt_split_forward_ms") < 10000.0
+          assert number("qtt_split_reverse_ms") < 10000.0
+          assert number("qtt_split_compile_ms") < 10000.0
+          assert number("qtt_split_query_ms") < 10000.0
+          PY
+      - name: Hash evidence
+        run: sha256sum qtt-split-evidence.txt | tee qtt-split-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-qtt-split-step-evidence
+          path: |
+            qtt-split-evidence.txt
+            qtt-split-evidence.sha256

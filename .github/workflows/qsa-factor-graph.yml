@@ -1,0 +1,61 @@
+name: QSA Exact Factor Graph
+
+on:
+  pull_request:
+    paths:
+      - "include/qubit/qfactor.hpp"
+      - "src/qfactor.cpp"
+      - "tests/test_factor_graph.cpp"
+      - "tests/test_factor_targeted_rebind.cpp"
+      - "benchmarks/factor_graph.cpp"
+      - "CMakeLists.txt"
+      - ".github/workflows/qsa-factor-graph.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-factor-graph:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DQSTATE_BUILD_EXAMPLES=OFF -DQSTATE_BUILD_BENCHMARKS=ON
+      - name: Build factor targets
+        run: >-
+          cmake --build build --config Release --parallel 2
+          --target qstate_factor_graph_tests qstate_factor_graph_benchmark
+      - name: Run exact factor gate
+        run: ./build/qstate_factor_graph_tests
+      - name: Run targeted rebind gate
+        run: |
+          c++ -std=c++20 -O3 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Iinclude tests/test_factor_targeted_rebind.cpp build/libqstate_core.a -pthread \
+            -o build/qstate_factor_targeted_rebind_tests
+          ./build/qstate_factor_targeted_rebind_tests
+      - name: Run targeted rebind sanitizers
+        run: |
+          c++ -std=c++20 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Iinclude \
+            src/qfactor.cpp tests/test_factor_targeted_rebind.cpp \
+            -o build/qstate_factor_targeted_rebind_sanitize
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 \
+            ./build/qstate_factor_targeted_rebind_sanitize
+      - name: Enforce architecture layers
+        run: python tests/test_architecture_layers.py
+      - name: Run matched factor benchmark
+        run: |
+          set -o pipefail
+          ./build/qstate_factor_graph_benchmark | tee factor-graph-evidence.txt
+      - name: Hash evidence
+        run: sha256sum factor-graph-evidence.txt | tee factor-graph-evidence.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qsa-factor-graph-evidence
+          path: |
+            factor-graph-evidence.txt
+            factor-graph-evidence.sha256
