@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(QubitNativeStateEngine VERSION 0.2.0 LANGUAGES CXX)
+project(QubitNativeStateEngine VERSION 0.3.0 LANGUAGES CXX)
 
 find_package(Threads REQUIRED)
 include(GNUInstallDirs)
