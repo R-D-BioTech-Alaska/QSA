@@ -83,6 +83,14 @@ public:
         retained_coordinates_.resize(plan_->retained_variables_.size());
     }
 
+    ExactFactorMessageCache(
+        ExactFactorPlan&&,
+        std::span<const FactorId>) = delete;
+
+    ExactFactorMessageCache(
+        const ExactFactorPlan&&,
+        std::span<const FactorId>) = delete;
+
     void bind_dense_factor(
         FactorId factor,
         std::span<const QComplex> values) {
