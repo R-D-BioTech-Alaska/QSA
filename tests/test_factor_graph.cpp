@@ -1,4 +1,5 @@
 #include "qubit/qfactor.hpp"
+#include "qubit/qfactor_map.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,6 +16,7 @@ namespace {
 
 using qubit::ExactFactorConfig;
 using qubit::ExactFactorGraph;
+using qubit::ExactFactorMaxSumPlan;
 using qubit::ExactFactorPlan;
 using qubit::FactorId;
 using qubit::FactorSparseEntry;
@@ -446,6 +448,222 @@ int main() {
             rejected = true;
         }
         require(rejected, "non-finite factor value was accepted");
+    }
+
+    {
+        ExactFactorGraph graph;
+        const FactorVariableId a = graph.add_variable(2U);
+        const FactorVariableId b = graph.add_variable(3U);
+        const FactorVariableId c = graph.add_variable(2U);
+        const std::array<FactorVariableId, 2> ab{{a, b}};
+        const std::array<QComplex, 6> ab_scores{{
+            QComplex{0.0}, QComplex{1.0}, QComplex{2.0},
+            QComplex{0.0}, QComplex{1.0}, QComplex{3.0},
+        }};
+        static_cast<void>(graph.add_dense_factor(ab, ab_scores));
+        const std::array<FactorVariableId, 2> bc{{b, c}};
+        const std::array<FactorSparseEntry, 5> bc_scores{{
+            FactorSparseEntry{0U, QComplex{0.5}},
+            FactorSparseEntry{2U, QComplex{1.5}},
+            FactorSparseEntry{3U, QComplex{2.0}},
+            FactorSparseEntry{4U, QComplex{0.25}},
+            FactorSparseEntry{5U, QComplex{1.0}},
+        }};
+        static_cast<void>(graph.add_sparse_factor(bc, bc_scores));
+        const std::array<FactorVariableId, 1> c_scope{{c}};
+        const std::array<QComplex, 2> c_scores{{QComplex{0.0}, QComplex{0.75}}};
+        static_cast<void>(graph.add_dense_factor(c_scope, c_scores));
+
+        const ExactFactorMaxSumPlan plan(graph);
+        const auto& result = plan.result();
+        require(result.feasible, "mixed-radix max-sum assignment is infeasible");
+        require(result.score == 4.75, "mixed-radix max-sum score is wrong");
+        require(result.assignment == std::vector<std::size_t>({1U, 2U, 1U}),
+                "mixed-radix max-sum assignment is wrong");
+        require(plan.stats().eliminated_variables == 3U &&
+                    plan.stats().source_dense_factors == 2U &&
+                    plan.stats().source_sparse_factors == 1U &&
+                    plan.stats().backpointer_entries != 0U,
+                "mixed-radix max-sum statistics are incomplete");
+    }
+
+    {
+        ExactFactorGraph graph;
+        static_cast<void>(graph.add_variable(2U));
+        static_cast<void>(graph.add_variable(2U));
+        static_cast<void>(graph.add_variable(2U));
+        const ExactFactorMaxSumPlan first(graph);
+        const ExactFactorMaxSumPlan second(graph);
+        require(first.result().feasible && first.result().score == 0.0 &&
+                    first.result().assignment == std::vector<std::size_t>({0U, 0U, 0U}) &&
+                    second.result().assignment == first.result().assignment,
+                "max-sum deterministic tie selection is wrong");
+    }
+
+    {
+        ExactFactorGraph graph;
+        const FactorVariableId a = graph.add_variable(2U);
+        const std::array<FactorVariableId, 1> scope{{a}};
+        const std::array<FactorSparseEntry, 0> none{};
+        static_cast<void>(graph.add_sparse_factor(scope, none));
+        const ExactFactorMaxSumPlan infeasible(graph);
+        require(!infeasible.result().feasible && infeasible.result().assignment.empty(),
+                "max-sum sparse infeasible state was accepted");
+
+        ExactFactorGraph constrained;
+        const FactorVariableId c = constrained.add_variable(2U);
+        const std::array<FactorVariableId, 1> c_scope{{c}};
+        const std::array<FactorSparseEntry, 1> allowed{{
+            FactorSparseEntry{1U, QComplex{5.0}},
+        }};
+        static_cast<void>(constrained.add_sparse_factor(c_scope, allowed));
+        const ExactFactorMaxSumPlan feasible(constrained);
+        require(feasible.result().feasible && feasible.result().score == 5.0 &&
+                    feasible.result().assignment == std::vector<std::size_t>({1U}),
+                "max-sum sparse feasibility semantics are wrong");
+    }
+
+    {
+        ExactFactorGraph graph;
+        const FactorVariableId a = graph.add_variable(2U);
+        const std::array<FactorVariableId, 1> scope{{a}};
+        const std::array<QComplex, 2> complex_scores{{
+            QComplex{0.0}, QComplex{1.0, 0.25},
+        }};
+        static_cast<void>(graph.add_dense_factor(scope, complex_scores));
+        bool rejected = false;
+        try {
+            static_cast<void>(ExactFactorMaxSumPlan(graph));
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "max-sum accepted a complex score table");
+    }
+
+    {
+        ExactFactorConfig config;
+        config.max_factor_entries = 4U;
+        ExactFactorGraph graph(config);
+        const FactorVariableId a = graph.add_variable(2U);
+        const FactorVariableId b = graph.add_variable(2U);
+        const FactorVariableId c = graph.add_variable(2U);
+        const std::array<QComplex, 4> zeros{{QComplex{}, QComplex{}, QComplex{}, QComplex{}}};
+        const std::array<FactorVariableId, 2> ab{{a, b}};
+        const std::array<FactorVariableId, 2> bc{{b, c}};
+        const std::array<FactorVariableId, 2> ac{{a, c}};
+        static_cast<void>(graph.add_dense_factor(ab, zeros));
+        static_cast<void>(graph.add_dense_factor(bc, zeros));
+        static_cast<void>(graph.add_dense_factor(ac, zeros));
+        bool rejected = false;
+        try {
+            static_cast<void>(ExactFactorMaxSumPlan(graph));
+        } catch (const QStateError&) {
+            rejected = true;
+        }
+        require(rejected, "max-sum ignored max_factor_entries");
+        require(graph.validate(), "failed max-sum compilation damaged its graph");
+    }
+
+    {
+        std::mt19937_64 generator(0x4D415853554D5153ULL);
+        for (std::size_t test_case = 0U; test_case < 64U; ++test_case) {
+            ExactFactorConfig config;
+            config.max_factor_entries = 4096U;
+            config.max_compiled_index_entries = 16384U;
+            ExactFactorGraph graph(config);
+            ReferenceGraph reference;
+            std::vector<std::vector<std::uint8_t>> feasible;
+            constexpr std::size_t variable_count = 5U;
+            for (std::size_t variable = 0U; variable < variable_count; ++variable) {
+                const std::size_t dimension = 2U + static_cast<std::size_t>(generator() % 2U);
+                static_cast<void>(graph.add_variable(dimension));
+                reference.dimensions.push_back(dimension);
+            }
+
+            for (std::size_t factor_number = 0U; factor_number < 7U; ++factor_number) {
+                std::array<FactorVariableId, variable_count> permutation{{0U, 1U, 2U, 3U, 4U}};
+                std::shuffle(permutation.begin(), permutation.end(), generator);
+                const std::size_t rank = 1U + static_cast<std::size_t>(generator() % 3U);
+                std::vector<FactorVariableId> scope(permutation.begin(), permutation.begin() + rank);
+                const std::size_t count = entries(scope, reference.dimensions);
+                std::vector<QComplex> dense(count);
+                std::vector<std::uint8_t> allowed(count, 1U);
+                std::vector<FactorSparseEntry> sparse;
+                const bool sparse_factor = (generator() & 1U) != 0U;
+                for (std::size_t index = 0U; index < count; ++index) {
+                    const int raw = static_cast<int>(generator() % 65U) - 32;
+                    dense[index] = QComplex{static_cast<double>(raw) / 8.0};
+                    if (sparse_factor && (generator() % 5U) == 0U) {
+                        allowed[index] = 0U;
+                    } else if (sparse_factor) {
+                        sparse.push_back({index, dense[index]});
+                    }
+                }
+                if (sparse_factor) {
+                    static_cast<void>(graph.add_sparse_factor(scope, sparse));
+                } else {
+                    static_cast<void>(graph.add_dense_factor(scope, dense));
+                }
+                reference.factors.push_back({scope, dense});
+                feasible.push_back(std::move(allowed));
+            }
+
+            bool expected_feasible = false;
+            double expected_score = 0.0;
+            std::size_t global_entries = 1U;
+            for (const std::size_t dimension : reference.dimensions) {
+                global_entries *= dimension;
+            }
+            for (std::size_t assignment = 0U; assignment < global_entries; ++assignment) {
+                const std::vector<std::size_t> coordinates =
+                    decode(assignment, reference.dimensions);
+                bool valid = true;
+                double score = 0.0;
+                for (std::size_t factor = 0U; factor < reference.factors.size(); ++factor) {
+                    const std::size_t index = factor_index(
+                        reference.factors[factor], coordinates, reference.dimensions);
+                    if (feasible[factor][index] == 0U) {
+                        valid = false;
+                        break;
+                    }
+                    score += reference.factors[factor].values[index].re;
+                }
+                if (valid && (!expected_feasible || score > expected_score)) {
+                    expected_feasible = true;
+                    expected_score = score;
+                }
+            }
+
+            const ExactFactorMaxSumPlan first(graph);
+            const ExactFactorMaxSumPlan second(graph);
+            const auto& actual = first.result();
+            require(actual.feasible == expected_feasible,
+                    "random max-sum feasibility differs from brute force");
+            require(second.result().feasible == actual.feasible &&
+                        second.result().score == actual.score &&
+                        second.result().assignment == actual.assignment,
+                    "random max-sum compilation is not deterministic");
+            if (!expected_feasible) {
+                continue;
+            }
+            require(actual.score == expected_score,
+                    "random max-sum score differs from brute force");
+            require(actual.assignment.size() == reference.dimensions.size(),
+                    "random max-sum assignment size is wrong");
+            bool actual_valid = true;
+            double actual_score = 0.0;
+            for (std::size_t factor = 0U; factor < reference.factors.size(); ++factor) {
+                const std::size_t index = factor_index(
+                    reference.factors[factor], actual.assignment, reference.dimensions);
+                if (feasible[factor][index] == 0U) {
+                    actual_valid = false;
+                    break;
+                }
+                actual_score += reference.factors[factor].values[index].re;
+            }
+            require(actual_valid && actual_score == expected_score,
+                    "random max-sum backtrace is not an optimal feasible assignment");
+        }
     }
 
     {
