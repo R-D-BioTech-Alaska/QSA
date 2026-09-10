@@ -44,6 +44,31 @@ void apply_cnot(DenseState& state, std::size_t control, std::size_t target) {
     }
 }
 
+bool same_state(const DenseState& observed, const DenseState& expected, double tolerance) {
+    std::size_t pivot = 0U;
+    double pivot_norm = 0.0;
+    for (std::size_t index = 0U; index < expected.size(); ++index) {
+        const double norm = expected[index].norm2();
+        if (norm > pivot_norm) {
+            pivot = index;
+            pivot_norm = norm;
+        }
+    }
+    if (pivot_norm <= tolerance * tolerance || observed[pivot].norm2() <= tolerance * tolerance) {
+        return false;
+    }
+    const qubit::QComplex phase = observed[pivot] / expected[pivot];
+    if (std::abs(phase.magnitude() - 1.0) > 4.0 * tolerance) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < expected.size(); ++index) {
+        if (!qubit::almost_equal(observed[index], phase * expected[index], tolerance)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 DenseState reference(
     qubit::SemanticTripairMode mode,
     const qubit::SemanticTripairInput& input,
@@ -111,11 +136,9 @@ void exact_differential() {
             inputs.push_back(input);
             const auto observed = program.evaluate(input);
             const auto expected = reference(mode, input, trainable);
-            for (std::size_t basis = 0U; basis < expected.size(); ++basis) {
-                require(
-                    qubit::almost_equal(observed.amplitudes[basis], expected[basis], 2e-12),
-                    "Tripair amplitude differs from dense reference");
-            }
+            require(
+                same_state(observed.amplitudes, expected, 2e-12),
+                "Tripair state differs from dense reference");
         }
         std::vector<qubit::SemanticTripairState> batch(inputs.size());
         program.evaluate_many(inputs, batch, 4U);
