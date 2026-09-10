@@ -57,6 +57,7 @@ class ExactFactorWorkspace;
 class ExactFactorChainPlan;
 class ExactFactorDecisionPlan;
 class ExactFactorAffinePlan;
+class ExactFactorMaxSumPlan;
 
 class ExactFactorGraph {
 public:
@@ -112,6 +113,7 @@ private:
     friend class ExactFactorChainPlan;
     friend class ExactFactorDecisionPlan;
     friend class ExactFactorAffinePlan;
+    friend class ExactFactorMaxSumPlan;
 };
 
 class ExactFactorWorkspace {
@@ -404,7 +406,7 @@ public:
         std::span<const FactorSparseEntry> entries) {
         const std::size_t index = static_cast<std::size_t>(factor);
         if (index >= graph_factor_count_) {
-            throw QStateError("Exact factor targeted rebind factor is out of range");
+            throw QStateError("Exact factor targeted sparse rebind factor is out of range");
         }
         SourceFactor& source = sources_[index];
         std::vector<FactorSparseEntry> replacement(entries.begin(), entries.end());
