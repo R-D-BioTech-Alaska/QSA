@@ -23,7 +23,7 @@
 
 ---
 
-## What QSA is
+## What QSA is          
 
 **Qubit State Algebra (QSA)** is a C++20 quantum-state and numerical runtime built around structure rather than a mandatory global statevector. It is the native quantum execution layer used by the QELM and Qubit projects, but it can also be built and used independently.
 
@@ -411,3 +411,6 @@ Use the DOI at the top of this README or [`CITATION.cff`](CITATION.cff) when cit
 Qubit State Algebra is source-available under the **PolyForm Strict License 1.0.0**. Noncommercial use is permitted. Distribution, modification, derivative works, sublicensing, transfer, and commercial use require separate written permission.
 
 See [`LICENSE`](LICENSE), [`LICENSE_HISTORY.md`](LICENSE_HISTORY.md), and [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md). Earlier versions lawfully obtained under MIT remain under their original MIT terms.
+<p align="right">
+  <img src="docs/images/qsapow.png" alt="QELM" width="140">
+</p>
