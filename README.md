@@ -37,6 +37,8 @@ QSA is exact on the routes described here. Specialized routes are admitted only 
 
 The numerical core does not use NumPy, Qiskit, `std::complex`, BLAS, or a full-system Kronecker matrix as its state engine. Python is a control surface over the native library through `ctypes`.
 
+QSA currently removes over 80% of QPU runtime requirements on a simple desktop computer.
+
 ---
 
 ## QSA 0.3.0
