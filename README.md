@@ -126,6 +126,29 @@ The representations are complementary. QSA does not force every calculation thro
 
 ---
 
+
+## QSA Experimental Hardware
+
+QSA is expanding beyond software into a **modular, three-board experimental hardware platform**, designed to combine exact mathematical computation, FPGA acceleration, signal processing, and physical experimentation.
+
+![QSA Three-Board Experimental Hardware Platform](docs/images/qsathreeboard.png)
+
+### The Three-Board Architecture
+
+- **P1F — Power & Protection:** Provides regulated power distribution, electrical protection, system monitoring, and hardware readiness signals.
+- **E1C — Experimental Control:** Manages optical isolation, hardware safety interlocks, and controlled RF signal routing for experimental research.
+- **C1A — Computation & Acquisition:** Integrates FPGA-based GF(3) arithmetic, analog-to-digital acquisition, and communication with the QSA software runtime.
+
+### Our Goal
+
+The goal is to bring **QSA's structure-aware mathematical execution into dedicated physical hardware**, enabling efficient computation, precise measurement, and repeatable experimentation while remaining compatible with conventional computers.
+
+This architecture is intended to provide a foundation for future QSA, Qubit, and QELM research, combining software flexibility with specialized hardware capabilities.
+
+*Hardware development is ongoing. The image represents the proposed three-board architecture; final PCB layouts, fabrication, and physical validation are pending.*
+
+---
+
 ## Measured results
 
 The benchmark suite records both speed and numerical agreement. These numbers are **workload-specific measurements**, not a claim that QSA is universally faster than NumPy, Qiskit, SymPy, or every dense simulator.
